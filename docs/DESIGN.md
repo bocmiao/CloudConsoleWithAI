@@ -221,6 +221,49 @@ api-sh   上海   4核8G   35%   5.10G     88% ⚠   22 Mbps  —       2026-10-
 - 「blog 那台这周内存趋势怎么样？」
 - 「现在是什么在吃 CPU？」
 
+### 5.4 自动识别服务器上跑的是什么（服务器画像）
+
+不需要你告诉系统服务器上跑了什么，连接服务器时会自动识别。
+
+**第一步：不登录服务器，先从云 API 推测**
+
+轻量服务器的镜像信息（`DescribeInstances` 返回 `BlueprintId` → `DescribeBlueprints`）：`BlueprintType` 为 `APP_OS` 的是应用镜像，镜像名称通常直接说明装了什么（如 WordPress、宝塔面板、Docker）。不过这只反映「开机时装了什么」，之后自己装的东西要靠第二步。
+
+**第二步：通过 TAT 执行只读识别脚本 [`scripts/discover.sh`](../scripts/discover.sh)**
+
+| 段落 | 识别内容 |
+|---|---|
+| system | 系统版本、CPU/内存/swap/磁盘 |
+| panel | 宝塔（面板端口、已装软件、PHP 版本）、1Panel |
+| ports | 监听端口 → 进程 |
+| services | 运行中 / 失败的 systemd 服务 |
+| procs | 按内存、CPU 排行的进程 |
+| web | Nginx/Apache/Caddy 版本；每个站点的域名、端口、网站目录、反向代理和 PHP 后端 |
+| php | PHP-FPM 版本、每个进程池的进程数和平均内存、`pm` 配置、`memory_limit` |
+| db | MySQL/MariaDB/PostgreSQL/Redis/MongoDB 进程；MySQL 内存参数；Redis `maxmemory` |
+| docker | 容器、compose 项目目录、内存/CPU、内存上限、日志配置、磁盘占用 |
+| apps | WordPress（目录、版本、关键开关）、Java（堆参数、jar、所属 systemd 服务）、Node/Python |
+| cron | 定时任务 |
+| security | SSH 端口/密码登录/root 登录、系统防火墙、腾讯云 agent（TAT、云监控、主机安全） |
+| health | 近 7 天 OOM、大目录、inode 使用率 |
+
+脚本的约束：
+
+- **只读**：不改文件、不装软件、不重启服务、不连数据库；Nginx 站点信息直接读配置文件，不执行 `nginx -t`。已用 strace 验证，运行过程中没有以写方式打开过任何文件（`/dev/null` 除外）；
+- **脱敏**：密码、密钥、token 类的值替换成 `***`；`wp-config.php` 只提取几个开关常量，不输出数据库账号密码；
+- **精简**：TAT 单次输出上限 24KB，典型输出约 5KB；超出时按段落分多次执行（`discover.sh docker web`）；
+- **兼容**：只用 POSIX sh 语法，bash 和 dash 下都能运行。
+
+**第三步：生成服务器画像，接入资源关系图**
+
+- 脚本负责采集事实，AI 负责解释：陌生进程是什么、这台机器是「宝塔 + WordPress」还是「Docker 跑的 Java 服务」、哪个站点对应哪个进程；
+- 画像接入资源关系图：`blog.example.com → EO → 源站 1.2.3.4:80 → Nginx 站点 → /var/www/blog → WordPress → PHP-FPM 池 www`，排障和优化时沿着这条链路定位；
+- 按画像启用对应环境的修改模板；识别出来但还没有模板的软件，只给文字建议。
+
+**什么时候重新识别**：首次连接、每天一次、每次执行修改之前（作为预检的一部分，环境变了就中止）。
+
+**前提**：服务器上的 TAT 自动化助手在线（`DescribeAutomationAgentStatus`）。不在线时只能用第一步的镜像信息，并提示你安装。要在云监控里看到内存等指标，还需要云监控 agent 在运行，识别脚本会一并检查。
+
 ---
 
 ## 6. 排障
@@ -430,7 +473,8 @@ fi
 
 - 同一台服务器上的变更**串行执行**（加锁），避免两个计划同时修改同一台机器；
 - **定时执行**：你事先确认，到时间自动执行；执行时重新做一次①预检，状态变了就中止并通知你；
-- 首批变更模板：swap、PHP-FPM、MySQL 内存参数、Nginx worker/缓冲区、logrotate、停用服务、systemd `MemoryMax`。
+- 首批变更模板：swap、PHP-FPM、MySQL 内存参数、Nginx worker/缓冲区、logrotate、停用服务、systemd `MemoryMax`；
+- 模板按服务器画像（5.4）匹配环境：同一种修改在直接安装、宝塔、Docker 下各有一套实现（配置文件路径、校验命令、生效方式都不同）。
 
 ---
 
@@ -551,7 +595,8 @@ MVP 阶段的 CAM 策略示例（上线前按实际用到的接口再收紧）�
 ```
 credentials      id, name, secret_id, secret_key_encrypted, default_region
 resources        id, type, provider_id, name, region, attrs_json, synced_at
-resource_edges   from_id, to_id, relation        -- domain→record→eo_domain→origin→instance→firewall
+resource_edges   from_id, to_id, relation        -- domain→record→eo_domain→origin→instance→site→app
+host_profiles    resource_id, stack_json, raw_output_redacted, collected_at   -- 服务器画像（5.4）
 plans            id, goal, recipe, input_json, status, created_by, confirmed_by, confirmed_at, scheduled_at
 steps            id, plan_id, seq, action, params_json, risk, status,
                  request_id, before_snapshot, result_json, undo_json, error, attempts
@@ -609,7 +654,9 @@ conversations    id, ...;  messages  id, conversation_id, role, content, plan_id
 | `cvm.list_instances`、`vpc.list_sg_policies` | cvm `DescribeInstances`、vpc `DescribeSecurityGroupPolicies` | R0 |
 | `monitor.list_metrics` | monitor `DescribeBaseMetrics` | R0 |
 | `monitor.metrics` | monitor `GetMonitorData` | R0 |
+| `lh.blueprint` | lighthouse `DescribeBlueprints`（推测镜像预装了什么） | R0 |
 | `tat.agent_status` | tat `DescribeAutomationAgentStatus` | R0 |
+| `host.discover` | tat `RunCommand`（`scripts/discover.sh`，只读识别） | R0 |
 | `host.snapshot` | tat `RunCommand`（只读快照模板）+ `DescribeInvocationTasks` | R0 |
 | `host.diagnose` | tat `RunCommand`（只读诊断模板） | R0 |
 | `host.access_log_stats` | tat `RunCommand`（分析 Nginx 访问日志，用于没接 EO 的站点） | R0 |
@@ -623,7 +670,7 @@ conversations    id, ...;  messages  id, conversation_id, role, content, plan_id
 
 | 阶段 | 内容 | 目的 |
 |---|---|---|
-| **M0**（1~2 周） | 工具层 + `site.publish` + `site.diagnose` + **只读的访问统计问答和服务器状态**，以 **MCP Server** 形式提供，直接在 Claude Code / Claude Desktop 里使用。写操作以 `plan_*` 生成计划、`apply_plan(plan_id)` 执行的形式提供 | 零 UI 成本先验证价值；统计和状态都是 R0，风险最低、见效最快 |
+| **M0**（1~2 周） | 工具层 + `site.publish` + `site.diagnose` + **只读的访问统计问答、服务器状态和环境识别**，以 **MCP Server** 形式提供，直接在 Claude Code / Claude Desktop 里使用。写操作以 `plan_*` 生成计划、`apply_plan(plan_id)` 执行的形式提供 | 零 UI 成本先验证价值；统计和状态都是 R0，风险最低、见效最快 |
 | **M1**（3~4 周） | Web 控制台：对话、计划卡片、执行时间线、访问统计看板、服务器总览、资源关系视图、审计日志 | 成为日常入口 |
 | **M2** | 优化闭环：规则库 + 首批变更模板（swap、PHP-FPM、MySQL、Nginx、logrotate、EO 缓存/压缩、IP 封禁）+ 定时执行 + 24 小时复盘；巡检 + 日报推送；更多剧本（切换源站、已有站点迁移到 EO、COS 静态站 + EO、WordPress 一键部署） | 从「帮我做」到「主动发现、给出方案」 |
 | **M3** | 多账号、团队审批、多云（阿里云 DNS、Cloudflare 等）Provider 抽象 | 扩展 |
@@ -635,6 +682,6 @@ conversations    id, ...;  messages  id, conversation_id, role, content, plan_id
 1. **自用还是做成产品？** 决定是否需要多租户、密钥托管方式。
 2. **模型和部署位置**：用 Claude 还是国内模型？服务部署在大陆还是海外？
 3. **域名情况**：域名都在 DNSPod 吗？是否已备案？（决定默认的 EO 接入方式和加速区域）
-4. **服务器类型和上面跑的东西**：轻量还是 CVM？用宝塔面板、Docker，还是直接装的 Nginx/PHP/MySQL/Java？（决定先写哪些变更模板）
+4. **服务器上跑的东西**：系统上线后会自动识别（见 5.4）。开发时先写哪几套模板，可以先在你的服务器上运行 `scripts/discover.sh`，看结果再决定。
 5. **自动执行的边界**：是否只允许执行模板内的修改，完全禁止 AI 自由编写的命令？
 6. **先做哪一步**：先做 M0（MCP，1~2 周可用），还是直接做 Web 控制台？

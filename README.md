@@ -10,3 +10,14 @@
 - **安全第一**：AI 只能提交计划，所有写操作都要你确认后才由执行引擎执行，可审计、可回滚。
 
 完整设计见 [docs/DESIGN.md](docs/DESIGN.md)。
+
+## 服务器环境识别脚本
+
+[`scripts/discover.sh`](scripts/discover.sh) 是一个只读脚本，用来识别服务器上跑了什么（宝塔 / 1Panel、Nginx 站点、PHP-FPM、MySQL / Redis、Docker、WordPress、Java 等），输出一份脱敏后的精简报告。系统会通过腾讯云自动化助手（TAT）自动执行它，你也可以手动运行：
+
+```bash
+sudo bash scripts/discover.sh               # 全部段落
+sudo bash scripts/discover.sh docker web    # 只看指定段落
+```
+
+也可以把脚本内容粘贴到腾讯云控制台「自动化助手 → 执行命令」里，以 Shell 类型执行。
