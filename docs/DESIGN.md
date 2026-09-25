@@ -1,6 +1,8 @@
-# CloudConsoleWithAI 设计方案（v0.3）
+# CloudConsoleWithAI 设计方案（v0.4）
 
-> 用自然语言管理腾讯云：说出目标，AI 生成执行计划，你确认一次，系统自动完成跨产品的全部步骤并验证结果。可以直接问网站访问数据和服务器状态；出了问题，AI 逐层取证给出结论；觉得哪里不对劲（比如内存占用高），AI 先用数据判断是不是真有问题，再给出具体的优化方案，你同意后自动执行，并在执行后汇报效果。
+> 一个**开源、通用**的 AI 服务器与云管理助手：任何 Linux 服务器都能用（装了 1Panel、宝塔，或者什么面板都没装），云产品先支持腾讯云（EdgeOne、DNSPod、轻量、CVM）。先做成**本地 exe**，之后做 Web 版。
+>
+> 用自然语言管理：说出目标，AI 生成执行计划，你确认一次，系统自动完成跨产品的全部步骤并验证结果。可以直接问网站访问数据和服务器状态；出了问题，AI 逐层取证给出结论；觉得哪里不对劲（比如内存占用高），AI 先用数据判断是不是真有问题，再给出具体的优化方案，你同意后自动执行，并在执行后汇报效果。
 
 ---
 
@@ -29,8 +31,9 @@
 - 统计和状态**直接问**，得到带数字的答案，而不是自己翻图表
 - 排障和优化给出**结论 + 证据 + 具体改法**；你同意后自动执行，出问题自动回滚，事后汇报效果
 - 安全：未经你确认，AI 不能做任何写操作
+- **开源、通用**：服务器这一层不绑定任何云厂商和面板；看不懂命令的人也能安全使用
 
-**v1 不做**：替代控制台的全部功能、多云、自动购买/续费（只提示，不自动执行）。
+**v1 不做**：替代控制台的全部功能、腾讯云以外的云产品（服务器本身不限云厂商）、自动购买/续费（只提示，不自动执行）。
 
 ---
 
@@ -87,7 +90,32 @@
 - 每条建议都写清楚：**问题、数据依据、改什么（精确到文件 diff 或 API 参数）、预期效果、风险等级、会不会中断服务、怎么回滚**。
 - 你勾选同意的建议会转换成一个**计划**，走和建站完全相同的执行引擎：同样的确认、审计、回滚。
 - 常见问题由**规则**识别，参数由**公式**计算（比如 PHP-FPM 的 `max_children`）；AI 负责综合解释，以及处理规则覆盖不到的情况。
-- 服务器上的修改脚本来自代码里的**变更模板**，AI 只填参数。模板以外的自由命令一律按 R2 处理，并额外标注「非标准变更」。
+- 服务器上的修改脚本来自代码里的**变更模板**，AI 只填参数。模板覆盖不到时，可以开启**受限的 AI 自由命令**（见 7.5）。
+
+### 2.6 开源、通用：连接方式 × 环境适配器 × 云插件
+
+为了「什么服务器都能用」，把能力拆成三个互相独立、都可以扩展的部分：
+
+| 部分 | 解决什么 | 第一批支持 | 以后 |
+|---|---|---|---|
+| **连接方式** | 怎么在服务器上执行命令 | **SSH**（任何云、任何 VPS 都能用）、**腾讯云 TAT**（不需要开放 SSH） | 阿里云云助手等 |
+| **环境适配器** | 同一个操作在不同环境里怎么做 | **1Panel v2**（走 1Panel API）、**纯 Linux**（直接改配置文件）、**宝塔**（走宝塔 API 或改宝塔管理的文件） | 其他面板 |
+| **云插件** | 云厂商的产品 | **腾讯云**：EdgeOne、DNSPod、轻量、CVM、云监控 | 阿里云、Cloudflare 等 |
+
+- 环境适配器由识别脚本（5.4）自动选择，不需要用户告诉系统装了什么；
+- 计划里写的是**能力**（比如「设置 PHP-FPM 最大进程数」），由适配器决定具体怎么做：1Panel 上调 API，宝塔上改宝塔的配置文件，纯 Linux 上改系统的配置文件；
+- 没有云插件的服务器（比如别家云的 VPS）照样能用：状态、诊断、优化、自由命令都只依赖 SSH；只是用不了 EO 建站、EO 统计这类云产品功能；
+- 模板用 YAML 描述（见 8.10），社区贡献模板不需要写 Go 代码。
+
+### 2.7 先做本地 exe，之后做 Web 版
+
+- **同一套代码两种运行方式**：本地 exe 模式（双击运行，在本机启动服务并自动打开浏览器界面）和服务器模式（以后的 Web 版，部署到服务器上，多用户登录）；
+- **数据都在你自己电脑上**：配置和记录存本地 SQLite 文件；云 API 密钥、SSH 密钥、面板 API 密钥、AI 模型 Key 存 Windows 凭据管理器（系统钥匙串），不存明文；
+- **本地界面的安全**：只监听 `127.0.0.1`、随机端口，并用一次性令牌校验每个请求，防止本机其他程序或网页冒充你操作；
+- **电脑关机怎么办**：
+  - 定时执行（比如「今晚 3 点重启 MySQL」）交给服务器自己：把带备份、校验、自动回滚的脚本登记成服务器上的一次性定时任务，电脑关机也会执行，结果在下次打开 exe 时同步；
+  - 巡检、日报、24 小时复盘只在 exe 运行时进行（可以最小化到托盘常驻）。错过的复盘在下次打开时补做；需要 7×24 巡检就用 Web 版；
+- **AI 模型**：用户自己填 API Key。默认支持 Claude；同时支持兼容 OpenAI 接口的模型（DeepSeek、通义千问、混元等），方便国内用户。
 
 ---
 
@@ -144,7 +172,7 @@
 
 ## 4. 网站访问统计（EO 数据分析）
 
-只有经过 EO 的流量才有这些统计。没接 EO 的站点，退而通过 TAT 只读分析源站的 Nginx 访问日志，得出访问量、Top URL、状态码等核心数据。
+只有经过 EO 的流量才有这些统计。没接 EO 的站点，退而通过 SSH 或 TAT 只读分析源站的 Nginx 访问日志，得出访问量、Top URL、状态码等核心数据。
 
 ### 4.1 看板
 
@@ -230,7 +258,7 @@ api-sh   上海   4核8G   35%   5.10G     88% ⚠   22 Mbps  —       2026-10-
 
 轻量服务器的镜像信息（`DescribeInstances` 返回 `BlueprintId` → `DescribeBlueprints`）：`BlueprintType` 为 `APP_OS` 的是应用镜像，镜像名称通常直接说明装了什么（如 WordPress、宝塔面板、Docker）。不过这只反映「开机时装了什么」，之后自己装的东西要靠第二步。
 
-**第二步：通过 TAT 执行只读识别脚本 [`scripts/discover.sh`](../scripts/discover.sh)**
+**第二步：通过 SSH 或 TAT 执行只读识别脚本 [`scripts/discover.sh`](../scripts/discover.sh)**
 
 | 段落 | 识别内容 |
 |---|---|
@@ -310,9 +338,9 @@ CPU 高？    → 进程排行 → 业务进程：对照 EO 回源请求数，�
   3. 复查：HTTPS 探测返回 200
 ```
 
-### 6.4 在服务器上执行命令（TAT）
+### 6.4 在服务器上执行命令（SSH / TAT）
 
-- 使用腾讯云**自动化助手 TAT**（`RunCommand` + `DescribeInvocationTasks`）在服务器上执行命令，**不需要保存 SSH 密钥**；
+- 通用方式是 **SSH**（任何云、任何 VPS）；腾讯云服务器也可以用**自动化助手 TAT**（`RunCommand` + `DescribeInvocationTasks`），不需要开放 SSH 端口；
 - 诊断阶段只执行**预置的只读命令模板**（固定命令、参数化）；
 - 修改类操作走 7.4 的安全执行框架；
 - 命令输出、日志、网页内容一律**当作数据，而不是指令**（防止提示注入）。
@@ -477,11 +505,71 @@ fi
 - 首批变更模板：swap、PHP-FPM、MySQL 内存参数、Nginx worker/缓冲区、logrotate、停用服务、systemd `MemoryMax`；
 - 模板按服务器画像（5.4）匹配环境：同一种修改在直接安装、宝塔、Docker 下各有一套实现（配置文件路径、校验命令、生效方式都不同）；装了 1Panel 的服务器优先走 1Panel 的 API（见第 8 节）。
 
+### 7.5 受限的 AI 自由命令（给看不懂命令的人用）
+
+模板覆盖不到的情况（比如一个少见的软件要调参数），AI 可以现场写命令。**但如果你看不懂命令，「让你确认命令」起不到保护作用**，所以安全不能靠你读命令，要靠系统替你把关。这个功能默认关闭，在设置里开启时会先显示风险说明。
+
+**1. 限定范围**
+
+| 类别 | 例子 | 处理 |
+|---|---|---|
+| 允许 | 修改服务的配置文件、重载/重启服务、清理日志和缓存目录、查看类命令 | 按下面的流程执行 |
+| 需要额外确认 | 安装/升级软件包、重启服务器 | 单独标红，需要输入服务器名确认 |
+| 直接拒绝 | 格式化、分区、直接写磁盘设备；删除系统目录，或删除路径事先确定不了的文件；下载并直接执行网上的脚本（`curl … \| bash`）；修改账号、密码、SSH 配置和登录密钥；关闭或清空防火墙；停止 sshd、TAT、面板等关键服务；清除日志和操作记录；大范围改权限（`chmod -R 777`） | AI 需要换一种做法，或者等正式模板 |
+| 面板管理的文件 | 1Panel、宝塔自己管理的配置文件 | 不允许自由命令直接改，必须走面板 API 或模板，否则会被面板覆盖 |
+
+**2. 你看到的是「会发生什么」，不是命令**
+
+```
+AI 想在 blog-gz 上执行一段自定义操作（非标准模板）            风险：中
+
+要做什么：给 Nginx 开启 gzip 压缩，减少网页传输大小
+
+会改动：
+  · 修改 1 个文件：/etc/nginx/nginx.conf
+      + gzip on;
+      + gzip_types text/css application/javascript;
+  · 重新加载 Nginx（不中断访问）
+不会：删除文件、安装软件、改动账号或防火墙
+
+安全措施：
+  ✓ 已在隔离环境里试运行，实际改动和上面一致
+  ✓ 独立审查通过：说明和命令一致，没有发现危险操作
+  ✓ 执行前自动备份上面的文件
+  ✓ 5 分钟保险：执行后如果网站或连接异常，服务器会自动恢复原状
+最坏情况：Nginx 配置出错导致网站打不开 → 自动恢复，最长约 5 分钟
+
+[查看原始命令（高级）]                         [取消]   [我了解，执行]
+```
+
+**3. 执行前，系统替你检查命令**
+
+1. **AI 必须先声明影响**：会改哪些文件、重启哪些服务、会不会装软件、会不会访问外网，以结构化的形式给出；
+2. **逐条解析命令**：用 shell 语法解析器把命令拆开（不是简单的关键字匹配），找出所有会写入的文件和会执行的程序，与 AI 的声明对比。**有没声明的影响，或者写入位置在执行前确定不了（比如路径要运行时才算得出来），就拒绝执行**；
+3. **对照上面的范围和禁止清单**；
+4. **试运行**：在服务器上用一个隔离的文件层执行一遍，所有文件改动只落在临时层里，服务的重启、重载只记录不执行，由此得到**真实的修改前后对比**。做不了试运行的情况（系统不支持、需要联网安装软件）会明确标出，这时必须先做快照才能继续；
+5. **独立审查**：另开一次 AI 调用，只给它看命令、声明和试运行结果（不给它看日志、网页等外部内容，避免被诱导），判断三者是否一致、有没有危险操作。审查不通过就不执行。
+
+**4. 执行时的保护**
+
+- **快照**：服务器支持快照时（1Panel 系统快照、腾讯云轻量或云硬盘快照等），执行自由命令前默认先做一次快照。这是最后一道防线；
+- **自动备份**：解析出来的每个写入目标文件都先备份；
+- **5 分钟保险**：执行前先在服务器上预约一个「5 分钟后自动恢复」的任务（`systemd-run --on-active=300`，没有 systemd 时用 `at` 或后台延时任务）。执行完成后，系统确认网站正常、连接正常，才取消这个预约。**如果命令把 SSH 或防火墙改坏了、系统连不上服务器，服务器会自己恢复。** 恢复脚本由系统生成，不由 AI 编写；
+- **健康检查**：失败立即恢复备份，并重启受影响的服务；
+- **使用限制**：只能立即执行，你必须在线；一次只对一台服务器执行；不能定时，不能无人值守；命令长度和执行时间都有上限。
+
+**5. 执行之后**
+
+- 命令、声明、试运行结果、审查意见、执行输出全部存档；
+- 成功执行过的自由命令可以脱敏后导出，提交到开源项目的模板库，**由懂代码的维护者审核后变成正式模板**。看不懂命令的用户也能从社区的审核中受益。
+
+**要说清楚的是**：这些措施能大幅降低风险，但做不到零风险。真正兜底的是快照和 5 分钟保险，所以建议开启自由命令之前，先确认服务器能做快照。
+
 ---
 
-## 8. 1Panel 适配（首个支持的环境）
+## 8. 环境适配（1Panel / 宝塔 / 纯 Linux）
 
-你的服务器装的是 1Panel，所以第一批模板按 1Panel 来做。以下内容来自 1Panel 源码（v2）。
+每种环境一个适配器（见 2.6）。1Panel v2 是第一个完整支持的环境，8.1~8.7 的内容来自 1Panel 源码；宝塔和纯 Linux 见 8.8、8.9；模板格式见 8.10。
 
 ### 8.1 1Panel 的结构
 
@@ -535,13 +623,14 @@ fi
 
 | 方式 | 做法 | 适用 |
 |---|---|---|
-| A. 本工具部署在同一台服务器 | 访问 `127.0.0.1:<面板端口>`，白名单只填 `127.0.0.1` | 最简单，推荐 |
-| B. 通过 TAT 在服务器本机调用 | TAT 在服务器上执行 `curl http://127.0.0.1:<面板端口>/api/v2/...`，API 密钥用 TAT 的隐藏参数 `{{tat-hidden:key}}` 传入 | 工具部署在别处，面板端口完全不对外；每次调用多几秒延迟，适合执行修改，不适合实时看板 |
-| C. 远程直连 | 轻量防火墙只对工具所在 IP 放行面板端口，全程 HTTPS | 不推荐 |
+| A. SSH 隧道（本地 exe 默认） | exe 通过 SSH 把服务器本机的面板端口转发到你的电脑上再调用 API，请求在服务器上来自 `127.0.0.1`，白名单只填 `127.0.0.1` | 面板端口完全不对外，推荐 |
+| B. 通过 TAT 在服务器本机调用 | TAT 在服务器上执行 `curl http://127.0.0.1:<面板端口>/api/v2/...`，API 密钥用 TAT 的隐藏参数 `{{tat-hidden:key}}` 传入 | 腾讯云服务器、不开放 SSH 时；每次调用多几秒延迟，适合执行修改，不适合实时看板 |
+| C. 与面板部署在同一台服务器 | 访问 `127.0.0.1:<面板端口>` | 以后的 Web 版 |
+| D. 远程直连 | 防火墙只对你的 IP 放行面板端口，全程 HTTPS | 不推荐 |
 
 ### 8.4 官方 mcp-1panel
 
-1Panel 官方有 MCP Server（[1Panel-dev/mcp-1panel](https://github.com/1Panel-dev/mcp-1panel)），默认只读，能查询仪表盘、网站、证书、已装应用、数据库，也能建站、申请证书、建库、安装 OpenResty/MySQL，**但没有调优类接口**。M0 阶段可以直接接入它做查询，调优由我们的工具层直接调用 1Panel API 实现。
+1Panel 官方有 MCP Server（[1Panel-dev/mcp-1panel](https://github.com/1Panel-dev/mcp-1panel)），默认只读，能查询仪表盘、网站、证书、已装应用、数据库，也能建站、申请证书、建库、安装 OpenResty/MySQL，**但没有调优类接口**。我们的程序直接调用 1Panel API（查询和调优都覆盖），mcp-1panel 可以作为接口用法的参考。
 
 ### 8.5 1Panel 下的内存优化示例
 
@@ -581,6 +670,51 @@ fi
 8. 改前备份和系统快照
 9. 建站：在 1Panel 创建网站（配合 `site.publish`）
 
+### 8.8 宝塔
+
+- 目录：软件在 `/www/server/` 下（Nginx 在 `/www/server/nginx`，PHP 在 `/www/server/php/<版本>`，MySQL 配置是 `/etc/my.cnf`），网站配置在 `/www/server/panel/vhost/nginx/`，日志在 `/www/wwwlogs/`；
+- 宝塔也有官方 API（面板设置 → API 接口），签名方式是 `request_token = md5(request_time + md5(api_sk))`，同样要配置 IP 白名单，连接方式同 8.3；
+- 策略和 1Panel 一样：宝塔 API 能做的走 API；API 覆盖不到的调优项改宝塔管理的配置文件，并提示「在宝塔面板里再次保存对应设置，可能会覆盖本次修改」。宝塔 API 对各个调优项的覆盖范围还需要逐项核实。
+
+### 8.9 纯 Linux 服务器（没装面板）
+
+- 直接修改系统的配置文件，走 7.4 的六步安全框架（预检、备份、修改、校验、生效、健康检查）；
+- 按发行版区分路径和命令，比如 Debian/Ubuntu 是 `/etc/php/<版本>/fpm/pool.d/` 和 `systemctl reload php<版本>-fpm`，RHEL/Rocky/OpenCloudOS 是 `/etc/php-fpm.d/` 和 `systemctl reload php-fpm`；
+- 用 Docker Compose 部署的应用：修改 compose 文件或挂载进容器的配置文件，用 `docker compose up -d` 生效（直接改容器里的文件，容器重建后就丢了）。
+
+### 8.10 模板格式（社区可贡献）
+
+模板是 YAML 文件，一个模板描述一种能力，按环境给出不同实现。示意：
+
+```yaml
+id: php-fpm.max-children
+title: 调整 PHP-FPM 最大进程数
+risk: R2
+params:
+  max_children: { type: int, min: 2, max: 500 }   # 由规则按「可用内存 ÷ 单进程内存」计算
+implementations:
+  1panel:                                  # 走 1Panel API
+    api: POST /api/v2/runtimes/php/fpm/config
+    body: { id: "{{runtime_id}}", params: { pm.max_children: "{{max_children}}" } }
+  bt:                                      # 宝塔：改宝塔管理的配置文件
+    file: /www/server/php/{{ver}}/etc/php-fpm.conf
+    set: { pm.max_children: "{{max_children}}" }
+    validate: /www/server/php/{{ver}}/sbin/php-fpm -t
+    reload: /etc/init.d/php-fpm-{{ver}} reload
+  linux-debian:
+    file: /etc/php/{{ver}}/fpm/pool.d/www.conf
+    set: { pm.max_children: "{{max_children}}" }
+    validate: php-fpm{{ver}} -t
+    reload: systemctl reload php{{ver}}-fpm
+verify:
+  - service_active: php-fpm
+  - http_probe: { expect_status: 200 }
+```
+
+- 预检、备份、健康检查、回滚由执行引擎统一处理，模板作者只需要描述「改什么、怎么校验、怎么生效」；
+- 每个模板在 CI 里对多种环境自动测试：Ubuntu、Debian、Rocky、OpenCloudOS 的 Docker 镜像，以及装了 1Panel、宝塔的测试机；
+- 社区贡献模板只需要提交 YAML 和测试用例，维护者审核通过后发布。
+
 ---
 
 ## 9. 主动巡检
@@ -595,77 +729,93 @@ fi
 
 每天的日报见 4.3。
 
+本地 exe 模式下，巡检和推送只在 exe 运行时进行（可以最小化到托盘常驻，见 2.7）；需要 7×24 巡检就用 Web 版。
+
 ---
 
 ## 10. 系统架构
 
 ```
-┌──────────────────────────────── 交互层 ─────────────────────────────────┐
-│ Web 控制台：对话 / 访问统计看板 / 服务器总览 / 计划与变更记录              │
-│ 企业微信/飞书机器人：日报、告警、移动端确认    MCP：Claude 等 AI 客户端直接调用 │
-└───────────────────────────────────┬─────────────────────────────────────┘
-┌──────────────────────────────── Agent 层 ───────────────────────────────┐
-│ 意图识别 → 参数补全（查资源清单）→ 选剧本 / 组合工具 → propose_plan        │
-│ 分析引擎：规则库 + 异常检测（与历史同期对比）+ AI 归因与解释               │
-└───────────────────────────────────┬─────────────────────────────────────┘
-┌──────────────────────── 执行层（确定性代码，不依赖 AI）──────────────────┐
-│ 策略引擎：风险分级、确认关卡      工作流引擎：持久化、轮询、重试、回滚       │
-│ 调度器：巡检、定时执行、24 小时复盘  审计日志：RequestId、变更前快照         │
-└───────────────────────────────────┬─────────────────────────────────────┘
-┌──────────────────────────────── 工具层 ─────────────────────────────────┐
-│ Recipes：site.publish / site.diagnose / host.optimize_memory / eo.tune_cache … │
-│ Atomic ：dnspod.* teo.* lighthouse.* cvm.* vpc.* tat.* monitor.* op.*(1Panel) │
-│ 变更模板：swap / php-fpm / mysql / nginx / logrotate …                  │
-│ Probes ：DoH 解析 / HTTP(S) 探测 / TLS 证书检查                          │
-│ 资源清单：域名 → 解析记录 → EO 加速域名 → 源站 IP → 实例 → 防火墙 的关系图 │
-│ 指标缓存：EO 统计 / 云监控数据短期缓存，减少接口调用                        │
-└───────────────────────────────────┬─────────────────────────────────────┘
-                         腾讯云 API 3.0（官方 SDK，TC3 签名）
+┌──────────────────────────────── 界面 ─────────────────────────────────┐
+│ 本地 exe：浏览器界面（只监听 127.0.0.1）+ 托盘     以后：Web 版（多用户） │
+│ 对话 / 服务器总览 / 访问统计 / 计划与变更记录       可选：MCP 模式         │
+└───────────────────────────────────┬───────────────────────────────────┘
+┌──────────────────────────────── Agent ────────────────────────────────┐
+│ 模型适配：Claude / OpenAI 兼容接口（DeepSeek、通义千问、混元等）           │
+│ 意图识别 → 参数补全（查资源清单）→ 选剧本 / 能力 / 自由命令 → propose_plan │
+│ 分析引擎：规则库 + 异常检测 + AI 归因；自由命令的独立审查                  │
+└───────────────────────────────────┬───────────────────────────────────┘
+┌──────────────────────── 执行层（确定性代码，不依赖 AI）─────────────────┐
+│ 策略引擎：风险分级、确认关卡          工作流引擎：持久化、轮询、重试、回滚   │
+│ 自由命令关卡：解析、禁止清单、试运行、快照、5 分钟保险                     │
+│ 调度器：巡检、复盘（定时执行交给服务器）  审计日志                          │
+└───────────────────────────────────┬───────────────────────────────────┘
+┌──────────────────────────────── 能力与适配 ───────────────────────────┐
+│ 剧本：site.publish / site.diagnose / host.optimize_memory …            │
+│ 模板（YAML）：能力 → 按环境的实现                                         │
+│ 环境适配器：1Panel（API）/ 宝塔（API + 文件）/ 纯 Linux（文件）            │
+│ 云插件：腾讯云（EO、DNSPod、轻量、CVM、云监控），以后更多                  │
+│ 资源清单与服务器画像；探测：DoH 解析 / HTTP(S) / TLS                      │
+└───────────────────────────────────┬───────────────────────────────────┘
+┌──────────────────────────────── 连接方式 ─────────────────────────────┐
+│ SSH（任何服务器；也用来建立到面板 API 的隧道）   腾讯云 TAT   云厂商 API  │
+└───────────────────────────────────────────────────────────────────────┘
 ```
 
 **资源关系图**是一个重要的差异点：控制台里「这个域名解析到哪、走没走 EO、源站是哪台机器、这台机器的防火墙开了什么」这些关系是割裂的。系统定期同步后，AI 能直接回答「blog 的源站是哪台机器」，也能把 EO 的访问数据和源站服务器的负载放在一起分析（比如「回源请求翻倍」和「源站 CPU 打满」同时出现）。
 
 ---
 
-## 11. 技术选型建议
+## 11. 技术选型
+
+为了打包成单个 exe、以后又能直接变成 Web 版，后端改用 **Go**。之前建议的 TypeScript 打包成 exe 体积大，SSH 等系统能力也不如 Go 成熟。
 
 | 部分 | 选择 | 理由 |
 |---|---|---|
-| 语言 | TypeScript 全栈 | 前后端同一种语言；有腾讯云官方 `tencentcloud-sdk-nodejs` 和 MCP 官方 TS SDK；Zod schema 同时用于参数校验和 LLM 工具定义 |
-| 前端 | Next.js（或 Vite + React）+ ECharts | 对话、卡片式 UI、统计图表 |
-| 后端 | Node（Hono / Fastify） | Agent、执行引擎、调度器 |
-| 存储 | SQLite（单人自部署）→ PostgreSQL（多用户） | 计划、步骤、审计、资源清单、指标缓存 |
-| 工作流 | 先自研轻量状态机（步骤表 + 定时轮询），复杂后再考虑 Temporal | 早期不引入重型依赖 |
-| LLM | 模型适配层，默认 Claude（`claude-opus-5`，工具调用 + adaptive thinking） | 如果服务部署在中国大陆，需要考虑模型的可访问性与合规，适配层可切换到国内模型 |
-| 部署 | Docker，部署在你自己的轻量服务器上 | 云 API 密钥不离开你自己的机器 |
+| 后端 | Go | 编译成单个 exe，不需要安装任何运行环境；能交叉编译出 Windows、macOS、Linux 版本；SSH、并发、系统操作成熟；1Panel 也是 Go 写的 |
+| 前端 | Vue 3，构建后嵌进 exe（`go:embed`） | 本地版和 Web 版共用同一套界面 |
+| 数据库 | SQLite（纯 Go 驱动 `modernc.org/sqlite`，不依赖 cgo） | 本地一个文件；Web 版可以换 PostgreSQL |
+| 密钥存储 | 系统钥匙串（`go-keyring`：Windows 凭据管理器 / macOS 钥匙串 / Linux Secret Service） | 不存明文 |
+| SSH | `golang.org/x/crypto/ssh` | 执行命令，以及到面板 API 的端口转发 |
+| 腾讯云 | `tencentcloud-sdk-go`（官方） | |
+| 命令解析 | `mvdan.cc/sh`（shfmt 使用的 shell 解析器） | 自由命令的逐条解析（7.5） |
+| AI | Claude 官方 Go SDK（默认 `claude-opus-5`），另加 OpenAI 兼容接口的适配 | 用户自带 Key |
+| MCP（可选） | MCP 官方 Go SDK | 同一套工具也能给 Claude Code 等客户端使用 |
+| 模板 | YAML 文件 | 社区贡献不需要写代码（8.10） |
+| 构建发布 | GitHub Actions 自动构建各平台的单文件程序并发布到 Releases（Windows 优先） | |
 
-**建议的目录结构**
+**目录结构**
 
 ```
-apps/web              Web 控制台
-apps/server           API、Agent、执行引擎、调度器
-packages/core         Plan / Step / 风险等级 / 审计 的领域模型
-packages/tools        原子工具（腾讯云 SDK 封装 + 探测）
-packages/recipes      剧本
-packages/analyzers    规则库、异常检测、优化建议生成
-packages/templates    服务器变更模板
-packages/mcp          MCP Server 入口（复用 tools + recipes）
+cmd/cloudconsole/        程序入口：本地模式（默认）/ server 模式 / mcp 模式
+internal/core/           计划、步骤、风险等级、审计
+internal/agent/          AI 对话、模型适配、独立审查
+internal/connect/        连接方式：ssh、tat
+internal/adapters/       环境适配器：linux、onepanel、bt
+internal/cloud/tencent/  腾讯云插件：EO、DNSPod、轻量、CVM、云监控
+internal/freecmd/        自由命令：解析、策略、试运行、5 分钟保险
+internal/store/          SQLite、系统钥匙串
+templates/               模板（YAML）
+scripts/discover.sh      环境识别脚本
+web/                     前端（Vue 3）
 ```
 
 ---
 
 ## 12. 安全设计
 
-1. **最小权限**：使用 CAM 子用户，只授予需要的产品权限；绝不使用主账号密钥。也支持 CAM 角色 + STS 临时凭证。
+1. **最小权限**（腾讯云）：使用 CAM 子用户，只授予需要的产品权限；绝不使用主账号密钥。也支持 CAM 角色 + STS 临时凭证。
 2. **密钥不进入 LLM 上下文**：密钥加密存储，只在执行层使用；工具返回给 AI 的结果先脱敏。
 3. **AI 无直接写权限**：见 2.2，写操作只能走「计划 → 确认 → 执行」。
-4. **TAT 等同于 root shell**：只读模板和变更模板以外的命令一律 R2；可以在设置里完全关闭「执行任意命令」，只允许模板。
-5. **1Panel API 密钥等同于面板完全控制权**：加密保存，不进入 AI 上下文；1Panel 端口不对公网开放，优先本机或经 TAT 调用；1Panel 里的 IP 白名单只放必要的地址（见 8.3）。
+4. **SSH / TAT 等同于 root 权限**：只读模板和变更模板以外的命令都是自由命令，必须经过 7.5 的全部检查；自由命令默认关闭。
+5. **面板（1Panel、宝塔）API 密钥等同于面板的完全控制权**：存系统钥匙串，不进入 AI 上下文；面板端口不对公网开放，通过 SSH 隧道或 TAT 在服务器本机调用；面板的 IP 白名单只放 `127.0.0.1`（见 8.3）。
 6. **服务器变更可回滚**：先备份、先校验、健康检查失败自动回滚（见 7.4）。
 7. **提示注入防护**：日志、网页、命令输出都视为不可信数据；风险等级由策略引擎按操作类型硬编码，不采信 AI 的判断。
 8. **审计**：每次 API 调用记录操作人、时间、Action、脱敏参数、RequestId、结果。
+9. **本地 exe**：界面只监听 `127.0.0.1`，每个请求都校验一次性令牌；所有密钥存系统钥匙串（见 2.7）。
+10. **SSH**：推荐用密钥登录，也支持密码（同样存系统钥匙串）；首次连接记录服务器指纹，指纹变化时拒绝连接并提醒，防止中间人攻击。
 
-MVP 阶段的 CAM 策略示例（上线前按实际用到的接口再收紧）：
+腾讯云插件的 CAM 策略示例（上线前按实际用到的接口再收紧）：
 
 ```json
 {
@@ -699,7 +849,10 @@ MVP 阶段的 CAM 策略示例（上线前按实际用到的接口再收紧）�
 ## 13. 数据模型（核心表）
 
 ```
-credentials      id, kind(tencentcloud|1panel), name, key_id, secret_encrypted, endpoint, default_region
+credentials      id, kind(tencentcloud|ssh|1panel|bt|llm), name, key_id, secret_ref, endpoint, default_region
+                 -- secret_ref 指向系统钥匙串里的条目，数据库不存密钥本身
+servers          id, name, connect_kind(ssh|tat), host, port, ssh_user, host_key_fingerprint,
+                 cloud_resource_id, adapter(1panel|bt|linux), panel_credential_id
 resources        id, type, provider_id, name, region, attrs_json, synced_at
 resource_edges   from_id, to_id, relation        -- domain→record→eo_domain→origin→instance→site→app
 host_profiles    resource_id, stack_json, raw_output_redacted, collected_at   -- 服务器画像（5.4）
@@ -711,6 +864,8 @@ recommendations  id, resource_id, category(memory|cpu|disk|cache|security|...), 
 change_reviews   id, plan_id, metric, before_value, after_value, window, verdict(keep|rollback)
 schedules        id, kind(inspection|report|plan_execution|review), cron_or_time, target, enabled
 metric_cache     resource_id, source, metric, interval, ts, value
+freecmd_runs     id, plan_id, server_id, script, declared_effects, parsed_effects, dryrun_diff,
+                 review, snapshot_ref, guard_status, output, result   -- 自由命令全过程存档（7.5）
 audit_logs       id, actor, action, params_redacted, request_id, result, created_at
 conversations    id, ...;  messages  id, conversation_id, role, content, plan_id?
 ```
@@ -762,12 +917,12 @@ conversations    id, ...;  messages  id, conversation_id, role, content, plan_id
 | `monitor.metrics` | monitor `GetMonitorData` | R0 |
 | `lh.blueprint` | lighthouse `DescribeBlueprints`（推测镜像预装了什么） | R0 |
 | `tat.agent_status` | tat `DescribeAutomationAgentStatus` | R0 |
-| `host.discover` | tat `RunCommand`（`scripts/discover.sh`，只读识别） | R0 |
-| `host.snapshot` | tat `RunCommand`（只读快照模板）+ `DescribeInvocationTasks` | R0 |
-| `host.diagnose` | tat `RunCommand`（只读诊断模板） | R0 |
-| `host.access_log_stats` | tat `RunCommand`（分析 Nginx 访问日志，用于没接 EO 的站点） | R0 |
-| `host.apply_change` | tat `RunCommand`（变更模板，含备份、校验、健康检查、自动回滚） | R2 |
-| `host.exec` | tat `RunCommand`（任意命令） | R2 |
+| `host.discover` | SSH / TAT 执行 `scripts/discover.sh`（只读识别） | R0 |
+| `host.snapshot` | SSH / TAT 执行只读快照模板 | R0 |
+| `host.diagnose` | SSH / TAT 执行只读诊断模板 | R0 |
+| `host.access_log_stats` | SSH / TAT 分析 Nginx 访问日志（用于没接 EO 的站点） | R0 |
+| `host.apply_change` | SSH / TAT 执行变更模板（含备份、校验、健康检查、自动回滚） | R2 |
+| `host.exec_free` | 自由命令，经过 7.5 的全部检查 | R2（安装软件、重启服务器为 R3） |
 | `probe.resolve` / `probe.http` / `probe.tls` | 本地实现 | R0 |
 
 **1Panel**（接口见 8.2，均在 `/api/v2` 下）
@@ -794,19 +949,26 @@ conversations    id, ...;  messages  id, conversation_id, role, content, plan_id
 
 | 阶段 | 内容 | 目的 |
 |---|---|---|
-| **M0**（1~2 周） | 工具层 + `site.publish` + `site.diagnose` + **只读的访问统计问答、服务器状态和环境识别**，以 **MCP Server** 形式提供，直接在 Claude Code / Claude Desktop 里使用；1Panel 的只读查询可以先直接接入官方 mcp-1panel。写操作以 `plan_*` 生成计划、`apply_plan(plan_id)` 执行的形式提供 | 零 UI 成本先验证价值；统计和状态都是 R0，风险最低、见效最快 |
-| **M1**（3~4 周） | Web 控制台：对话、计划卡片、执行时间线、访问统计看板、服务器总览、资源关系视图、审计日志 | 成为日常入口 |
-| **M2** | 优化闭环：规则库 + 首批变更模板（**先做 1Panel**，见 8.7；再做 EO 缓存/压缩、IP 封禁）+ 定时执行 + 24 小时复盘；巡检 + 日报推送；更多剧本（切换源站、已有站点迁移到 EO、COS 静态站 + EO、WordPress 一键部署） | 从「帮我做」到「主动发现、给出方案」 |
-| **M3** | 多账号、团队审批、多云（阿里云 DNS、Cloudflare 等）Provider 抽象 | 扩展 |
+| **M0 本地 exe 基础** | Go 程序骨架 + 内嵌网页界面；添加服务器（SSH、腾讯云 TAT）；环境识别；服务器状态；AI 对话（只读诊断）；计划—确认—审计框架；密钥存系统钥匙串 | 能装、能连、能看、能问 |
+| **M1 修改能力** | 环境适配器（纯 Linux、1Panel v2 优先，宝塔随后）+ 首批 YAML 模板；7.4 安全执行框架；受限自由命令（解析、禁止清单、独立审查、快照、5 分钟保险；试运行先做技术验证）；执行后复盘 | 能安全地改 |
+| **M2 腾讯云** | 一句话建站（EO + DNSPod + 面板建站）、EO 访问统计与归因、EO 缓存/安全优化 | 解决最初的建站痛点 |
+| **M3 Web 版** | 同一程序以 server 模式部署：多用户、7×24 巡检、日报推送、移动端确认 | 常驻运行 |
+| **M4 生态** | 更多云厂商（阿里云、Cloudflare 等）和面板、模板社区、MCP 模式 | 扩展 |
 
 ---
 
 ## 16. 待确认的问题
 
-1. **自用还是做成产品？** 决定是否需要多租户、密钥托管方式。
-2. **模型和部署位置**：用 Claude 还是国内模型？服务部署在大陆还是海外？
-3. **域名情况**：域名都在 DNSPod 吗？是否已备案？（决定默认的 EO 接入方式和加速区域）
-4. **服务器上跑的东西**：已确认是 **1Panel**，第一批模板按 1Panel 做（第 8 节）。还需要确认 1Panel 是 v1 还是 v2：运行 `scripts/discover.sh panel` 就能看到。设计按 v2 做，如果是 v1，建议先升级。
-5. **本工具部署在哪里**：和 1Panel 在同一台服务器上，还是别处？决定用 8.3 的哪种方式连接 1Panel API。
-6. **自动执行的边界**：是否只允许执行模板内的修改，完全禁止 AI 自由编写的命令？
-7. **先做哪一步**：先做 M0（MCP，1~2 周可用），还是直接做 Web 控制台？
+**已确认**
+
+- 开源、通用：支持 1Panel、宝塔和没装面板的服务器；
+- 先做本地 exe（Windows 优先），之后做 Web 版；
+- 你的服务器是 1Panel v2；
+- 开启受限的 AI 自由命令，按 7.5 的方式由系统把关。
+
+**还需要确认**
+
+1. **默认 AI 模型**：exe 里 Claude 和国内模型都支持，你自己主要用哪个？决定先把哪个调好。
+2. **开源协议**：推荐 Apache-2.0，个人和企业都能放心使用；如果希望别人修改后也必须开源，就选 GPL-3.0（1Panel 用的就是 GPL-3.0）。
+3. **项目名称**：沿用 CloudConsoleWithAI，还是起一个好记的中文名？
+4. **域名情况**：域名都在 DNSPod 吗？是否已备案？（M2 建站时用来决定默认的 EO 接入方式和加速区域）
