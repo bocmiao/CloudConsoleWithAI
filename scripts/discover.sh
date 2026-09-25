@@ -17,6 +17,9 @@
 #
 # 段落：system panel ports services procs web php db docker apps cron security health
 #
+# 支持识别宝塔、1Panel（v1/v2）。1Panel 的安装目录从 /usr/local/bin/1pctl 读取，
+# 测试时可用环境变量 ONEPANEL_CTL 指向别的 1pctl 文件。
+#
 # 脚本只用 POSIX sh 语法，也可以直接粘贴到腾讯云「自动化助手」里以 Shell 类型执行。
 
 export LC_ALL=C
@@ -25,6 +28,16 @@ MAXL=40
 SECTIONS=" $* "
 
 have() { command -v "$1" >/dev/null 2>&1; }
+
+# 1Panel：安装目录记录在 1pctl 的 BASE_DIR（默认 /opt），数据目录为 $BASE_DIR/1panel。
+# 1pctl 里还有初始用户名、密码和安全入口，只按白名单读取需要的键。
+OP_CTL=${ONEPANEL_CTL:-/usr/local/bin/1pctl}
+op_conf() { sed -n "s/^$1=//p" "$OP_CTL" 2>/dev/null | head -n 1 | tr -d "\"' "; }
+OP_BASE=$(op_conf BASE_DIR)
+[ -z "$OP_BASE" ] && [ -d /opt/1panel ] && OP_BASE=/opt
+OP_DIR=""
+[ -n "$OP_BASE" ] && [ -d "$OP_BASE/1panel" ] && OP_DIR="$OP_BASE/1panel"
+
 # 给可能卡住的命令加超时
 t() { if have timeout; then timeout 15 "$@"; else "$@"; fi; }
 cap() { head -n "${1:-$MAXL}"; }
@@ -67,7 +80,28 @@ s_panel() {
   else
     echo "bt_panel: no"
   fi
-  if [ -d /opt/1panel ] || have 1pctl; then echo "1panel: yes"; else echo "1panel: no"; fi
+  if [ -z "$OP_DIR" ]; then
+    echo "1panel: no"
+    return
+  fi
+  echo "1panel: yes data_dir=$OP_DIR"
+  for k in ORIGINAL_VERSION ORIGINAL_PORT PANEL_EDITION; do
+    v=$(op_conf "$k")
+    [ -n "$v" ] && echo "1panel_$k: $v"
+  done
+  # v2 为 1panel-core + 1panel-agent，v1 为 1panel
+  if have systemctl; then
+    for u in 1panel-core 1panel-agent 1panel; do
+      [ "$(systemctl is-active "$u" 2>/dev/null)" = active ] && echo "1panel_service: $u active"
+    done
+  fi
+  # 应用商店安装的应用：$OP_DIR/apps/<应用>/<名称>/docker-compose.yml
+  echo "1panel_apps: $(for f in "$OP_DIR"/apps/*/*/docker-compose.yml; do
+    [ -f "$f" ] && echo "$f"; done | sed -E "s#^$OP_DIR/apps/##; s#/docker-compose.yml\$##" | cap 30 | tr '\n' ' ')"
+  # 网站：v2 为 $OP_DIR/www/conf.d，v1 在 OpenResty 应用目录下
+  echo "1panel_websites: $(ls "$OP_DIR"/www/conf.d "$OP_DIR"/apps/openresty/*/conf/conf.d 2>/dev/null \
+    | grep '\.conf$' | sed 's/\.conf$//' | sort -u | cap 30 | tr '\n' ' ')"
+  echo "1panel_php_runtimes: $(ls "$OP_DIR"/runtime/php 2>/dev/null | tr '\n' ' ')"
 }
 
 s_ports() {
@@ -108,7 +142,8 @@ s_web() {
   for b in apache2 httpd; do have "$b" && echo "apache: $("$b" -v 2>/dev/null | head -1)"; done
   have caddy && echo "caddy: $(caddy version 2>/dev/null | head -1)"
   echo "-- nginx sites (file:directive) --"
-  for d in /etc/nginx /www/server/panel/vhost/nginx /www/server/nginx/conf /usr/local/nginx/conf /usr/local/openresty/nginx/conf; do
+  for d in /etc/nginx /www/server/panel/vhost/nginx /www/server/nginx/conf /usr/local/nginx/conf /usr/local/openresty/nginx/conf \
+      ${OP_DIR:+"$OP_DIR"/www/conf.d "$OP_DIR"/apps/openresty/*/conf}; do
     [ -d "$d" ] || continue
     grep -RHsE --exclude-dir=sites-available --exclude='*.bak' --exclude='*.default' \
       '(^|[{;])[[:space:]]*(server_name|listen|root|proxy_pass|fastcgi_pass|ssl_certificate)[[:space:]]' "$d"
@@ -127,12 +162,19 @@ s_php() {
   ps -eo rss,args 2>/dev/null | awk '/[p]hp-fpm: pool/ {p=$NF; n[p]++; r[p]+=$1}
     END {for (p in n) printf "pool=%s workers=%d avg_rss_mb=%.1f total_mb=%.0f\n", p, n[p], r[p]/n[p]/1024, r[p]/1024}'
   echo "-- pool settings --"
-  for f in /etc/php/*/fpm/pool.d/*.conf /etc/php-fpm.d/*.conf /www/server/php/*/etc/php-fpm.conf /opt/remi/php*/root/etc/php-fpm.d/*.conf; do
+  # 1Panel 的 PHP 运行环境在 $OP_DIR/runtime/php/<名称>/ 下
+  { for f in /etc/php/*/fpm/pool.d/*.conf /etc/php-fpm.d/*.conf /www/server/php/*/etc/php-fpm.conf /opt/remi/php*/root/etc/php-fpm.d/*.conf; do
+      echo "$f"; done
+    [ -n "$OP_DIR" ] && t find "$OP_DIR/runtime/php" -maxdepth 4 -name '*.conf' -type f 2>/dev/null
+  } | while read -r f; do
     [ -f "$f" ] || continue
-    echo "$f: $(grep -hE '^[[:space:]]*pm(\.[a-z_]+)?[[:space:]]*=' "$f" | tr -d ' ' | tr '\n' ' ')"
+    out=$(grep -hE '^[[:space:]]*pm(\.[a-z_]+)?[[:space:]]*=' "$f" | tr -d ' ' | tr '\n' ' ')
+    [ -n "$out" ] && echo "$f: $out"
   done | cap 20
   echo "-- memory_limit --"
-  for f in /etc/php/*/fpm/php.ini /etc/php.ini /www/server/php/*/etc/php.ini; do
+  { for f in /etc/php/*/fpm/php.ini /etc/php.ini /www/server/php/*/etc/php.ini; do echo "$f"; done
+    [ -n "$OP_DIR" ] && t find "$OP_DIR/runtime/php" -maxdepth 4 -name 'php.ini' -type f 2>/dev/null
+  } | while read -r f; do
     [ -f "$f" ] || continue
     echo "$f: $(grep -hE '^[[:space:]]*memory_limit' "$f" | tr -d ' ')"
   done | cap 10
@@ -144,16 +186,24 @@ s_db() {
     have "$b" && echo "$b: $("$b" --version 2>/dev/null | head -1)"
   done
   echo "-- db processes --"
-  ps -eo pid,rss,args 2>/dev/null | grep -E '[m]ysqld|[m]ariadbd|[p]ostgres|[r]edis-server|[m]ongod' \
-    | awk '{printf "pid=%s rss_mb=%d ", $1, $2/1024; $1=""; $2=""; print}' | redact | cut -c1-160 | cap 10
+  # 按进程名（comm）精确匹配，排除本脚本自己的子进程
+  ps -eo pid,ppid,rss,comm,args 2>/dev/null \
+    | awk -v me=$$ '$2 != me && $4 ~ /^(mysqld|mariadbd|postgres|redis-server|mongod)$/ {
+        printf "pid=%s rss_mb=%d ", $1, $3/1024; $1 = $2 = $3 = $4 = ""; print }' | redact | cut -c1-160 | cap 10
   echo "-- mysql config --"
-  for f in /etc/my.cnf /etc/my.cnf.d/*.cnf /etc/mysql/my.cnf /etc/mysql/*.cnf /etc/mysql/conf.d/*.cnf /etc/mysql/mysql.conf.d/*.cnf /etc/mysql/mariadb.conf.d/*.cnf; do
+  # 1Panel 的 MySQL/MariaDB 应用配置在 $OP_DIR/apps/<应用>/<名称>/ 下
+  { for f in /etc/my.cnf /etc/my.cnf.d/*.cnf /etc/mysql/my.cnf /etc/mysql/*.cnf /etc/mysql/conf.d/*.cnf /etc/mysql/mysql.conf.d/*.cnf /etc/mysql/mariadb.conf.d/*.cnf; do
+      echo "$f"; done
+    [ -n "$OP_DIR" ] && t find "$OP_DIR/apps" -maxdepth 4 -name '*.cnf' -type f 2>/dev/null
+  } | while read -r f; do
     [ -f "$f" ] || continue
     out=$(grep -hE '^[[:space:]]*(innodb_buffer_pool_size|max_connections|key_buffer_size|query_cache_size|performance_schema|tmp_table_size|table_open_cache)[[:space:]]*=' "$f" | tr -d ' ' | tr '\n' ' ')
     [ -n "$out" ] && echo "$f: $out"
   done | cap 15
   echo "-- redis config --"
-  for f in /etc/redis/redis.conf /etc/redis.conf /www/server/redis/redis.conf; do
+  { for f in /etc/redis/redis.conf /etc/redis.conf /www/server/redis/redis.conf; do echo "$f"; done
+    [ -n "$OP_DIR" ] && t find "$OP_DIR/apps" -maxdepth 4 -name 'redis.conf' -type f 2>/dev/null
+  } | while read -r f; do
     [ -f "$f" ] || continue
     out=$(grep -hE '^[[:space:]]*maxmemory(-policy)?[[:space:]]' "$f" | tr '\n' ' ')
     echo "$f: ${out:-maxmemory unset (no limit)}"
@@ -188,9 +238,9 @@ s_docker() {
 s_apps() {
   sec apps
   echo "-- wordpress --"
-  for d in /var/www /www/wwwroot /home /srv /opt /usr/share/nginx /data; do
+  for d in /var/www /www/wwwroot /home /srv /opt /usr/share/nginx /data ${OP_DIR:+"$OP_DIR"/www/sites "$OP_DIR"/apps}; do
     [ -d "$d" ] && t find "$d" -maxdepth 4 -name wp-config.php -type f 2>/dev/null
-  done | cap 10 | while read -r f; do
+  done | awk '!seen[$0]++' | cap 10 | while read -r f; do
     dir=$(dirname "$f")
     ver=$(grep -oE "wp_version = '[^']+'" "$dir/wp-includes/version.php" 2>/dev/null | cut -d"'" -f2)
     flags=$(grep -oE "define\([[:space:]]*'(DISABLE_WP_CRON|WP_MEMORY_LIMIT|WP_MAX_MEMORY_LIMIT|WP_CACHE|WP_DEBUG)'[[:space:]]*,[[:space:]]*[^)]+\)" "$f" 2>/dev/null | tr -d ' ' | tr '\n' ' ')
@@ -204,8 +254,9 @@ s_apps() {
     echo "java: pid=$pid rss_mb=$((rss / 1024)) heap_opts=[$heap] main=${main:-?} unit=${unit:-?}"
   done
   echo "-- node / python --"
-  ps -eo pid,rss,args 2>/dev/null | grep -E '[n]ode |[P]M2|[g]unicorn|[u]wsgi|[u]vicorn' \
-    | awk '{printf "pid=%s rss_mb=%d ", $1, $2/1024; $1=""; $2=""; print}' | redact | cut -c1-160 | cap 10
+  ps -eo pid,ppid,rss,comm,args 2>/dev/null \
+    | awk -v me=$$ '$2 != me && ($4 == "node" || $4 ~ /^(gunicorn|uwsgi|uvicorn|PM2)/) {
+        printf "pid=%s rss_mb=%d ", $1, $3/1024; $1 = $2 = $3 = $4 = ""; print }' | redact | cut -c1-160 | cap 10
 }
 
 s_cron() {
@@ -254,3 +305,5 @@ echo "# discover.sh v1 $(date -u +%Y-%m-%dT%H:%M:%SZ) host=$(hostname 2>/dev/nul
 for s in system panel ports services procs web php db docker apps cron security health; do
   want "$s" && "s_$s"
 done
+# 各段落内部的失败不影响整体结果；TAT 会把非 0 退出码记为执行失败
+exit 0

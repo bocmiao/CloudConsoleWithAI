@@ -9,11 +9,11 @@
 - **优化建议，同意后自动执行**：「我觉得内存占用太高」→ 先用数据判断是否真有问题，再给出具体改法（精确到配置 diff）；你勾选同意后自动执行，失败自动回滚，24 小时后汇报效果。
 - **安全第一**：AI 只能提交计划，所有写操作都要你确认后才由执行引擎执行，可审计、可回滚。
 
-完整设计见 [docs/DESIGN.md](docs/DESIGN.md)。
+完整设计见 [docs/DESIGN.md](docs/DESIGN.md)。首个支持的服务器环境是 **1Panel**：优化类修改通过 1Panel 自己的 API 执行，面板里看得到、不会被覆盖（设计文档第 8 节）。
 
 ## 服务器环境识别脚本
 
-[`scripts/discover.sh`](scripts/discover.sh) 是一个只读脚本，用来识别服务器上跑了什么（宝塔 / 1Panel、Nginx 站点、PHP-FPM、MySQL / Redis、Docker、WordPress、Java 等），输出一份脱敏后的精简报告。系统会通过腾讯云自动化助手（TAT）自动执行它，你也可以手动运行：
+[`scripts/discover.sh`](scripts/discover.sh) 是一个只读脚本，用来识别服务器上跑了什么（1Panel / 宝塔、Nginx 站点、PHP-FPM、MySQL / Redis、Docker、WordPress、Java 等），输出一份脱敏后的精简报告。系统会通过腾讯云自动化助手（TAT）自动执行它，你也可以手动运行：
 
 ```bash
 sudo bash scripts/discover.sh               # 全部段落

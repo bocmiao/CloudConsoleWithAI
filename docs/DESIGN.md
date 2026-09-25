@@ -1,4 +1,4 @@
-# CloudConsoleWithAI 设计方案（v0.2）
+# CloudConsoleWithAI 设计方案（v0.3）
 
 > 用自然语言管理腾讯云：说出目标，AI 生成执行计划，你确认一次，系统自动完成跨产品的全部步骤并验证结果。可以直接问网站访问数据和服务器状态；出了问题，AI 逐层取证给出结论；觉得哪里不对劲（比如内存占用高），AI 先用数据判断是不是真有问题，再给出具体的优化方案，你同意后自动执行，并在执行后汇报效果。
 
@@ -132,6 +132,7 @@
 | ensureDomain | `DescribeAccelerationDomains` | `CreateAccelerationDomain(ZoneId, DomainName, OriginInfo{OriginType: IP_DOMAIN, Origin}, OriginProtocol)` | 轮询 `DomainStatus` |
 | ensureCname | DNSPod 是否已有指向 `AccelerationDomain.Cname` 的记录 | DNSPod `CreateRecord` / `ModifyRecord`（修改时先保存旧值） | 轮询 `CheckCnameStatus` |
 | ensureOriginOpen | `DescribeFirewallRules` | `CreateFirewallRules(80, 443)` | — |
+| ensureSite（装了 1Panel 时） | 1Panel `POST /websites/search` | 1Panel `POST /websites` 在源站创建网站（静态 / PHP / 反向代理），见 8.6 | — |
 | ensureHttps | 域名证书配置 | `ModifyHostsCertificate(Mode=eofreecert)`；失败时改走 `ApplyFreeCertificate(dns_challenge)` → 写入验证记录 → `CheckFreeCertificateVerification` → `ModifyHostsCertificate(Mode=eofreecert_manual)` | 轮询证书状态 |
 | verify | — | 多个公网 DoH 解析、HTTPS 探测、TLS 证书检查 | — |
 
@@ -474,11 +475,115 @@ fi
 - 同一台服务器上的变更**串行执行**（加锁），避免两个计划同时修改同一台机器；
 - **定时执行**：你事先确认，到时间自动执行；执行时重新做一次①预检，状态变了就中止并通知你；
 - 首批变更模板：swap、PHP-FPM、MySQL 内存参数、Nginx worker/缓冲区、logrotate、停用服务、systemd `MemoryMax`；
-- 模板按服务器画像（5.4）匹配环境：同一种修改在直接安装、宝塔、Docker 下各有一套实现（配置文件路径、校验命令、生效方式都不同）。
+- 模板按服务器画像（5.4）匹配环境：同一种修改在直接安装、宝塔、Docker 下各有一套实现（配置文件路径、校验命令、生效方式都不同）；装了 1Panel 的服务器优先走 1Panel 的 API（见第 8 节）。
 
 ---
 
-## 8. 主动巡检
+## 8. 1Panel 适配（首个支持的环境）
+
+你的服务器装的是 1Panel，所以第一批模板按 1Panel 来做。以下内容来自 1Panel 源码（v2）。
+
+### 8.1 1Panel 的结构
+
+- 安装目录记录在 `/usr/local/bin/1pctl` 的 `BASE_DIR`（默认 `/opt`），数据目录是 `<BASE_DIR>/1panel`；
+- 应用商店装的应用（OpenResty、MySQL、Redis、WordPress 等）都以 **Docker Compose** 运行，目录 `<数据目录>/apps/<应用>/<名称>/`；
+- 网站：配置在 `<数据目录>/www/conf.d/<网站>.conf`，文件在 `<数据目录>/www/sites/<网站>/`（`index`、`log`、`ssl`、`proxy` 等子目录）；
+- PHP 运行环境在 `<数据目录>/runtime/php/<名称>/`；
+- v2 的系统服务是 `1panel-core` 和 `1panel-agent`（v1 是 `1panel`）；
+- 应用、网站、运行环境的参数记在 1Panel 自己的数据库里。
+
+**关键结论：不要绕过 1Panel 直接改文件。** 直接改的内容可能在应用升级、重建或在面板里保存时被覆盖，面板显示的配置也会和实际不一致。所以在 1Panel 上，**能用 1Panel API 完成的修改一律走 API**：面板里看得到，也不会被覆盖。1Panel 管不到的系统级设置（如内核参数）才走 7.4 的 TAT 模板。
+
+识别脚本（5.4）已适配 1Panel：会读出 1Panel 版本、安装时的端口、已装应用、网站、PHP 运行环境，以及应用目录下的 MySQL / Redis / PHP 配置。`1pctl` 里还存着初始用户名、密码和安全入口，脚本只按白名单读取 `BASE_DIR`、`ORIGINAL_VERSION`、`ORIGINAL_PORT`、`PANEL_EDITION` 这几个键。
+
+### 8.2 优化项 → 1Panel 接口
+
+接口路径都在 `/api/v2` 下。「生效方式」要在测试环境逐项确认后写进模板。
+
+| 优化项 | 1Panel 接口 | 生效方式（预计） | 风险 |
+|---|---|---|---|
+| 添加 swap | `POST /toolbox/device/update/swap` | 立即生效 | R2 |
+| PHP-FPM 进程数（`pm.max_children` 等） | `POST /runtimes/php/fpm/config` | 重启 PHP 运行环境 | R2 |
+| php.ini（`memory_limit` 等） | `POST /runtimes/php/config` | 重启 PHP 运行环境 | R2 |
+| MySQL 内存参数（`innodb_buffer_pool_size` 等） | `POST /databases/variables/update` | 可能需要重启 MySQL | R2 |
+| Redis `maxmemory` / 淘汰策略 | `POST /databases/redis/conf/update` | 重启 Redis | R2 |
+| 给应用容器设内存/CPU 上限 | `POST /apps/installed/params/update`（`advanced`、`memoryLimit`、`memoryUnit`、`cpuQuota`） | 重建该应用容器，短暂中断 | R2 |
+| OpenResty 全局参数 | `POST /openresty/update` | reload | R2 |
+| 网站反向代理缓存 | `POST /websites/proxy/config` | reload | R2 |
+| 清理容器日志 | `POST /containers/clean/log` | 立即生效 | R2 |
+| 清理垃圾文件、无用镜像 | `POST /toolbox/scan` 先扫描、列出可清理项，确认后 `POST /toolbox/clean` | 立即生效 | R2 |
+| **改前备份** | 应用/网站/数据库：`POST /backups/backup`；大改动前做系统快照：`POST /settings/snapshot`（可用 `/settings/snapshot/rollback` 回滚） | — | R1 |
+
+**只读数据**（用于状态、诊断和优化分析）：
+
+| 数据 | 1Panel 接口 |
+|---|---|
+| 系统概况 | `GET /dashboard/base/os`、`/dashboard/base/all/all` |
+| 监控历史（CPU/内存/负载/IO/网络） | `POST /hosts/monitor/search`，1Panel 自带监控，不依赖云监控 agent |
+| 各容器资源占用 | `GET /containers/list/stats` |
+| 已装应用 | `POST /apps/installed/search` |
+| 网站 | `POST /websites/search` |
+| PHP-FPM 实时状态 | `GET /runtimes/php/fpm/status/:id` |
+| 监听端口 → 进程 | `POST /process/listening` |
+
+### 8.3 安全地连上 1Panel API
+
+- **认证**：请求头 `1Panel-Token` + `1Panel-Timestamp`。推荐 HMAC-SHA256：再加请求头 `1Panel-Signature-Version: hmac-sha256`，token = HMAC-SHA256(API 密钥, `"1panel:" + 时间戳`)。旧的 MD5 方式是 token = md5(`"1panel" + API 密钥 + 时间戳`)；
+- **要先在 1Panel「面板设置」里开启 API 接口，并配置 IP 白名单**。白名单为空时所有 API 请求都会被拒绝；时间戳超出有效期也会被拒绝；
+- 1Panel 的 API 密钥 = 整个面板的控制权（几乎等于 root），和云 API 密钥一样加密保存，不进入 AI 上下文；
+- **不要把 1Panel 端口暴露到公网**。连接方式：
+
+| 方式 | 做法 | 适用 |
+|---|---|---|
+| A. 本工具部署在同一台服务器 | 访问 `127.0.0.1:<面板端口>`，白名单只填 `127.0.0.1` | 最简单，推荐 |
+| B. 通过 TAT 在服务器本机调用 | TAT 在服务器上执行 `curl http://127.0.0.1:<面板端口>/api/v2/...`，API 密钥用 TAT 的隐藏参数 `{{tat-hidden:key}}` 传入 | 工具部署在别处，面板端口完全不对外；每次调用多几秒延迟，适合执行修改，不适合实时看板 |
+| C. 远程直连 | 轻量防火墙只对工具所在 IP 放行面板端口，全程 HTTPS | 不推荐 |
+
+### 8.4 官方 mcp-1panel
+
+1Panel 官方有 MCP Server（[1Panel-dev/mcp-1panel](https://github.com/1Panel-dev/mcp-1panel)），默认只读，能查询仪表盘、网站、证书、已装应用、数据库，也能建站、申请证书、建库、安装 OpenResty/MySQL，**但没有调优类接口**。M0 阶段可以直接接入它做查询，调优由我们的工具层直接调用 1Panel API 实现。
+
+### 8.5 1Panel 下的内存优化示例
+
+```
+内存分析：blog-gz（2核2G，1Panel v2）
+当前可用内存 0.15G；近 7 天 OOM 2 次（被杀的是 mysqld）
+
+容器内存排行（/containers/list/stats）：
+  1Panel-mysql-xxxx        690M   没有内存上限，innodb_buffer_pool_size = 1G
+  1Panel-php8-xxxx         420M   pm.max_children = 30
+  1panel-core / agent      120M
+  1Panel-openresty-xxxx     60M
+
+优化建议：
+ [✓] 1. 添加 1G swap（1Panel 工具箱）                         R2  不中断
+ [✓] 2. PHP 运行环境：pm.max_children 30 → 10                  R2  重启 PHP 运行环境，约几秒
+ [ ] 3. MySQL 性能调整：innodb_buffer_pool_size → 256M         R2  可能需要重启 MySQL，建议 03:00 执行
+ [ ] 4. MySQL 容器内存上限 800M（防止它拖垮整台机器）          R2  重建容器，约 10 秒中断
+
+执行前：通过 1Panel 备份 MySQL 应用和数据库
+执行后：在 1Panel 面板里能看到同样的修改；24 小时后自动复盘
+```
+
+### 8.6 建站流程也能用上 1Panel
+
+第 3 节的一句话建站可以多做一步：在 1Panel 上创建网站（`POST /websites`，静态、PHP 或反向代理），这样「EO + DNSPod + 源站网站」全部一次完成，不用再进 1Panel 手动建站。
+
+### 8.7 1Panel 首批模板
+
+1. 添加 swap
+2. PHP 运行环境的 FPM 参数和 `php.ini`
+3. MySQL 性能参数
+4. 应用容器内存/CPU 上限
+5. Redis `maxmemory` 和淘汰策略
+6. 容器日志清理、垃圾文件清理（先扫描再清理）
+7. OpenResty 参数、网站反向代理缓存
+8. 改前备份和系统快照
+9. 建站：在 1Panel 创建网站（配合 `site.publish`）
+
+---
+
+## 9. 主动巡检
 
 定时（每小时/每天）检查。发现问题先自动做一次诊断（R0），再把「结论 + 建议」推送到企业微信/飞书/邮件；点开后仍然走计划确认。
 
@@ -492,7 +597,7 @@ fi
 
 ---
 
-## 9. 系统架构
+## 10. 系统架构
 
 ```
 ┌──────────────────────────────── 交互层 ─────────────────────────────────┐
@@ -509,7 +614,7 @@ fi
 └───────────────────────────────────┬─────────────────────────────────────┘
 ┌──────────────────────────────── 工具层 ─────────────────────────────────┐
 │ Recipes：site.publish / site.diagnose / host.optimize_memory / eo.tune_cache … │
-│ Atomic ：dnspod.* teo.* lighthouse.* cvm.* vpc.* tat.* monitor.*        │
+│ Atomic ：dnspod.* teo.* lighthouse.* cvm.* vpc.* tat.* monitor.* op.*(1Panel) │
 │ 变更模板：swap / php-fpm / mysql / nginx / logrotate …                  │
 │ Probes ：DoH 解析 / HTTP(S) 探测 / TLS 证书检查                          │
 │ 资源清单：域名 → 解析记录 → EO 加速域名 → 源站 IP → 实例 → 防火墙 的关系图 │
@@ -522,7 +627,7 @@ fi
 
 ---
 
-## 10. 技术选型建议
+## 11. 技术选型建议
 
 | 部分 | 选择 | 理由 |
 |---|---|---|
@@ -549,15 +654,16 @@ packages/mcp          MCP Server 入口（复用 tools + recipes）
 
 ---
 
-## 11. 安全设计
+## 12. 安全设计
 
 1. **最小权限**：使用 CAM 子用户，只授予需要的产品权限；绝不使用主账号密钥。也支持 CAM 角色 + STS 临时凭证。
 2. **密钥不进入 LLM 上下文**：密钥加密存储，只在执行层使用；工具返回给 AI 的结果先脱敏。
 3. **AI 无直接写权限**：见 2.2，写操作只能走「计划 → 确认 → 执行」。
 4. **TAT 等同于 root shell**：只读模板和变更模板以外的命令一律 R2；可以在设置里完全关闭「执行任意命令」，只允许模板。
-5. **服务器变更可回滚**：先备份、先校验、健康检查失败自动回滚（见 7.4）。
-6. **提示注入防护**：日志、网页、命令输出都视为不可信数据；风险等级由策略引擎按操作类型硬编码，不采信 AI 的判断。
-7. **审计**：每次 API 调用记录操作人、时间、Action、脱敏参数、RequestId、结果。
+5. **1Panel API 密钥等同于面板完全控制权**：加密保存，不进入 AI 上下文；1Panel 端口不对公网开放，优先本机或经 TAT 调用；1Panel 里的 IP 白名单只放必要的地址（见 8.3）。
+6. **服务器变更可回滚**：先备份、先校验、健康检查失败自动回滚（见 7.4）。
+7. **提示注入防护**：日志、网页、命令输出都视为不可信数据；风险等级由策略引擎按操作类型硬编码，不采信 AI 的判断。
+8. **审计**：每次 API 调用记录操作人、时间、Action、脱敏参数、RequestId、结果。
 
 MVP 阶段的 CAM 策略示例（上线前按实际用到的接口再收紧）：
 
@@ -590,10 +696,10 @@ MVP 阶段的 CAM 策略示例（上线前按实际用到的接口再收紧）�
 
 ---
 
-## 12. 数据模型（核心表）
+## 13. 数据模型（核心表）
 
 ```
-credentials      id, name, secret_id, secret_key_encrypted, default_region
+credentials      id, kind(tencentcloud|1panel), name, key_id, secret_encrypted, endpoint, default_region
 resources        id, type, provider_id, name, region, attrs_json, synced_at
 resource_edges   from_id, to_id, relation        -- domain→record→eo_domain→origin→instance→site→app
 host_profiles    resource_id, stack_json, raw_output_redacted, collected_at   -- 服务器画像（5.4）
@@ -611,7 +717,7 @@ conversations    id, ...;  messages  id, conversation_id, role, content, plan_id
 
 ---
 
-## 13. MVP 工具清单
+## 14. MVP 工具清单
 
 **建站与解析**
 
@@ -664,24 +770,43 @@ conversations    id, ...;  messages  id, conversation_id, role, content, plan_id
 | `host.exec` | tat `RunCommand`（任意命令） | R2 |
 | `probe.resolve` / `probe.http` / `probe.tls` | 本地实现 | R0 |
 
+**1Panel**（接口见 8.2，均在 `/api/v2` 下）
+
+| 工具 | 底层接口 | 风险 |
+|---|---|---|
+| `op.overview` | `GET /dashboard/base/os`、`/dashboard/base/all/all` | R0 |
+| `op.monitor` | `POST /hosts/monitor/search` | R0 |
+| `op.container_stats` | `GET /containers/list/stats` | R0 |
+| `op.list_apps` / `op.list_websites` | `POST /apps/installed/search`、`POST /websites/search` | R0 |
+| `op.fpm_status` | `GET /runtimes/php/fpm/status/:id` | R0 |
+| `op.backup` / `op.snapshot` | `POST /backups/backup`、`POST /settings/snapshot` | R1 |
+| `op.create_website` | `POST /websites` | R1 |
+| `op.set_swap` | `POST /toolbox/device/update/swap` | R2 |
+| `op.set_fpm` / `op.set_php_ini` | `POST /runtimes/php/fpm/config`、`POST /runtimes/php/config` | R2 |
+| `op.set_mysql_vars` | `POST /databases/variables/update` | R2 |
+| `op.set_redis_conf` | `POST /databases/redis/conf/update` | R2 |
+| `op.set_app_limits` | `POST /apps/installed/params/update` | R2 |
+| `op.clean` | `POST /toolbox/scan` → `POST /toolbox/clean`、`POST /containers/clean/log` | R2 |
+
 ---
 
-## 14. 路线图
+## 15. 路线图
 
 | 阶段 | 内容 | 目的 |
 |---|---|---|
-| **M0**（1~2 周） | 工具层 + `site.publish` + `site.diagnose` + **只读的访问统计问答、服务器状态和环境识别**，以 **MCP Server** 形式提供，直接在 Claude Code / Claude Desktop 里使用。写操作以 `plan_*` 生成计划、`apply_plan(plan_id)` 执行的形式提供 | 零 UI 成本先验证价值；统计和状态都是 R0，风险最低、见效最快 |
+| **M0**（1~2 周） | 工具层 + `site.publish` + `site.diagnose` + **只读的访问统计问答、服务器状态和环境识别**，以 **MCP Server** 形式提供，直接在 Claude Code / Claude Desktop 里使用；1Panel 的只读查询可以先直接接入官方 mcp-1panel。写操作以 `plan_*` 生成计划、`apply_plan(plan_id)` 执行的形式提供 | 零 UI 成本先验证价值；统计和状态都是 R0，风险最低、见效最快 |
 | **M1**（3~4 周） | Web 控制台：对话、计划卡片、执行时间线、访问统计看板、服务器总览、资源关系视图、审计日志 | 成为日常入口 |
-| **M2** | 优化闭环：规则库 + 首批变更模板（swap、PHP-FPM、MySQL、Nginx、logrotate、EO 缓存/压缩、IP 封禁）+ 定时执行 + 24 小时复盘；巡检 + 日报推送；更多剧本（切换源站、已有站点迁移到 EO、COS 静态站 + EO、WordPress 一键部署） | 从「帮我做」到「主动发现、给出方案」 |
+| **M2** | 优化闭环：规则库 + 首批变更模板（**先做 1Panel**，见 8.7；再做 EO 缓存/压缩、IP 封禁）+ 定时执行 + 24 小时复盘；巡检 + 日报推送；更多剧本（切换源站、已有站点迁移到 EO、COS 静态站 + EO、WordPress 一键部署） | 从「帮我做」到「主动发现、给出方案」 |
 | **M3** | 多账号、团队审批、多云（阿里云 DNS、Cloudflare 等）Provider 抽象 | 扩展 |
 
 ---
 
-## 15. 待确认的问题
+## 16. 待确认的问题
 
 1. **自用还是做成产品？** 决定是否需要多租户、密钥托管方式。
 2. **模型和部署位置**：用 Claude 还是国内模型？服务部署在大陆还是海外？
 3. **域名情况**：域名都在 DNSPod 吗？是否已备案？（决定默认的 EO 接入方式和加速区域）
-4. **服务器上跑的东西**：系统上线后会自动识别（见 5.4）。开发时先写哪几套模板，可以先在你的服务器上运行 `scripts/discover.sh`，看结果再决定。
-5. **自动执行的边界**：是否只允许执行模板内的修改，完全禁止 AI 自由编写的命令？
-6. **先做哪一步**：先做 M0（MCP，1~2 周可用），还是直接做 Web 控制台？
+4. **服务器上跑的东西**：已确认是 **1Panel**，第一批模板按 1Panel 做（第 8 节）。还需要确认 1Panel 是 v1 还是 v2：运行 `scripts/discover.sh panel` 就能看到。设计按 v2 做，如果是 v1，建议先升级。
+5. **本工具部署在哪里**：和 1Panel 在同一台服务器上，还是别处？决定用 8.3 的哪种方式连接 1Panel API。
+6. **自动执行的边界**：是否只允许执行模板内的修改，完全禁止 AI 自由编写的命令？
+7. **先做哪一步**：先做 M0（MCP，1~2 周可用），还是直接做 Web 控制台？
