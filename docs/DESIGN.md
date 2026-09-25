@@ -1067,3 +1067,21 @@ conversations    id, ...;  messages  id, conversation_id, role, content, plan_id
 - Miao Panel 在执行中被关闭时，下次启动会把没结束的记录和清单步骤标记为「中断」，提示重新识别服务器确认结果。
 
 还没做：宝塔面板的 PHP / MySQL 接口、1Panel 应用的其他参数、受限的 AI 自由命令（第 7.5 节）、腾讯云 EO / DNSPod 相关操作。
+
+### M2 第一步：腾讯云 DNSPod + EdgeOne（已完成）
+
+「设置 → 腾讯云」填入子账号的 SecretId / SecretKey（存系统钥匙串；页面上有创建子账号、只授权 DNSPod 和 EdgeOne 的步骤）。之后：
+
+- AI 能查：DNSPod 域名和解析记录（`tencent_dns`）、EdgeOne 站点、加速域名、分配的 CNAME、回源、证书，以及 DNS 是否已经解析到 EdgeOne（`tencent_eo`）。每次查询都记在执行日志里（服务器一栏显示「腾讯云」）；
+- 一句话上线：比如「把 blog.example.com 接入 EO 并开 HTTPS，源站是我的服务器」，清单一般是下面三步，全部可以一键执行、单独回滚或整份撤销：
+
+| 操作 | 说明 | 回滚 |
+|---|---|---|
+| `eo.domain.add` | 在域名所在的 EdgeOne 站点添加加速域名，回源到服务器（默认 HTTP 80）；已存在则跳过；站点没验证归属时给出要加的 TXT 记录 | 停用并删除这个加速域名 |
+| `dns.record.set` | 设置 DNSPod 解析；`point_to=eo` 时执行时自动查询 EdgeOne 分配的 CNAME。A 改 CNAME 是原地修改，名字一直能解析；有多条冲突记录时先删多余的；多条同类型 A 记录（负载均衡）拒绝修改；值和现在一样时不做任何修改 | 新增的删除、改过的改回、删掉的加回 |
+| `eo.https.set` | 申请并部署 EdgeOne 免费证书（自动续签）。CNAME 接入的站点会先确认 DNS 已经解析到 EdgeOne，否则拒绝（证书验证不了）；等证书部署好才算完成，申请失败自动恢复原设置 | 恢复原来的证书设置 |
+
+- 只涉及腾讯云的清单不需要服务器（不连 SSH），和服务器步骤混在一起时按需连接；
+- 接口签名（TC3-HMAC-SHA256）和官方 Go SDK 逐字节比对过；请求字段按官方 SDK 的定义编写；测试用一个会校验签名、按 DNSPod/EdgeOne 规则保存状态的模拟服务。
+
+还没做：在 EdgeOne 新建站点（要选套餐、涉及计费，暂由用户在控制台操作）、在面板里自动建站、EdgeOne 访问统计与缓存/安全优化。还没有在真实的腾讯云账号上验证过。

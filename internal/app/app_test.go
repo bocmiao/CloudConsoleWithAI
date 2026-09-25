@@ -18,6 +18,7 @@ import (
 	"github.com/bocmiao/CloudConsoleWithAI/internal/secrets"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/sshx/sshtest"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/store"
+	"github.com/bocmiao/CloudConsoleWithAI/internal/tencent/tencenttest"
 )
 
 func newApp(t *testing.T) *App {
@@ -543,5 +544,95 @@ func TestChatIsSavedAndRestored(t *testing.T) {
 	}
 	if msgs, _ := b.Store.ChatMessages(r.ConversationID); len(msgs) != 0 {
 		t.Fatalf("messages left behind: %d", len(msgs))
+	}
+}
+
+func TestTencentCloudPlanWithoutServer(t *testing.T) {
+	a := newApp(t)
+	f := tencenttest.Start(t)
+	a.TencentEndpoint = f.Endpoint
+	a.PollInterval = 10 * time.Millisecond
+	ctx := context.Background()
+
+	if _, err := a.TestTencent(ctx); err == nil {
+		t.Fatal("test without credentials should fail")
+	}
+	if _, err := a.SaveTencent("not-a-key", "x"); err == nil {
+		t.Fatal("malformed SecretId accepted")
+	}
+	s, err := a.SaveTencent(tencenttest.SecretID, tencenttest.SecretKey)
+	if err != nil || !s.Configured || s.SecretID == tencenttest.SecretID || !strings.HasPrefix(s.SecretID, "AKIDfa") {
+		t.Fatalf("save: %+v %v", s, err)
+	}
+	if info, err := a.TestTencent(ctx); err != nil || !strings.Contains(info, "DNSPod：1 个域名") || !strings.Contains(info, "EdgeOne：1 个站点") {
+		t.Fatalf("test: %q %v", info, err)
+	}
+
+	// The AI looks around; each query is logged as a read.
+	out, err := a.toolTencentEO(withOrigin(ctx, OriginAI), json.RawMessage(`{"domain":"blog.example.com"}`))
+	if err != nil || !strings.Contains(out, "CNAME 接入") || !strings.Contains(out, "加速域名：没有 blog.example.com") {
+		t.Fatalf("tencent_eo: %q %v", out, err)
+	}
+	if out, err := a.toolTencentDNS(ctx, json.RawMessage(`{"domain":"example.com","subdomain":"blog"}`)); err != nil || !strings.Contains(out, "blog A 1.2.3.4") {
+		t.Fatalf("tencent_dns: %q %v", out, err)
+	}
+
+	// A checklist that only touches Tencent Cloud needs no server.
+	args, _ := json.Marshal(map[string]any{
+		"server_id": 0, "title": "blog 接入 EdgeOne", "reason": "加速并开启 HTTPS",
+		"steps": []map[string]any{
+			{"capability": "eo.domain.add", "summary": "添加加速域名", "params": map[string]any{"domain": "blog.example.com", "origin": "81.68.79.253"}},
+			{"capability": "dns.record.set", "summary": "解析到 EdgeOne", "params": map[string]any{"domain": "example.com", "subdomain": "blog", "point_to": "eo"}},
+			{"capability": "eo.https.set", "summary": "免费证书", "params": map[string]any{"domain": "blog.example.com"}},
+			{"capability": "swap.set", "summary": "这一步要服务器", "params": map[string]any{"size_gb": 1}},
+		},
+	})
+	collector := &planCollector{}
+	if _, err := a.toolProposePlan(context.WithValue(ctx, planCollectorKey{}, collector), args); err != nil {
+		t.Fatal(err)
+	}
+	v, _ := a.Plan(collector.ids[0])
+	if !v.StepList[0].Executable || !v.StepList[2].Executable || v.StepList[3].Executable || !strings.Contains(v.StepList[3].Blocked, "没有指定服务器") {
+		t.Fatalf("steps = %+v", v.StepList)
+	}
+	if _, err := a.ExecutePlan(v.ID, []int{0, 1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	done := waitPlan(t, a, v.ID)
+	for i := 0; i < 3; i++ {
+		if done.StepList[i].Status != actions.StatusDone {
+			t.Fatalf("step %d = %+v", i+1, done.StepList[i])
+		}
+	}
+	if recs := f.Lookup("example.com", "blog"); len(recs) != 1 || recs[0].Type != "CNAME" {
+		t.Fatalf("DNS = %+v", recs)
+	}
+	e, _ := a.ExecEntry(done.StepList[1].LogID)
+	if e.ServerName != "腾讯云" || !e.CanRollback || !strings.Contains(e.Commands, "dnspod ModifyRecord") || strings.Contains(e.Commands, tencenttest.SecretKey) {
+		t.Fatalf("log entry = %+v", e)
+	}
+
+	// Undo the whole checklist: certificate, then DNS, then the domain.
+	if _, err := a.UndoPlan(ctx, v.ID); err != nil {
+		t.Fatal(err)
+	}
+	if recs := f.Lookup("example.com", "blog"); len(recs) != 1 || recs[0].Type != "A" || f.Domain("blog.example.com") != nil {
+		t.Fatalf("after undo: records=%+v domain=%+v", recs, f.Domain("blog.example.com"))
+	}
+	logs, _ := a.ExecLogs(false)
+	var reads, rollbacks int
+	for _, l := range logs {
+		if l.Kind == store.ExecRead && l.ServerName == "腾讯云" {
+			reads++
+		}
+		if l.Kind == store.ExecRollback {
+			rollbacks++
+		}
+	}
+	if reads < 2 || rollbacks != 3 {
+		t.Fatalf("reads=%d rollbacks=%d", reads, rollbacks)
+	}
+	if s := a.ClearTencent(); s.Configured {
+		t.Fatal("credentials not cleared")
 	}
 }

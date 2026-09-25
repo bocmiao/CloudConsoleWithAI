@@ -15,6 +15,7 @@ import (
 
 	"github.com/bocmiao/CloudConsoleWithAI/internal/onepanel"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/sshx"
+	"github.com/bocmiao/CloudConsoleWithAI/internal/tencent"
 	"github.com/bocmiao/CloudConsoleWithAI/scripts"
 )
 
@@ -26,6 +27,8 @@ type Env struct {
 	OnePanel *onepanel.Client
 	// PanelApps is the 1Panel app list from discovery, e.g. "mysql/mysql".
 	PanelApps []string
+	// Cloud is set when Tencent Cloud credentials are configured.
+	Cloud *tencent.Client
 	// Reconnect replaces SSH after a dropped connection while waiting.
 	Reconnect func(ctx context.Context) (*sshx.Client, error)
 	// PollInterval defaults to one second.
@@ -65,8 +68,11 @@ type Progress func(log []string)
 
 // Apply runs a validated step.
 func Apply(ctx context.Context, env *Env, r Resolved, progress Progress) Outcome {
-	if r.Impl.Script != "" {
+	switch {
+	case r.Impl.Script != "":
 		return runScript(ctx, env, r, "apply", nil, progress)
+	case r.Impl.Cloud != "":
+		return applyCloud(ctx, env, r, progress)
 	}
 	return applyPanel(ctx, env, r, progress)
 }
@@ -76,8 +82,11 @@ func Undo(ctx context.Context, env *Env, r Resolved, undo map[string]string) Out
 	if !r.Cap.Reversible {
 		return Outcome{Status: StatusRefused, Log: []string{"这个操作不能撤销"}}
 	}
-	if r.Impl.Script != "" {
+	switch {
+	case r.Impl.Script != "":
 		return runScript(ctx, env, r, "undo", undo, nil)
+	case r.Impl.Cloud != "":
+		return undoCloud(ctx, env, r, undo)
 	}
 	return undoPanel(ctx, env, r, undo)
 }

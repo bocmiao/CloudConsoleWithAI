@@ -60,6 +60,9 @@ func prepareSteps(steps []core.Step, adapter string) []core.Step {
 		case err != nil:
 			s.Blocked = "参数不对（" + err.Error() + "），请让 AI 重新生成这份清单"
 			continue
+		case adapter == noServer && r.Impl.NeedsServer():
+			s.Blocked = "这一步要在服务器上执行，但这份清单没有指定服务器，请让 AI 重新生成"
+			continue
 		}
 		s.Executable = true
 		s.Title = r.Cap.Title
@@ -130,7 +133,7 @@ func viewOf(p store.Plan) PlanView {
 func (a *App) recheck(v *PlanView, adapters map[int64]string) {
 	adapter, ok := adapters[v.ServerID]
 	if !ok {
-		sv, err := a.Store.GetServer(v.ServerID)
+		sv, err := a.planServer(v.ServerID)
 		if err != nil {
 			return
 		}
@@ -189,7 +192,7 @@ func (a *App) env(ctx context.Context, id int64) (store.Server, *actions.Env, er
 	if err != nil {
 		return sv, nil, err
 	}
-	env := &actions.Env{SSH: c, User: sv.Username}
+	env := &actions.Env{SSH: c, User: sv.Username, PollInterval: a.PollInterval}
 	env.Reconnect = func(ctx context.Context) (*sshx.Client, error) {
 		_, nc, err := a.connect(ctx, id)
 		return nc, err
@@ -202,7 +205,23 @@ func (a *App) env(ctx context.Context, id int64) (store.Server, *actions.Env, er
 		c.Close()
 		return sv, nil, err
 	}
+	env.Cloud = a.tencentClient()
 	return sv, env, nil
+}
+
+// cloudServer stands in for the server of checklists that only change
+// Tencent Cloud.
+var cloudServer = store.Server{Name: "腾讯云", Adapter: noServer}
+
+// noServer is the adapter of checklists without a server.
+const noServer = "-"
+
+// planServer returns a checklist's server; 0 means none.
+func (a *App) planServer(id int64) (store.Server, error) {
+	if id == 0 {
+		return cloudServer, nil
+	}
+	return a.Store.GetServer(id)
 }
 
 // discoverWith refreshes the saved profile over an open connection.
@@ -231,7 +250,7 @@ func (a *App) ExecutePlan(id int64, selected []int) (PlanView, error) {
 	if len(selected) == 0 {
 		return v, userErr("请至少勾选一项")
 	}
-	sv, err := a.Store.GetServer(v.ServerID)
+	sv, err := a.planServer(v.ServerID)
 	if err != nil {
 		return v, userErr("这个清单对应的服务器已经被删除了")
 	}
@@ -291,16 +310,30 @@ func (a *App) runPlan(planID, serverID int64) {
 		v.Status = core.PlanPartial
 		_ = a.savePlan(&v)
 	}
-	sv, env, err := a.env(ctx, serverID)
+	sv, err := a.planServer(serverID)
 	if err != nil {
-		fail(friendlySSHError(err).Error())
+		fail("这个清单对应的服务器已经被删除了")
 		return
 	}
-	defer func() { env.SSH.Close() }()
-
-	if prof, err := a.discoverWith(ctx, sv, env.SSH, "执行前识别（记录修改前的状态）"); err == nil {
-		v.Before = snapshotOf(prof)
-		env.PanelApps = prof.Panel.Apps
+	// Only connect to the server when a step works on it; Tencent Cloud
+	// steps need nothing but the API.
+	needServer := false
+	for _, st := range v.StepList {
+		if r, err := actions.Resolve(st.Capability, st.Params, sv.Adapter); st.Status == "queued" && err == nil && r.Impl.NeedsServer() {
+			needServer = true
+		}
+	}
+	env := &actions.Env{Cloud: a.tencentClient(), PollInterval: a.PollInterval}
+	if needServer {
+		if sv, env, err = a.env(ctx, serverID); err != nil {
+			fail(friendlySSHError(err).Error())
+			return
+		}
+		defer func() { env.SSH.Close() }()
+		if prof, err := a.discoverWith(ctx, sv, env.SSH, "执行前识别（记录修改前的状态）"); err == nil {
+			v.Before = snapshotOf(prof)
+			env.PanelApps = prof.Panel.Apps
+		}
 	}
 	ok := true
 	for i := range v.StepList {
@@ -341,8 +374,10 @@ func (a *App) runPlan(planID, serverID int64) {
 		_ = a.savePlan(&v)
 		_ = a.Store.Audit("system", "plan.step", st.Title, fmt.Sprintf("%s：%s", sv.Name, out.Status))
 	}
-	if prof, err := a.discoverWith(ctx, sv, env.SSH, "执行后识别（对比效果）"); err == nil {
-		v.After = snapshotOf(prof)
+	if needServer {
+		if prof, err := a.discoverWith(ctx, sv, env.SSH, "执行后识别（对比效果）"); err == nil {
+			v.After = snapshotOf(prof)
+		}
 	}
 	v.Status = core.PlanDone
 	if !ok {
@@ -364,7 +399,7 @@ func (a *App) UndoStep(ctx context.Context, planID int64, idx int) (PlanView, er
 	if st.Status != actions.StatusDone || !st.Reversible {
 		return v, userErr("这一步不能撤销")
 	}
-	sv, err := a.Store.GetServer(v.ServerID)
+	sv, err := a.planServer(v.ServerID)
 	if err != nil {
 		return v, userErr("这个清单对应的服务器已经被删除了")
 	}

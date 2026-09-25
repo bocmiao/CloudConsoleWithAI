@@ -298,6 +298,14 @@ pre.raw.err { color: var(--crit); }
 .exec-detail pre.raw { border: 1px solid var(--sep); border-radius: 8px; max-height: 360px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
 .log-link { margin-left: 8px; }
 
+/* Setup guides */
+details.guide { margin: -14px 4px 26px; font-size: 13px; color: var(--text-2); }
+details.guide summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 6px; color: var(--accent); }
+details.guide summary::-webkit-details-marker { display: none; }
+details.guide[open] summary .icon { transform: rotate(90deg); }
+details.guide ol { margin: 10px 0 0; padding-left: 22px; line-height: 1.7; }
+details.guide code { font: 12px ui-monospace, "SF Mono", Menlo, Consolas, monospace; background: var(--hover); padding: 1px 5px; border-radius: 4px; }
+
 /* Tables */
 .table { width: 100%; border-collapse: collapse; }
 .table th, .table td { text-align: left; padding: 10px 16px; vertical-align: top; }

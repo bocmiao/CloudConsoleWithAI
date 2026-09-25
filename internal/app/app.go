@@ -28,6 +28,11 @@ type App struct {
 	Secrets secrets.Store
 	// Dial opens SSH connections; tests replace it.
 	Dial func(ctx context.Context, t sshx.Target) (*sshx.Client, error)
+	// TencentEndpoint overrides Tencent Cloud API addresses; tests set it.
+	TencentEndpoint func(service string) string
+	// PollInterval, when set, is how often running actions check on
+	// progress; tests shorten it.
+	PollInterval time.Duration
 
 	mu    sync.Mutex
 	convs map[string]*conversation

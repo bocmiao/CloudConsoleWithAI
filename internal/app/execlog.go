@@ -125,6 +125,8 @@ func execView(e store.ExecLog) ExecView {
 			v.NoRollback = "当前版本的 Miao Panel 不支持回滚这个操作"
 		case !r.Cap.Reversible:
 			v.NoRollback = r.Cap.NoUndo
+		case len(e.Undo) == 0 && e.ID > 0:
+			v.NoRollback = "这一步当时没有做任何修改，不需要回滚"
 		default:
 			v.CanRollback, v.RollbackHow = true, r.Impl.Undo
 		}
@@ -166,7 +168,8 @@ func (a *App) Rollback(ctx context.Context, id int64) (ExecView, error) {
 	if v := execView(e); !v.CanRollback {
 		return v, userErr("这条记录不能回滚：%s", v.NoRollback)
 	}
-	if _, err := a.Store.GetServer(e.ServerID); err != nil {
+	r, _ := actions.Resolve(e.Capability, e.Params, e.Adapter)
+	if _, err := a.planServer(e.ServerID); err != nil && r.Impl.NeedsServer() {
 		msg := "这台服务器已经从 Miao Panel 里删除了，无法回滚"
 		if e.RollbackFile != "" {
 			msg += "。可以在服务器上用 root 执行 sh " + e.RollbackFile + " 回滚"
@@ -195,11 +198,14 @@ func (a *App) rollback(ctx context.Context, e *store.ExecLog) (store.ExecLog, er
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
-	sv, env, err := a.env(ctx, e.ServerID)
-	if err != nil {
-		return store.ExecLog{}, friendlySSHError(err)
+	sv := store.Server{ID: e.ServerID, Name: e.ServerName}
+	env := &actions.Env{Cloud: a.tencentClient(), PollInterval: a.PollInterval}
+	if r.Impl.NeedsServer() {
+		if sv, env, err = a.env(ctx, e.ServerID); err != nil {
+			return store.ExecLog{}, friendlySSHError(err)
+		}
+		defer func() { env.SSH.Close() }()
 	}
-	defer func() { env.SSH.Close() }()
 
 	rb := a.startExec(store.ExecLog{
 		ServerID: sv.ID, ServerName: sv.Name, Adapter: e.Adapter, Origin: OriginUser, Kind: store.ExecRollback,
@@ -223,8 +229,10 @@ func (a *App) rollback(ctx context.Context, e *store.ExecLog) (store.ExecLog, er
 			if out.Status == actions.StatusUndone {
 				st.Status = actions.StatusUndone
 			}
-			if prof, err := a.discoverWith(withOrigin(ctx, OriginUser), sv, env.SSH, "回滚后重新识别"); err == nil {
-				v.After = snapshotOf(prof)
+			if env.SSH != nil {
+				if prof, err := a.discoverWith(withOrigin(ctx, OriginUser), sv, env.SSH, "回滚后重新识别"); err == nil {
+					v.After = snapshotOf(prof)
+				}
 			}
 			_ = a.savePlan(&v)
 		}

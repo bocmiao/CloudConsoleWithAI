@@ -18,7 +18,7 @@ import (
 type Param struct {
 	Name     string
 	Desc     string
-	Kind     string // int | enum | name
+	Kind     string // int | enum | name | host | subdomain | text
 	Min, Max int
 	Enum     []string
 	Default  string
@@ -31,9 +31,14 @@ type Impl struct {
 	Script   string   // action script file (Linux implementations)
 	Args     []string // parameter names passed to the script, in order
 	Panel    string   // panel operation (API implementations)
+	Cloud    string   // Tencent Cloud operation
 	Downtime string   // what the user will notice while it runs
 	Undo     string   // what rolling it back does, in plain words
 }
+
+// NeedsServer reports whether running this implementation needs the
+// server (SSH, or the panel reached through it); cloud operations do not.
+func (i Impl) NeedsServer() bool { return i.Script != "" || i.Panel != "" }
 
 // Capability is one kind of change.
 type Capability struct {
@@ -51,7 +56,11 @@ type Capability struct {
 	Check func(v map[string]string) error
 }
 
-var nameRe = regexp.MustCompile(`^[A-Za-z0-9@._-]{1,64}$`)
+var (
+	nameRe      = regexp.MustCompile(`^[A-Za-z0-9@._-]{1,64}$`)
+	hostRe      = regexp.MustCompile(`^([A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
+	subdomainRe = regexp.MustCompile(`^(@|\*|(\*\.)?[A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9])?)*)$`)
+)
 
 var registry = map[string]*Capability{}
 
@@ -75,6 +84,51 @@ func init() {
 		NoUndo: "重启服务没有修改任何配置，不需要回滚",
 		Params: []Param{{Name: "name", Kind: "name", Required: true, Desc: "systemd 服务名，例如 nginx、php8.2-fpm、mysql"}},
 		Impls:  map[string]Impl{"*": {Via: "系统脚本", Script: "service_restart.sh", Args: []string{"name"}, Downtime: "这个服务会中断几秒"}},
+	})
+	register(&Capability{
+		Name: "dns.record.set", Title: "设置 DNS 解析", Risk: core.R2, Reversible: true,
+		Params: []Param{
+			{Name: "domain", Kind: "host", Required: true, Desc: "DNSPod 里的主域名，例如 example.com"},
+			{Name: "subdomain", Kind: "subdomain", Required: true, Desc: "主机记录，例如 www、blog；主域名本身填 @"},
+			{Name: "point_to", Kind: "enum", Enum: []string{"eo"}, Desc: "填 eo 表示解析到 EdgeOne 为这个域名分配的 CNAME（执行时自动查询，要先有加速域名），这时不用填 type 和 value"},
+			{Name: "type", Kind: "enum", Enum: []string{"A", "AAAA", "CNAME", "TXT"}, Desc: "记录类型"},
+			{Name: "value", Kind: "text", Desc: "记录值：A 填 IPv4，CNAME 填域名，TXT 填文本"},
+			{Name: "ttl", Kind: "int", Min: 60, Max: 86400, Desc: "TTL（秒），不填则沿用原记录，新记录用 600"},
+		},
+		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "dns_record_set", Downtime: "按 TTL 几分钟内在各地生效；A 改 CNAME 是原地修改，不会解析不到",
+			Undo: "把这个主机记录的解析恢复成修改前的样子（新增的删除，改过的改回，删掉的加回）"}},
+		Check: func(v map[string]string) error {
+			switch {
+			case v["point_to"] == "eo" && (v["type"] != "" || v["value"] != ""):
+				return fmt.Errorf("point_to=eo 时不用填 type 和 value")
+			case v["point_to"] == "" && (v["type"] == "" || v["value"] == ""):
+				return fmt.Errorf("要填 type 和 value，或者填 point_to=eo")
+			}
+			return nil
+		},
+	})
+	register(&Capability{
+		Name: "eo.domain.add", Title: "添加 EdgeOne 加速域名", Risk: core.R1, Reversible: true,
+		Params: []Param{
+			{Name: "domain", Kind: "host", Required: true, Desc: "要加速的完整域名，例如 blog.example.com；它所在的站点（example.com）必须已经在 EdgeOne 里"},
+			{Name: "origin", Kind: "host", Required: true, Desc: "源站：服务器的公网 IP 或域名"},
+			{Name: "origin_protocol", Kind: "enum", Enum: []string{"HTTP", "HTTPS", "FOLLOW"}, Default: "HTTP",
+				Desc: "回源协议。服务器上这个网站没有配 HTTPS 证书时用 HTTP（默认）"},
+			{Name: "http_port", Kind: "int", Min: 1, Max: 65535, Default: "80", Desc: "HTTP 回源端口"},
+			{Name: "https_port", Kind: "int", Min: 1, Max: 65535, Default: "443", Desc: "HTTPS 回源端口"},
+		},
+		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "eo_domain_add", Downtime: "不影响现有访问（DNS 解析到 EdgeOne 之后才生效）",
+			Undo: "停用并删除这个加速域名"}},
+	})
+	register(&Capability{
+		Name: "eo.https.set", Title: "设置 EdgeOne HTTPS 证书", Risk: core.R2, Reversible: true,
+		Params: []Param{
+			{Name: "domain", Kind: "host", Required: true, Desc: "EdgeOne 加速域名，例如 blog.example.com"},
+			{Name: "mode", Kind: "enum", Enum: []string{"eofreecert", "disable"}, Default: "eofreecert",
+				Desc: "eofreecert：申请并部署免费证书（自动续签，要求域名已经解析到 EdgeOne）；disable：关闭"},
+		},
+		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "eo_https", Downtime: "不影响访问，证书签发一般需要几分钟",
+			Undo: "把证书设置恢复成修改前的样子"}},
 	})
 	register(&Capability{
 		Name: "container.restart", Title: "重启容器", Risk: core.R2,
@@ -193,7 +247,11 @@ func Describe() string {
 			envs = append(envs, a)
 		}
 		sort.Strings(envs)
-		fmt.Fprintf(&b, "- %s（%s；支持环境：%s）", n, c.Title, strings.ReplaceAll(strings.Join(envs, "/"), "*", "全部"))
+		where := "支持环境：" + strings.ReplaceAll(strings.Join(envs, "/"), "*", "全部")
+		if impl, ok := c.Impls["*"]; ok && impl.Cloud != "" {
+			where = "腾讯云，不需要服务器"
+		}
+		fmt.Fprintf(&b, "- %s（%s；%s）", n, c.Title, where)
 		if len(c.Params) > 0 {
 			var ps []string
 			for _, p := range c.Params {
@@ -310,6 +368,21 @@ func paramValue(p Param, raw any) (string, error) {
 	case "name":
 		if !nameRe.MatchString(s) {
 			return "", fmt.Errorf("参数 %s 只能包含字母、数字和 @._-", p.Name)
+		}
+		return s, nil
+	case "host":
+		if len(s) > 253 || !hostRe.MatchString(s) {
+			return "", fmt.Errorf("参数 %s 要是域名或 IP 地址，%q 不是", p.Name, s)
+		}
+		return strings.ToLower(s), nil
+	case "subdomain":
+		if len(s) > 200 || !subdomainRe.MatchString(s) {
+			return "", fmt.Errorf("参数 %s 要是主机记录（例如 www、blog，主域名本身填 @），%q 不是", p.Name, s)
+		}
+		return strings.ToLower(s), nil
+	case "text":
+		if len(s) > 512 || strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+			return "", fmt.Errorf("参数 %s 太长或含有控制字符", p.Name)
 		}
 		return s, nil
 	}

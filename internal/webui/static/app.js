@@ -371,6 +371,7 @@ const app = createApp({
     const chatBusy = ref(false);
     const msgBox = ref(null);
     const op = reactive({ port: 0, host: '', apiKey: '', hasKey: false, info: '' });
+    const tc = reactive({ configured: false, hint: '', secretId: '', secretKey: '', info: '' });
     const suggestions = [
       '服务器现在的整体状况怎么样？',
       '内存占用是不是太高了？',
@@ -413,6 +414,26 @@ const app = createApp({
         op.info = '连接成功：' + r.info;
         notify('1Panel 接口可以正常使用');
       });
+    }
+    function setTencent(v) { Object.assign(tc, { configured: v.configured, hint: v.secretId || '', secretId: '', secretKey: '', info: '' }); }
+    async function loadTencent() { setTencent(await api('GET', '/api/settings/tencent')); }
+    async function saveTencent() {
+      await guarded('正在保存……', async () => {
+        setTencent(await api('PUT', '/api/settings/tencent', { secretId: tc.secretId, secretKey: tc.secretKey }));
+        notify('已保存，正在测试……');
+        await testTencent();
+      });
+    }
+    async function testTencent() {
+      await guarded('正在连接腾讯云……', async () => {
+        const r = await api('POST', '/api/settings/tencent/test');
+        tc.info = '连接成功：' + r.info;
+        notify('腾讯云可以正常使用');
+      });
+    }
+    async function clearTencent() {
+      if (!confirm('确定要清除保存的腾讯云密钥吗？')) return;
+      await guarded('正在清除……', async () => { setTencent(await api('DELETE', '/api/settings/tencent')); });
     }
     function go(id) {
       tab.value = id;
@@ -598,20 +619,20 @@ const app = createApp({
     const riskName = r => ({ R0: '只读', R1: '可撤销', R2: '影响线上', R3: '高风险' }[r] || '');
     const adapterName = a => ({ '1panel': '1Panel', bt: '宝塔', linux: '纯 Linux' }[a] || '未识别');
     const fmtTime = t => t ? new Date(t).toLocaleString('zh-CN', { hour12: false }) : '';
-    const serverName = id => (servers.value.find(s => s.id === id) || { name: `服务器 ${id}` }).name;
+    const serverName = id => id === 0 ? '腾讯云' : (servers.value.find(s => s.id === id) || { name: `服务器 ${id}` }).name;
     const parseSteps = s => { try { return JSON.parse(s); } catch { return []; } };
     const toolName = t => ({ list_servers: '查看服务器列表', get_server_profile: '读取服务器画像', refresh_server_profile: '重新识别服务器',
-      run_check: '执行只读检查', propose_plan: '生成修改清单' }[t] || t);
+      run_check: '执行只读检查', propose_plan: '生成修改清单', tencent_dns: '查询 DNSPod 解析', tencent_eo: '查询 EdgeOne' }[t] || t);
     const actorName = a => ({ user: '你', ai: 'AI', system: '系统' }[a] || a);
     const actionName = a => ({ 'server.add': '添加服务器', 'server.delete': '删除服务器', 'server.test': '测试连接', 'server.discover': '识别环境',
       'server.hostkey.recorded': '记录服务器指纹', 'settings.ai': '修改 AI 设置', 'ai.chat': 'AI 对话', 'plan.propose': 'AI 生成清单',
-      'plan.execute': '执行清单', 'plan.step': '执行步骤', 'plan.undo': '撤销步骤', 'exec.rollback': '回滚', 'onepanel.settings': '修改 1Panel 接口设置' }[a] || a);
+      'plan.execute': '执行清单', 'plan.step': '执行步骤', 'plan.undo': '撤销步骤', 'exec.rollback': '回滚', 'onepanel.settings': '修改 1Panel 接口设置', 'settings.tencent': '修改腾讯云密钥' }[a] || a);
 
     onMounted(async () => {
       try {
         info.value = await api('GET', '/api/info');
         presets.value = await api('GET', '/api/ai/presets');
-        await Promise.all([loadServers(), loadAI(), loadSpend(), loadConvs()]);
+        await Promise.all([loadServers(), loadAI(), loadSpend(), loadConvs(), loadTencent()]);
         if (convs.value.length) await openConv(convs.value[0].id);
         if (servers.value.length) await select(servers.value[0].id);
       } catch (e) { notify(e.message, 'error'); }
@@ -622,7 +643,7 @@ const app = createApp({
       spendText, plans, audit, logView, logFocus, loadAudit, openLog, showAdd, addForm, messages, draft, chatBusy, msgBox, suggestions,
       select, openAdd, addServer, testConn, discover, removeServer, askAbout, send, onEnter, newChat, applyPreset, saveAI, testAI,
       convs, showConvs, conversationId, openConv, deleteConv, relTime,
-      op, saveOnePanel, testOnePanel,
+      op, saveOnePanel, testOnePanel, tc, saveTencent, testTencent, clearTencent,
       memPct, rootDisk, envSub, dockerText, money, mb, meterClass, levelClass, levelIcon, levelName, riskName, adapterName,
       fmtTime, serverName, parseSteps, toolName, actorName, actionName, md,
     };

@@ -56,6 +56,10 @@ func New(a *app.App, token string, port int, version string) *Server {
 	api("GET /api/settings/ai", s.getAISettings)
 	api("PUT /api/settings/ai", s.putAISettings)
 	api("POST /api/settings/ai/test", s.testAI)
+	api("GET /api/settings/tencent", s.getTencent)
+	api("PUT /api/settings/tencent", s.putTencent)
+	api("DELETE /api/settings/tencent", s.deleteTencent)
+	api("POST /api/settings/tencent/test", s.testTencent)
 	api("POST /api/chat", s.chat)
 	api("GET /api/conversations", s.conversations)
 	api("GET /api/conversations/{id}", s.conversation)
@@ -233,6 +237,30 @@ func (s *Server) testAI(_ http.ResponseWriter, r *http.Request) (any, error) {
 	defer cancel()
 	text, err := s.app.TestAI(ctx)
 	return map[string]string{"reply": text}, err
+}
+
+func (s *Server) getTencent(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return s.app.Tencent(), nil
+}
+
+func (s *Server) putTencent(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req struct {
+		SecretID  string `json:"secretId"`
+		SecretKey string `json:"secretKey"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.SaveTencent(req.SecretID, req.SecretKey)
+}
+
+func (s *Server) deleteTencent(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return s.app.ClearTencent(), nil
+}
+
+func (s *Server) testTencent(_ http.ResponseWriter, r *http.Request) (any, error) {
+	info, err := s.app.TestTencent(r.Context())
+	return map[string]string{"info": info}, err
 }
 
 func (s *Server) chat(_ http.ResponseWriter, r *http.Request) (any, error) {
