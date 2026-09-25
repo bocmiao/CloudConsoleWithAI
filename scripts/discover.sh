@@ -16,6 +16,7 @@
 #   bash discover.sh docker web php  # 只输出指定段落
 #
 # 段落：system panel ports services procs web php db docker apps cron security health
+# 额外段落（只在显式指定时输出）：logs —— 近 24 小时的系统错误和网站错误日志末尾
 #
 # 支持识别宝塔、1Panel（v1/v2）。1Panel 的安装目录从 /usr/local/bin/1pctl 读取，
 # 测试时可用环境变量 ONEPANEL_CTL 指向别的 1pctl 文件。
@@ -301,9 +302,24 @@ s_health() {
   df -i -x tmpfs -x devtmpfs -x overlay -x squashfs 2>/dev/null | awk 'NR > 1 && $5 + 0 > 50'
 }
 
+s_logs() {
+  sec logs
+  echo "-- system errors (24h) --"
+  if have journalctl; then
+    t journalctl -p err --since '24 hours ago' --no-pager 2>/dev/null | tail -n 30 | redact | cut -c1-200
+  fi
+  echo "-- web error logs (tail) --"
+  for f in /var/log/nginx/error.log /www/wwwlogs/*error*.log ${OP_DIR:+"$OP_DIR"/www/sites/*/log/error.log}; do
+    [ -f "$f" ] || continue
+    echo "# $f"
+    tail -n 15 "$f" 2>/dev/null | redact | cut -c1-200
+  done | cap 80
+}
+
 echo "# discover.sh v1 $(date -u +%Y-%m-%dT%H:%M:%SZ) host=$(hostname 2>/dev/null)"
 for s in system panel ports services procs web php db docker apps cron security health; do
   want "$s" && "s_$s"
 done
+case "$SECTIONS" in *" logs "*) s_logs ;; esac
 # 各段落内部的失败不影响整体结果；TAT 会把非 0 退出码记为执行失败
 exit 0

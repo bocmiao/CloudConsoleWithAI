@@ -1,0 +1,14 @@
+# Build output
+/dist/
+*.exe
+/miaopanel
+
+# Local data from running with --data inside the repo
+*.db
+*.db-shm
+*.db-wal
+secrets.json
+
+# Redis test dumps and other local debris
+dump.rdb
+_devharness/

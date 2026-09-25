@@ -1,6 +1,6 @@
-# CloudConsoleWithAI
+# Miao Panel（喵面板）
 
-一个**开源、通用**的 AI 服务器与云管理助手。任何 Linux 服务器都能用：装了 1Panel、宝塔，或者什么面板都没装；云产品先支持腾讯云（EdgeOne、DNSPod、轻量、CVM）。先做成 Windows 本地 exe，之后做 Web 版。
+一个**开源、通用**的 AI 服务器与云管理助手，支持 1Panel、宝塔和纯 Linux。任何 Linux 服务器都能用：装了 1Panel、宝塔，或者什么面板都没装；云产品先支持腾讯云（EdgeOne、DNSPod、轻量、CVM）。先做成 Windows 本地 exe，之后做 Web 版。
 
 - **一句话建站**：「把 blog.example.com 上线到我的服务器，走 EO，开 HTTPS」→ 自动完成 EO 站点、加速域名、DNSPod 解析、防火墙、证书和面板建站，并验证结果。
 - **访问统计**：「今天下午流量为什么涨了？」→ 基于 EO 数据分析自动归因（Top IP / URL / UA / 地区）。
@@ -10,6 +10,27 @@
 - **看不懂命令也能安全使用**：AI 只能提交计划；模板覆盖不到时可以开启受限的 AI 自由命令，由系统替你检查命令、试运行、做快照，并设置「5 分钟保险」自动恢复。
 
 完整设计见 [docs/DESIGN.md](docs/DESIGN.md)。
+
+## 怎么用（Windows）
+
+1. 在仓库的 Actions 或 Releases 页面下载 `MiaoPanel-windows-amd64.exe`；
+2. 双击运行，会自动打开浏览器（地址是 `http://127.0.0.1:18765`，只有你自己的电脑能访问）；
+3. 按页面上的三步走：**设置 AI 模型**（推荐 DeepSeek V4.1 Flash，在 DeepSeek 开放平台创建 API Key）→ **添加服务器**（IP、用户名、密码）→ **识别环境**；
+4. 到「AI 助手」里用大白话提问，比如「服务器内存是不是太高了？」。
+
+当前版本只**查看**服务器，不会做任何修改；AI 的修改建议会保存在「建议」页。密码和 API Key 保存在 Windows 凭据管理器里。关闭命令行窗口即退出。
+
+## 从源码构建
+
+需要 Go（版本见 `go.mod`），不需要 Node.js（界面用的是 Vue 3 浏览器版，已经放在仓库里）：
+
+```bash
+go test ./...                                                   # 运行测试
+go build -o miaopanel ./cmd/miaopanel                           # 当前系统
+GOOS=windows GOARCH=amd64 go build -o MiaoPanel.exe ./cmd/miaopanel  # Windows exe
+```
+
+运行参数：`--port`（默认 18765，被占用时自动换一个）、`--data`（数据目录，默认是用户配置目录下的 `MiaoPanel`）、`--no-browser`。
 
 ## 服务器环境识别脚本
 
@@ -21,3 +42,7 @@ sudo bash scripts/discover.sh docker web    # 只看指定段落
 ```
 
 也可以把脚本内容粘贴到腾讯云控制台「自动化助手 → 执行命令」里，以 Shell 类型执行。
+
+## 开源协议
+
+[GPL-3.0](LICENSE)

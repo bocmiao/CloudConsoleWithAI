@@ -1,0 +1,76 @@
+# discover.sh v1 2026-09-25T06:42:27Z host=blog-gz
+
+== system ==
+os: Ubuntu 24.04.1 LTS
+kernel: 6.8.0-45-generic x86_64
+cpu_cores: 2
+loadavg: 0.52 0.61 0.58
+uptime: up 12 days, 3 hours
+run_as: root
+               total        used        free      shared  buff/cache   available
+Mem:            1967        1712          95          14         308         150
+Swap:              0           0           0
+swap_devices: none
+-- disk --
+Filesystem     Type  Size  Used Avail Use% Mounted on
+/dev/vda2      ext4   40G   35G  3.1G  92% /
+/dev/vdb1      ext4   98G   20G   73G  22% /data
+
+== panel ==
+bt_panel: no
+1panel: yes data_dir=/opt/1panel
+1panel_ORIGINAL_VERSION: v2.0.10
+1panel_ORIGINAL_PORT: 23456
+1panel_service: 1panel-core active
+1panel_service: 1panel-agent active
+1panel_apps: mysql/mysql openresty/openresty redis/redis
+1panel_websites: blog.example.com
+1panel_php_runtimes: php82
+
+== services ==
+running: cron docker 1panel-core 1panel-agent sshd
+failed: fail2ban
+
+== web ==
+-- nginx sites (file:directive) --
+/opt/1panel/www/conf.d/blog.example.com.conf: listen 80
+/opt/1panel/www/conf.d/blog.example.com.conf: server_name blog.example.com www.blog.example.com
+/opt/1panel/www/conf.d/blog.example.com.conf: root /www/sites/blog.example.com/index
+/opt/1panel/www/conf.d/default.conf: server_name _
+
+== db ==
+-- db processes --
+pid=2211 rss_mb=690   mysqld
+pid=2305 rss_mb=12   redis-server *:6379
+-- mysql config --
+/opt/1panel/apps/mysql/mysql/conf/my.cnf: innodb_buffer_pool_size=1G max_connections=500 
+
+== docker ==
+docker: 27.3.1
+-- containers (name|image|status|ports) --
+1Panel-mysql-AbCd|mysql:8.4|Up 12 days|3306/tcp
+1Panel-openresty-EfGh|1panel/openresty:1.27|Up 12 days|
+1Panel-redis-IjKl|redis:7.4|Up 12 days|6379/tcp
+-- stats --
+
+== apps ==
+-- wordpress --
+wordpress: dir=/opt/1panel/www/sites/blog.example.com/index version=6.7.1 define('WP_MEMORY_LIMIT','256M') 
+-- java --
+-- node / python --
+
+== security ==
+sshd_port: 22 
+sshd_password_auth: yes
+sshd_root_login: yes
+tat_agent: running
+barad_agent: running
+YDService: not-found
+
+== health ==
+-- oom (7d) --
+Sep 21 03:12:44 blog-gz kernel: Out of memory: Killed process 2211 (mysqld) total-vm:1834000kB
+Sep 23 14:02:10 blog-gz kernel: Out of memory: Killed process 2213 (mysqld) total-vm:1834000kB
+-- big dirs --
+1.2G	/var/log
+-- inodes > 50% --

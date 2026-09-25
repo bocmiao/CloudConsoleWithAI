@@ -1,0 +1,253 @@
+// Package api serves the local web UI and its JSON API.
+//
+// The server only listens on the loopback interface. Every API request must
+// carry the session cookie issued by /auth (the launcher opens that URL with
+// a one-time token) plus an X-Miao header, and a Host header naming the
+// loopback address, so other local programs, web pages and DNS-rebinding
+// tricks cannot drive it.
+package api
+
+import (
+	"context"
+	"crypto/subtle"
+	"encoding/json"
+	"errors"
+	"io/fs"
+	"net"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/bocmiao/CloudConsoleWithAI/internal/ai"
+	"github.com/bocmiao/CloudConsoleWithAI/internal/app"
+	"github.com/bocmiao/CloudConsoleWithAI/internal/webui"
+)
+
+const cookieName = "miao_session"
+
+// Server is the HTTP handler.
+type Server struct {
+	app     *app.App
+	token   string
+	port    int
+	version string
+	mux     *http.ServeMux
+}
+
+// New builds the handler. port is the port the listener is bound to.
+func New(a *app.App, token string, port int, version string) *Server {
+	s := &Server{app: a, token: token, port: port, version: version, mux: http.NewServeMux()}
+	static, _ := fs.Sub(webui.Static, "static")
+	s.mux.Handle("GET /", http.FileServerFS(static))
+	s.mux.HandleFunc("GET /auth", s.handleAuth)
+
+	api := func(pattern string, h func(w http.ResponseWriter, r *http.Request) (any, error)) {
+		s.mux.HandleFunc(pattern, s.guard(h))
+	}
+	api("GET /api/info", s.info)
+	api("GET /api/servers", s.listServers)
+	api("POST /api/servers", s.addServer)
+	api("DELETE /api/servers/{id}", s.deleteServer)
+	api("POST /api/servers/{id}/test", s.testServer)
+	api("POST /api/servers/{id}/discover", s.discoverServer)
+	api("GET /api/servers/{id}/profile", s.serverProfile)
+	api("GET /api/ai/presets", s.presets)
+	api("GET /api/settings/ai", s.getAISettings)
+	api("PUT /api/settings/ai", s.putAISettings)
+	api("POST /api/settings/ai/test", s.testAI)
+	api("POST /api/chat", s.chat)
+	api("GET /api/plans", s.plans)
+	api("GET /api/audit", s.audit)
+	api("GET /api/usage", s.usage)
+	return s
+}
+
+func (s *Server) hostAllowed(host string) bool {
+	h, p, err := net.SplitHostPort(host)
+	if err != nil || p != strconv.Itoa(s.port) {
+		return false
+	}
+	return h == "127.0.0.1" || h == "localhost" || h == "::1"
+}
+
+// ServeHTTP rejects requests whose Host is not our loopback address.
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !s.hostAllowed(r.Host) {
+		http.Error(w, "forbidden host", http.StatusForbidden)
+		return
+	}
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Content-Security-Policy",
+		"default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'")
+	s.mux.ServeHTTP(w, r)
+}
+
+func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
+	if subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("token")), []byte(s.token)) != 1 {
+		http.Error(w, "链接已失效，请从 Miao Panel 窗口里重新打开。", http.StatusForbidden)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: cookieName, Value: s.token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode,
+	})
+	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+type apiError struct {
+	Error string `json:"error"`
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func (s *Server) guard(h func(w http.ResponseWriter, r *http.Request) (any, error)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		c, err := r.Cookie(cookieName)
+		if err != nil || subtle.ConstantTimeCompare([]byte(c.Value), []byte(s.token)) != 1 || r.Header.Get("X-Miao") != "1" {
+			writeJSON(w, http.StatusUnauthorized, apiError{"登录已失效，请从 Miao Panel 窗口里重新打开页面。"})
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+		v, err := h(w, r)
+		if err != nil {
+			var ue *app.UserError
+			switch {
+			case errors.As(err, &ue):
+				writeJSON(w, http.StatusBadRequest, apiError{ue.Msg})
+			case errors.Is(err, context.DeadlineExceeded):
+				writeJSON(w, http.StatusGatewayTimeout, apiError{"操作超时了，请稍后再试。"})
+			default:
+				writeJSON(w, http.StatusInternalServerError, apiError{"出错了：" + err.Error()})
+			}
+			return
+		}
+		writeJSON(w, http.StatusOK, v)
+	}
+}
+
+func decode(r *http.Request, v any) error {
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		return &app.UserError{Msg: "请求格式不对"}
+	}
+	return nil
+}
+
+func pathID(r *http.Request) (int64, error) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		return 0, &app.UserError{Msg: "服务器编号不对"}
+	}
+	return id, nil
+}
+
+func (s *Server) info(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return map[string]any{"version": s.version, "secretsKind": s.app.Secrets.Kind()}, nil
+}
+
+func (s *Server) listServers(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return s.app.Store.ListServers()
+}
+
+func (s *Server) addServer(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req app.AddServerRequest
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.AddServer(req)
+}
+
+func (s *Server) deleteServer(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]bool{"ok": true}, s.app.DeleteServer(id)
+}
+
+func (s *Server) testServer(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	return s.app.TestConnection(r.Context(), id)
+}
+
+func (s *Server) discoverServer(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	if _, _, err := s.app.Discover(r.Context(), id, nil); err != nil {
+		return nil, err
+	}
+	return s.app.Profile(id)
+}
+
+func (s *Server) serverProfile(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	return s.app.Profile(id)
+}
+
+func (s *Server) presets(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return ai.Presets, nil
+}
+
+func (s *Server) getAISettings(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return s.app.AISettings()
+}
+
+func (s *Server) putAISettings(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req struct {
+		app.AISettings
+		APIKey string `json:"apiKey"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.SaveAISettings(req.AISettings, req.APIKey)
+}
+
+func (s *Server) testAI(_ http.ResponseWriter, r *http.Request) (any, error) {
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+	text, err := s.app.TestAI(ctx)
+	return map[string]string{"reply": text}, err
+}
+
+func (s *Server) chat(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req struct {
+		ConversationID string `json:"conversationId"`
+		Message        string `json:"message"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+	defer cancel()
+	return s.app.Chat(ctx, req.ConversationID, req.Message)
+}
+
+func (s *Server) plans(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return s.app.Store.ListPlans(100)
+}
+
+func (s *Server) audit(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return s.app.Store.ListAudit(200)
+}
+
+func (s *Server) usage(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return s.app.Store.MonthCost()
+}
+
+// LaunchURL is the address that logs the browser in for this run.
+func LaunchURL(port int, token string) string {
+	return "http://127.0.0.1:" + strconv.Itoa(port) + "/auth?token=" + strings.TrimSpace(token)
+}
