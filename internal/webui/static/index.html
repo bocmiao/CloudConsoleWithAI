@@ -194,8 +194,21 @@
       <header class="toolbar">
         <h1>AI 助手</h1>
         <div class="spacer"></div>
+        <button class="plain narrow-only" @click="showConvs = !showConvs"><ui-icon name="bubble"></ui-icon>对话记录</button>
         <button class="plain" @click="newChat" :disabled="chatBusy || !messages.length"><ui-icon name="plus"></ui-icon>新对话</button>
       </header>
+      <div class="chat-layout">
+      <aside class="conv-list" :class="{open: showConvs}" aria-label="对话记录">
+        <div class="side-label">对话记录</div>
+        <div class="conv-item" v-for="c in convs" :key="c.id" :class="{active: c.id === conversationId}" @click="openConv(c.id)">
+          <div class="grow">
+            <div class="conv-title">{{ c.title || '新对话' }}</div>
+            <div class="small tertiary">{{ relTime(c.updatedAt) }}</div>
+          </div>
+          <button class="plain icon-only del" title="删除这个对话" aria-label="删除这个对话" @click.stop="deleteConv(c)"><ui-icon name="trash"></ui-icon></button>
+        </div>
+        <div class="side-empty" v-if="!convs.length">还没有对话记录。问过的问题会自动保存在这里，关掉程序也不会丢。</div>
+      </aside>
       <div class="chat">
         <div class="messages" ref="msgBox">
           <div class="messages-inner">
@@ -209,7 +222,7 @@
                 <button v-for="q in suggestions" :key="q" @click="draft = q">{{ q }}</button>
               </div>
             </div>
-            <div v-for="(m, i) in messages" :key="i" class="msg" :class="m.role">
+            <div v-for="(m, i) in messages" :key="m.id ? 'm' + m.id : 'i' + i" class="msg" :class="m.role">
               <div class="bubble" v-if="m.role === 'user'">{{ m.text }}</div>
               <div class="bubble" v-else-if="m.role === 'error'">{{ m.text }}</div>
               <div class="answer" v-else>
@@ -225,7 +238,7 @@
                 </details>
                 <div v-html="md(m.text)"></div>
                 <plan-card v-for="pl in m.plans" :key="pl.id" :plan="pl" :server-name="serverName(pl.serverId)"></plan-card>
-                <div class="msg-meta">本次约 {{ money(m.cost, m.currency) }} · 输入 {{ m.usage.input }} tokens（缓存 {{ m.usage.cachedInput }}）· 输出 {{ m.usage.output }}</div>
+                <div class="msg-meta" v-if="m.usage">本次约 {{ money(m.cost, m.currency) }} · 输入 {{ m.usage.input }} tokens（缓存 {{ m.usage.cachedInput }}）· 输出 {{ m.usage.output }}</div>
               </div>
             </div>
             <div class="msg" v-if="chatBusy"><div class="typing"><span class="spinner"></span>正在查看服务器数据……</div></div>
@@ -238,6 +251,7 @@
           </div>
           <div class="composer-hint"><span>Enter 发送，Shift + Enter 换行</span><span>任何修改都要你确认后才会执行</span></div>
         </div>
+      </div>
       </div>
     </template>
 

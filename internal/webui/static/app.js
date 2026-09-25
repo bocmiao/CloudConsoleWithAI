@@ -365,6 +365,8 @@ const app = createApp({
     const addForm = reactive({});
     const messages = ref([]);
     const conversationId = ref('');
+    const convs = ref([]);
+    const showConvs = ref(false);
     const draft = ref('');
     const chatBusy = ref(false);
     const msgBox = ref(null);
@@ -466,6 +468,31 @@ const app = createApp({
       tab.value = 'chat';
     }
 
+    async function loadConvs() {
+      try { convs.value = await api('GET', '/api/conversations'); } catch (e) { notify(e.message, 'error'); }
+    }
+    function viewMessage(m) {
+      if (m.role !== 'assistant') return { id: m.id, role: m.role, text: m.text };
+      return { id: m.id, role: 'assistant', text: m.text, steps: m.steps || [], usage: m.usage, cost: m.cost, currency: m.currency, plans: m.plans || [] };
+    }
+    async function openConv(id) {
+      if (chatBusy.value) return;
+      try {
+        const c = await api('GET', `/api/conversations/${encodeURIComponent(id)}`);
+        messages.value = c.messages.map(viewMessage);
+        conversationId.value = c.id;
+        showConvs.value = false;
+        scrollChat();
+      } catch (e) { notify(e.message, 'error'); }
+    }
+    async function deleteConv(c) {
+      if (!confirm(`确定要删除对话「${c.title || '新对话'}」吗？\n里面生成过的清单仍然保留在「建议」里。`)) return;
+      try {
+        await api('DELETE', `/api/conversations/${encodeURIComponent(c.id)}`);
+        if (c.id === conversationId.value) newChat();
+        await loadConvs();
+      } catch (e) { notify(e.message, 'error'); }
+    }
     async function send() {
       const text = draft.value.trim();
       if (!text || chatBusy.value) return;
@@ -476,8 +503,10 @@ const app = createApp({
       try {
         const r = await api('POST', '/api/chat', { conversationId: conversationId.value, message: text });
         conversationId.value = r.conversationId;
-        messages.value.push({ role: 'assistant', text: r.reply.text, steps: r.reply.steps || [], usage: r.reply.usage, cost: r.cost, currency: r.currency, plans: r.plans || [] });
+        if (r.error) messages.value.push({ role: 'error', text: r.error });
+        else messages.value.push({ role: 'assistant', text: r.reply.text, steps: r.reply.steps || [], usage: r.reply.usage, cost: r.cost, currency: r.currency, plans: r.plans || [] });
         loadSpend().catch(() => {});
+        loadConvs();
       } catch (e) {
         messages.value.push({ role: 'error', text: e.message });
       } finally {
@@ -491,7 +520,17 @@ const app = createApp({
       e.preventDefault();
       send();
     }
-    function newChat() { messages.value = []; conversationId.value = ''; }
+    function newChat() { messages.value = []; conversationId.value = ''; showConvs.value = false; }
+    // Today: 14:05; yesterday: 昨天 14:05; earlier: 9月24日.
+    function relTime(t) {
+      if (!t) return '';
+      const d = new Date(t), now = new Date();
+      const hm = d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+      if (d.toDateString() === now.toDateString()) return hm;
+      const y = new Date(now); y.setDate(now.getDate() - 1);
+      if (d.toDateString() === y.toDateString()) return '昨天 ' + hm;
+      return d.getFullYear() === now.getFullYear() ? `${d.getMonth() + 1}月${d.getDate()}日` : `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
+    }
     function scrollChat() { nextTick(() => { if (msgBox.value) msgBox.value.scrollTop = msgBox.value.scrollHeight; }); }
 
     function applyPreset() {
@@ -572,7 +611,8 @@ const app = createApp({
       try {
         info.value = await api('GET', '/api/info');
         presets.value = await api('GET', '/api/ai/presets');
-        await Promise.all([loadServers(), loadAI(), loadSpend()]);
+        await Promise.all([loadServers(), loadAI(), loadSpend(), loadConvs()]);
+        if (convs.value.length) await openConv(convs.value[0].id);
         if (servers.value.length) await select(servers.value[0].id);
       } catch (e) { notify(e.message, 'error'); }
     });
@@ -581,6 +621,7 @@ const app = createApp({
       tab, go, servers, selectedId, current, p, busy, busyText, toast, info, ai, presets, aiForm, presetNote,
       spendText, plans, audit, logView, logFocus, loadAudit, openLog, showAdd, addForm, messages, draft, chatBusy, msgBox, suggestions,
       select, openAdd, addServer, testConn, discover, removeServer, askAbout, send, onEnter, newChat, applyPreset, saveAI, testAI,
+      convs, showConvs, conversationId, openConv, deleteConv, relTime,
       op, saveOnePanel, testOnePanel,
       memPct, rootDisk, envSub, dockerText, money, mb, meterClass, levelClass, levelIcon, levelName, riskName, adapterName,
       fmtTime, serverName, parseSteps, toolName, actorName, actionName, md,

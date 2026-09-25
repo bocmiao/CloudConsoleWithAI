@@ -27,6 +27,10 @@ func (s *openAISession) AddUser(text string) {
 	s.msgs = append(s.msgs, map[string]any{"role": "user", "content": text})
 }
 
+func (s *openAISession) AddAssistant(text string) {
+	s.msgs = append(s.msgs, map[string]any{"role": "assistant", "content": text})
+}
+
 func (s *openAISession) AddToolResults(results []ToolResult) {
 	for _, r := range results {
 		content := r.Content

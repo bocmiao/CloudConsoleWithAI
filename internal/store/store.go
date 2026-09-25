@@ -95,6 +95,21 @@ CREATE TABLE IF NOT EXISTS exec_logs (
 	undo_of       INTEGER NOT NULL DEFAULT 0,-- for a rollback: the entry it reverted
 	undone_by     INTEGER NOT NULL DEFAULT 0 -- for a change: the rollback that reverted it
 );
+CREATE TABLE IF NOT EXISTS conversations (
+	id         TEXT PRIMARY KEY,
+	title      TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS chat_messages (
+	id      INTEGER PRIMARY KEY AUTOINCREMENT,
+	conv_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+	at      TEXT NOT NULL,
+	role    TEXT NOT NULL,                 -- user | assistant | error
+	text    TEXT NOT NULL,
+	extra   TEXT NOT NULL DEFAULT ''       -- JSON: what the AI looked at, cost, checklists
+);
+CREATE INDEX IF NOT EXISTS chat_messages_conv ON chat_messages(conv_id, id);
 CREATE TABLE IF NOT EXISTS settings (
 	key   TEXT PRIMARY KEY,
 	value TEXT NOT NULL
@@ -519,6 +534,106 @@ func (s *Store) ListExec(changesOnly bool, limit int) ([]ExecLog, error) {
 func (s *Store) MarkInterrupted() error {
 	_, err := s.db.Exec(`UPDATE exec_logs SET status = ?, finished_at = ? WHERE status = ?`, ExecInterrupted, now(), ExecRunning)
 	return err
+}
+
+// Conversation is a saved chat with the AI.
+type Conversation struct {
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	CreatedAt string `json:"createdAt"`
+	UpdatedAt string `json:"updatedAt"`
+}
+
+// ChatMessage is one message in a conversation.
+type ChatMessage struct {
+	ID    int64  `json:"id"`
+	At    string `json:"at"`
+	Role  string `json:"role"`
+	Text  string `json:"text"`
+	Extra string `json:"-"`
+}
+
+// AddConversation starts a saved conversation.
+func (s *Store) AddConversation(id, title string) (Conversation, error) {
+	c := Conversation{ID: id, Title: title, CreatedAt: now()}
+	c.UpdatedAt = c.CreatedAt
+	_, err := s.db.Exec(`INSERT INTO conversations (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)`,
+		c.ID, c.Title, c.CreatedAt, c.UpdatedAt)
+	return c, err
+}
+
+// GetConversation returns one conversation.
+func (s *Store) GetConversation(id string) (Conversation, error) {
+	var c Conversation
+	err := s.db.QueryRow(`SELECT id, title, created_at, updated_at FROM conversations WHERE id = ?`, id).
+		Scan(&c.ID, &c.Title, &c.CreatedAt, &c.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return c, ErrNotFound
+	}
+	return c, err
+}
+
+// ListConversations returns conversations, most recently used first.
+func (s *Store) ListConversations(limit int) ([]Conversation, error) {
+	rows, err := s.db.Query(`SELECT id, title, created_at, updated_at FROM conversations ORDER BY updated_at DESC, rowid DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Conversation{}
+	for rows.Next() {
+		var c Conversation
+		if err := rows.Scan(&c.ID, &c.Title, &c.CreatedAt, &c.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// DeleteConversation removes a conversation and its messages.
+func (s *Store) DeleteConversation(id string) error {
+	_, err := s.db.Exec(`DELETE FROM conversations WHERE id = ?`, id)
+	return err
+}
+
+// AddChatMessage appends a message and marks the conversation as used.
+func (s *Store) AddChatMessage(convID, role, text, extra string) (ChatMessage, error) {
+	m := ChatMessage{At: now(), Role: role, Text: text, Extra: extra}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return m, err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`INSERT INTO chat_messages (conv_id, at, role, text, extra) VALUES (?, ?, ?, ?, ?)`, convID, m.At, role, text, extra)
+	if err != nil {
+		return m, err
+	}
+	if m.ID, err = res.LastInsertId(); err != nil {
+		return m, err
+	}
+	if _, err := tx.Exec(`UPDATE conversations SET updated_at = ? WHERE id = ?`, m.At, convID); err != nil {
+		return m, err
+	}
+	return m, tx.Commit()
+}
+
+// ChatMessages returns a conversation's messages in order.
+func (s *Store) ChatMessages(convID string) ([]ChatMessage, error) {
+	rows, err := s.db.Query(`SELECT id, at, role, text, extra FROM chat_messages WHERE conv_id = ? ORDER BY id`, convID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ChatMessage{}
+	for rows.Next() {
+		var m ChatMessage
+		if err := rows.Scan(&m.ID, &m.At, &m.Role, &m.Text, &m.Extra); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }
 
 // Usage is the token count and cost of one model call.

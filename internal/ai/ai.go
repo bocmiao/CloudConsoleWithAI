@@ -58,6 +58,9 @@ type Turn struct {
 // format so nothing is lost converting back and forth.
 type Session interface {
 	AddUser(text string)
+	// AddAssistant records an earlier answer, to continue a saved
+	// conversation in a new session.
+	AddAssistant(text string)
 	AddToolResults(results []ToolResult)
 	// Next sends everything added since the last call and returns the
 	// model's turn, which is appended to the history.

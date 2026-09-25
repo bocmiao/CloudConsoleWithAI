@@ -167,3 +167,36 @@ func TestAgentStopsAtMaxRounds(t *testing.T) {
 		t.Fatalf("requests=%d reply=%q", len(api.requests), reply.Text)
 	}
 }
+
+func TestClaudeRestoredHistory(t *testing.T) {
+	api := &fakeAPI{responses: []string{
+		`{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-5",
+		  "content":[{"type":"text","text":"好的。"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":2}}`,
+	}}
+	srv := httptest.NewServer(api)
+	defer srv.Close()
+	sess, err := NewSession(Config{Kind: KindAnthropic, BaseURL: srv.URL, Model: "claude-sonnet-5", APIKey: "k", System: "sys"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A saved conversation: a question whose answer failed, then one that
+	// was answered, then an empty answer that must be skipped.
+	sess.AddUser("第一个问题")
+	sess.AddUser("第二个问题")
+	sess.AddAssistant("第二个回答")
+	sess.AddAssistant("")
+	if _, err := (&Agent{Session: sess}).Ask(context.Background(), "第三个问题"); err != nil {
+		t.Fatal(err)
+	}
+	msgs := api.requests[0]["messages"].([]any)
+	var roles []string
+	for _, m := range msgs {
+		roles = append(roles, m.(map[string]any)["role"].(string))
+	}
+	if strings.Join(roles, ",") != "user,assistant,user" {
+		t.Fatalf("roles = %v", roles)
+	}
+	if n := len(msgs[0].(map[string]any)["content"].([]any)); n != 2 {
+		t.Fatalf("the two unanswered questions should share one turn, got %d blocks", n)
+	}
+}

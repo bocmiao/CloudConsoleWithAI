@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -454,5 +455,93 @@ func TestOldPlansAreRechecked(t *testing.T) {
 	}
 	if list, _ := a.Plans(10); !list[0].StepList[0].Executable {
 		t.Fatalf("Plans did not recheck: %+v", list[0].StepList[0])
+	}
+}
+
+// echoModel answers every question and remembers what it was sent; it
+// fails when the question contains "坏".
+type echoModel struct {
+	mu     sync.Mutex
+	bodies []string
+}
+
+func (f *echoModel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	body, _ := io.ReadAll(r.Body)
+	f.bodies = append(f.bodies, string(body))
+	if strings.Contains(string(body), "坏") {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, `{"error":{"message":"server busy"}}`)
+		return
+	}
+	_, _ = io.WriteString(w, fmt.Sprintf(`{"choices":[{"message":{"content":"第 %d 个回答"}}],"usage":{"prompt_tokens":10,"completion_tokens":5}}`, len(f.bodies)))
+}
+
+func TestChatIsSavedAndRestored(t *testing.T) {
+	a := newApp(t)
+	model := &echoModel{}
+	srv := httptest.NewServer(model)
+	defer srv.Close()
+	s, _ := a.AISettings()
+	s.BaseURL = srv.URL
+	if _, err := a.SaveAISettings(s, "sk-test"); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	r, err := a.Chat(ctx, "", "服务器内存怎么样？\n顺便看看磁盘")
+	if err != nil || r.Error != "" || r.ConversationID == "" {
+		t.Fatalf("first answer: %+v %v", r, err)
+	}
+
+	// Miao Panel restarts: a new App over the same database.
+	b := New(a.Store, a.Secrets)
+	r2, err := b.Chat(ctx, r.ConversationID, "那要不要加 swap？")
+	if err != nil || r2.ConversationID != r.ConversationID || r2.Reply.Text != "第 2 个回答" {
+		t.Fatalf("continued answer: %+v %v", r2, err)
+	}
+	last := model.bodies[1]
+	for _, want := range []string{"服务器内存怎么样", "第 1 个回答", "之前工具查到的原始数据没有保留", "那要不要加 swap"} {
+		if !strings.Contains(last, want) {
+			t.Fatalf("restored history is missing %q: %s", want, last)
+		}
+	}
+
+	// A failed answer is reported, and the question is still saved.
+	r3, err := b.Chat(ctx, r.ConversationID, "这个问题会坏掉")
+	if err != nil || !strings.Contains(r3.Error, "server busy") {
+		t.Fatalf("failed answer: %+v %v", r3, err)
+	}
+
+	list, _ := b.Conversations()
+	if len(list) != 1 || list[0].Title != "服务器内存怎么样？" {
+		t.Fatalf("conversations = %+v", list)
+	}
+	v, err := b.Conversation(r.ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var roles []string
+	for _, m := range v.Messages {
+		roles = append(roles, m.Role)
+	}
+	if strings.Join(roles, ",") != "user,assistant,user,assistant,user,error" {
+		t.Fatalf("roles = %v", roles)
+	}
+	if m := v.Messages[1]; m.Text != "第 1 个回答" || m.Usage.Input != 10 || m.Cost <= 0 || m.Currency == "" {
+		t.Fatalf("saved answer = %+v", m)
+	}
+	if v.Messages[2].Text != "那要不要加 swap？" {
+		t.Fatalf("the note for the model leaked into the saved question: %q", v.Messages[2].Text)
+	}
+
+	if err := b.DeleteConversation(r.ConversationID); err != nil {
+		t.Fatal(err)
+	}
+	if list, _ := b.Conversations(); len(list) != 0 {
+		t.Fatalf("not deleted: %+v", list)
+	}
+	if msgs, _ := b.Store.ChatMessages(r.ConversationID); len(msgs) != 0 {
+		t.Fatalf("messages left behind: %d", len(msgs))
 	}
 }

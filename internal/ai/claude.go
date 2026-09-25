@@ -58,6 +58,17 @@ func (s *claudeSession) AddUser(text string) {
 	s.pending = append(s.pending, anthropic.NewTextBlock(text))
 }
 
+func (s *claudeSession) AddAssistant(text string) {
+	if text == "" {
+		return // the API rejects empty text blocks
+	}
+	if len(s.pending) > 0 {
+		s.msgs = append(s.msgs, anthropic.NewUserMessage(s.pending...))
+		s.pending = nil
+	}
+	s.msgs = append(s.msgs, anthropic.NewAssistantMessage(anthropic.NewTextBlock(text)))
+}
+
 func (s *claudeSession) AddToolResults(results []ToolResult) {
 	for _, r := range results {
 		s.pending = append(s.pending, anthropic.NewToolResultBlock(r.CallID, r.Content, r.IsError))

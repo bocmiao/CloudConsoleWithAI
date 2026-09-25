@@ -130,6 +130,79 @@ type ChatReply struct {
 	Cost           float64    `json:"cost"`
 	Currency       string     `json:"currency"`
 	Plans          []PlanView `json:"plans"` // checklists proposed in this answer
+	// Error is set when the model could not answer; the question is saved
+	// in the conversation all the same.
+	Error string `json:"error,omitempty"`
+}
+
+// messageExtra is what a saved answer keeps besides its text.
+type messageExtra struct {
+	Steps    []ai.Step `json:"steps,omitempty"`
+	Usage    ai.Usage  `json:"usage"`
+	Cost     float64   `json:"cost"`
+	Currency string    `json:"currency"`
+	PlanIDs  []int64   `json:"planIds,omitempty"`
+}
+
+// maxRestoredMessages bounds how much of a saved conversation goes back to
+// the model when it is continued after Miao Panel restarted.
+const maxRestoredMessages = 40
+
+// restoredNote goes with the first question after a conversation is
+// restored: tool results were not saved, only the questions and answers.
+const restoredNote = "（这是接着之前保存的对话继续问的。之前工具查到的原始数据没有保留，需要数据时请重新查询。）\n"
+
+func titleOf(text string) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(text), "\n")
+	r := []rune(strings.TrimSpace(line))
+	if len(r) > 30 {
+		return string(r[:30]) + "…"
+	}
+	return string(r)
+}
+
+// conversationFor returns the conversation to answer in: the one in
+// memory, a saved one restored into a new model session, or a new one.
+func (a *App) conversationFor(cfg ai.Config, convID, firstText string) (*conversation, string, bool, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if c, ok := a.convs[convID]; ok && convID != "" {
+		return c, convID, false, nil
+	}
+	sess, err := ai.NewSession(cfg)
+	if err != nil {
+		return nil, "", false, err
+	}
+	restored := false
+	if _, err := a.Store.GetConversation(convID); convID != "" && err == nil {
+		msgs, err := a.Store.ChatMessages(convID)
+		if err != nil {
+			return nil, "", false, err
+		}
+		if len(msgs) > maxRestoredMessages {
+			msgs = msgs[len(msgs)-maxRestoredMessages:]
+		}
+		for len(msgs) > 0 && msgs[0].Role != "user" { // models want to start with a question
+			msgs = msgs[1:]
+		}
+		for _, m := range msgs {
+			switch m.Role {
+			case "user":
+				sess.AddUser(m.Text)
+				restored = true
+			case "assistant":
+				sess.AddAssistant(m.Text)
+			}
+		}
+	} else {
+		convID = newID()
+		if _, err := a.Store.AddConversation(convID, titleOf(firstText)); err != nil {
+			return nil, "", false, err
+		}
+	}
+	c := &conversation{agent: &ai.Agent{Session: sess, Tools: a.tools(), MaxRounds: 10, MaxToolOutput: 12000}}
+	a.convs[convID] = c
+	return c, convID, restored, nil
 }
 
 func newID() string {
@@ -139,7 +212,7 @@ func newID() string {
 }
 
 // Chat sends a user message in a conversation, creating it if needed.
-// Conversations live in memory for now.
+// Questions and answers are saved, so conversations survive restarts.
 func (a *App) Chat(ctx context.Context, convID, text string) (ChatReply, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -158,27 +231,20 @@ func (a *App) Chat(ctx context.Context, convID, text string) (ChatReply, error) 
 			return ChatReply{}, userErr("本月 AI 花费已达到你设置的上限（%.2f %s），可以在「设置」里调整", settings.MonthlyBudget, settings.Currency)
 		}
 	}
-
-	a.mu.Lock()
-	conv, ok := a.convs[convID]
-	if !ok {
-		sess, err := ai.NewSession(cfg)
-		if err != nil {
-			a.mu.Unlock()
-			return ChatReply{}, err
-		}
-		convID = newID()
-		conv = &conversation{agent: &ai.Agent{
-			Session: sess, Tools: a.tools(), MaxRounds: 10, MaxToolOutput: 12000,
-		}}
-		a.convs[convID] = conv
+	conv, convID, restored, err := a.conversationFor(cfg, convID, text)
+	if err != nil {
+		return ChatReply{}, err
 	}
-	a.mu.Unlock()
 
 	conv.mu.Lock()
 	defer conv.mu.Unlock()
+	_, _ = a.Store.AddChatMessage(convID, "user", text, "")
+	ask := text
+	if restored {
+		ask = restoredNote + text
+	}
 	collector := &planCollector{}
-	reply, err := conv.agent.Ask(withOrigin(context.WithValue(ctx, planCollectorKey{}, collector), OriginAI), text)
+	reply, err := conv.agent.Ask(withOrigin(context.WithValue(ctx, planCollectorKey{}, collector), OriginAI), ask)
 	cost := settings.Cost(reply.Usage)
 	if reply.Usage.Input+reply.Usage.Output > 0 {
 		_ = a.Store.AddUsage(store.Usage{
@@ -186,19 +252,87 @@ func (a *App) Chat(ctx context.Context, convID, text string) (ChatReply, error) 
 			OutputTokens: reply.Usage.Output, Cost: cost, Currency: settings.Currency,
 		})
 	}
+	out := ChatReply{ConversationID: convID, Reply: reply, Cost: cost, Currency: settings.Currency, Plans: []PlanView{}}
 	if err != nil {
 		var ue *UserError
-		if errors.As(err, &ue) || errors.Is(err, context.Canceled) {
-			return ChatReply{}, err
+		switch {
+		case errors.As(err, &ue):
+			out.Error = ue.Msg
+		case errors.Is(err, context.Canceled):
+			out.Error = "已取消"
+		default:
+			out.Error = fmt.Sprintf("AI 回答失败：%v", err)
 		}
-		return ChatReply{}, userErr("AI 回答失败：%v", err)
+		_, _ = a.Store.AddChatMessage(convID, "error", out.Error, "")
+		return out, nil
 	}
 	_ = a.Store.Audit("ai", "ai.chat", settings.Model, fmt.Sprintf("查询 %d 次", len(reply.Steps)))
-	out := ChatReply{ConversationID: convID, Reply: reply, Cost: cost, Currency: settings.Currency, Plans: []PlanView{}}
 	for _, id := range collector.ids {
 		if v, err := a.Plan(id); err == nil {
 			out.Plans = append(out.Plans, v)
 		}
 	}
+	extra, _ := json.Marshal(messageExtra{Steps: reply.Steps, Usage: reply.Usage, Cost: cost, Currency: settings.Currency, PlanIDs: collector.ids})
+	_, _ = a.Store.AddChatMessage(convID, "assistant", reply.Text, string(extra))
 	return out, nil
+}
+
+// ChatMessageView is a saved message as the chat shows it.
+type ChatMessageView struct {
+	store.ChatMessage
+	Steps    []ai.Step  `json:"steps"`
+	Usage    ai.Usage   `json:"usage"`
+	Cost     float64    `json:"cost"`
+	Currency string     `json:"currency"`
+	Plans    []PlanView `json:"plans"` // current state of the checklists it proposed
+}
+
+// ConversationView is a saved conversation with its messages.
+type ConversationView struct {
+	store.Conversation
+	Messages []ChatMessageView `json:"messages"`
+}
+
+// Conversations lists saved conversations, most recent first.
+func (a *App) Conversations() ([]store.Conversation, error) {
+	return a.Store.ListConversations(200)
+}
+
+// Conversation returns a saved conversation with its messages.
+func (a *App) Conversation(id string) (ConversationView, error) {
+	c, err := a.Store.GetConversation(id)
+	if err != nil {
+		return ConversationView{}, userErr("找不到这个对话")
+	}
+	msgs, err := a.Store.ChatMessages(id)
+	if err != nil {
+		return ConversationView{}, err
+	}
+	v := ConversationView{Conversation: c, Messages: make([]ChatMessageView, 0, len(msgs))}
+	for _, m := range msgs {
+		mv := ChatMessageView{ChatMessage: m, Steps: []ai.Step{}, Plans: []PlanView{}}
+		var extra messageExtra
+		if m.Extra != "" && json.Unmarshal([]byte(m.Extra), &extra) == nil {
+			mv.Usage, mv.Cost, mv.Currency = extra.Usage, extra.Cost, extra.Currency
+			if extra.Steps != nil {
+				mv.Steps = extra.Steps
+			}
+			for _, id := range extra.PlanIDs {
+				if p, err := a.Plan(id); err == nil {
+					mv.Plans = append(mv.Plans, p)
+				}
+			}
+		}
+		v.Messages = append(v.Messages, mv)
+	}
+	return v, nil
+}
+
+// DeleteConversation removes a saved conversation. Its checklists stay
+// in 建议.
+func (a *App) DeleteConversation(id string) error {
+	a.mu.Lock()
+	delete(a.convs, id)
+	a.mu.Unlock()
+	return a.Store.DeleteConversation(id)
 }

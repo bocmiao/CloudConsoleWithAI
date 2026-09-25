@@ -57,6 +57,9 @@ func New(a *app.App, token string, port int, version string) *Server {
 	api("PUT /api/settings/ai", s.putAISettings)
 	api("POST /api/settings/ai/test", s.testAI)
 	api("POST /api/chat", s.chat)
+	api("GET /api/conversations", s.conversations)
+	api("GET /api/conversations/{id}", s.conversation)
+	api("DELETE /api/conversations/{id}", s.deleteConversation)
 	api("GET /api/plans", s.plans)
 	api("GET /api/plans/{id}", s.plan)
 	api("POST /api/plans/{id}/execute", s.executePlan)
@@ -243,6 +246,18 @@ func (s *Server) chat(_ http.ResponseWriter, r *http.Request) (any, error) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 	defer cancel()
 	return s.app.Chat(ctx, req.ConversationID, req.Message)
+}
+
+func (s *Server) conversations(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return s.app.Conversations()
+}
+
+func (s *Server) conversation(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.Conversation(r.PathValue("id"))
+}
+
+func (s *Server) deleteConversation(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return map[string]bool{"ok": true}, s.app.DeleteConversation(r.PathValue("id"))
 }
 
 func (s *Server) plans(_ http.ResponseWriter, _ *http.Request) (any, error) {
