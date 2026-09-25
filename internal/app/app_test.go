@@ -423,3 +423,36 @@ func TestInterruptedRunsAreFlagged(t *testing.T) {
 		t.Fatalf("plan = %+v", v)
 	}
 }
+
+// A checklist saved by an older version, when a step could not run yet,
+// shows what this version can do.
+func TestOldPlansAreRechecked(t *testing.T) {
+	a := newApp(t)
+	srv := sshtest.Start(t, "root", "pw")
+	sv := addTestServer(t, a, srv, "pw")
+	steps, _ := json.Marshal([]core.Step{
+		{Capability: "swap.set", Summary: "加 swap", Params: map[string]any{"size_gb": float64(2)}, Blocked: "这类操作还不能自动执行"},
+		{Capability: "swap.set", Summary: "参数写错了", Params: map[string]any{"size": "2G"}, Blocked: "这类操作还不能自动执行"},
+		{Capability: "logs.clean", Summary: "已经执行过", Status: "done", Blocked: "旧的结果"},
+	})
+	p, err := a.Store.AddPlan(store.Plan{ServerID: sv.ID, Title: "旧清单", Steps: string(steps), Status: core.PlanProposed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := a.Plan(p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !v.StepList[0].Executable || v.StepList[0].Blocked != "" {
+		t.Fatalf("step 1 = %+v", v.StepList[0])
+	}
+	if v.StepList[1].Executable || !strings.Contains(v.StepList[1].Blocked, "重新生成") {
+		t.Fatalf("step 2 = %+v", v.StepList[1])
+	}
+	if v.StepList[2].Status != "done" || v.StepList[2].Blocked != "旧的结果" {
+		t.Fatalf("executed step was touched: %+v", v.StepList[2])
+	}
+	if list, _ := a.Plans(10); !list[0].StepList[0].Executable {
+		t.Fatalf("Plans did not recheck: %+v", list[0].StepList[0])
+	}
+}

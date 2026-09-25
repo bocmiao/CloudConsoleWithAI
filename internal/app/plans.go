@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -51,8 +52,13 @@ func prepareSteps(steps []core.Step, adapter string) []core.Step {
 		s.Risk = core.RiskOf(s.Capability)
 		s.Executable, s.Blocked, s.Status, s.Log, s.Undo, s.LogID = false, "", "", nil, nil, 0
 		r, err := actions.Resolve(s.Capability, s.Params, adapter)
-		if err != nil {
+		var ne *actions.ErrNotExecutable
+		switch {
+		case errors.As(err, &ne):
 			s.Blocked = err.Error()
+			continue
+		case err != nil:
+			s.Blocked = "参数不对（" + err.Error() + "），请让 AI 重新生成这份清单"
 			continue
 		}
 		s.Executable = true
@@ -118,13 +124,34 @@ func viewOf(p store.Plan) PlanView {
 	return v
 }
 
+// recheck re-evaluates the steps that have not run yet against this
+// version of Miao Panel and the server's current environment, so a
+// checklist made before an upgrade shows what can run now.
+func (a *App) recheck(v *PlanView, adapters map[int64]string) {
+	adapter, ok := adapters[v.ServerID]
+	if !ok {
+		sv, err := a.Store.GetServer(v.ServerID)
+		if err != nil {
+			return
+		}
+		adapter, adapters[v.ServerID] = sv.Adapter, sv.Adapter
+	}
+	for i, st := range v.StepList {
+		if st.Status == "" {
+			v.StepList[i] = prepareSteps([]core.Step{st}, adapter)[0]
+		}
+	}
+}
+
 // Plan returns one plan with decoded steps.
 func (a *App) Plan(id int64) (PlanView, error) {
 	p, err := a.Store.GetPlan(id)
 	if err != nil {
 		return PlanView{}, userErr("找不到这个清单（编号 %d）", id)
 	}
-	return viewOf(p), nil
+	v := viewOf(p)
+	a.recheck(&v, map[int64]string{})
+	return v, nil
 }
 
 // Plans lists recent plans with decoded steps.
@@ -133,9 +160,12 @@ func (a *App) Plans(limit int) ([]PlanView, error) {
 	if err != nil {
 		return nil, err
 	}
+	adapters := map[int64]string{}
 	out := make([]PlanView, 0, len(list))
 	for _, p := range list {
-		out = append(out, viewOf(p))
+		v := viewOf(p)
+		a.recheck(&v, adapters)
+		out = append(out, v)
 	}
 	return out, nil
 }
