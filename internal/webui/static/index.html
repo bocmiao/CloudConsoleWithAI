@@ -3,269 +3,344 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Miao Panel 喵面板</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🐱%3C/text%3E%3C/svg%3E">
+<title>Miao Panel</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23007aff'/%3E%3Cpath d='M16 7l9 5-9 5-9-5zM7 17l9 5 9-5' fill='none' stroke='white' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
 <script src="vue.global.prod.js"></script>
 <script src="app.js" defer></script>
 </head>
 <body>
-<div id="app" v-cloak>
-  <header class="topbar">
-    <div class="brand">🐱 <b>Miao Panel</b> <span class="muted">喵面板</span></div>
-    <nav>
-      <a v-for="t in tabs" :key="t.id" :class="{active: tab === t.id}" @click="go(t.id)">{{ t.name }}</a>
-    </nav>
-    <div class="spend" title="本月 AI 花费（估算）">本月 AI：{{ spendText }}</div>
-  </header>
+<div id="app" class="app" v-cloak>
 
-  <div class="toast" v-if="toast.text" :class="toast.kind">{{ toast.text }}</div>
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="app-title"><span class="app-mark"><ui-icon name="layers"></ui-icon></span>Miao Panel</div>
 
-  <!-- 服务器 -->
-  <main v-if="tab === 'servers'" class="layout">
-    <aside class="sidebar">
-      <button class="primary block" @click="openAdd">＋ 添加服务器</button>
-      <div class="server-item" v-for="s in servers" :key="s.id" :class="{active: s.id === selectedId}" @click="select(s.id)">
-        <div class="name">{{ s.name }}</div>
-        <div class="muted small">{{ s.host }} · {{ adapterName(s.adapter) }}</div>
+    <div class="side-section">
+      <div class="side-item" :class="{active: tab === 'chat'}" @click="go('chat')"><ui-icon name="sparkles"></ui-icon>AI 助手</div>
+      <div class="side-item" :class="{active: tab === 'plans'}" @click="go('plans')"><ui-icon name="bulb"></ui-icon>建议</div>
+      <div class="side-item" :class="{active: tab === 'audit'}" @click="go('audit')"><ui-icon name="clock"></ui-icon>操作记录</div>
+    </div>
+
+    <div class="side-section">
+      <div class="side-label">服务器
+        <button class="plain icon-only" title="添加服务器" aria-label="添加服务器" @click="openAdd"><ui-icon name="plus"></ui-icon></button>
       </div>
-      <p class="muted small" v-if="!servers.length">还没有服务器</p>
-    </aside>
-
-    <section class="content">
-      <div class="card welcome" v-if="!servers.length">
-        <h2>欢迎使用 Miao Panel 👋</h2>
-        <p>用大白话管理你的服务器：看状态、找问题、问 AI。三步开始：</p>
-        <ol class="steps">
-          <li :class="{done: ai.hasKey}"><b>设置 AI 模型</b>：推荐 DeepSeek V4.1 Flash，便宜好用。<button class="link" @click="go('settings')">去设置</button></li>
-          <li><b>添加服务器</b>：填 IP、用户名和密码就行。<button class="link" @click="openAdd">去添加</button></li>
-          <li><b>识别环境</b>：自动看出服务器上装了什么（1Panel、宝塔、网站、数据库……），只读，不会改动任何东西。</li>
-        </ol>
+      <div class="side-item" v-for="s in servers" :key="s.id" :class="{active: tab === 'servers' && s.id === selectedId}" @click="select(s.id)">
+        <ui-icon name="server"></ui-icon>
+        <div class="meta"><span>{{ s.name }}</span><span class="small tertiary">{{ adapterName(s.adapter) }} · {{ s.host }}</span></div>
       </div>
+      <div class="side-empty" v-if="!servers.length">还没有服务器</div>
+    </div>
 
-      <template v-if="current">
-        <div class="head-row">
-          <div>
+    <div class="sidebar-foot">
+      <div class="side-item" :class="{active: tab === 'settings'}" @click="go('settings')"><ui-icon name="sliders"></ui-icon>设置</div>
+      <div class="spend" title="本月 AI 花费（估算）">本月 AI 花费 {{ spendText }}</div>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <div class="main">
+
+    <!-- Server -->
+    <template v-if="tab === 'servers'">
+      <header class="toolbar">
+        <h1>{{ current ? '服务器概览' : '开始使用' }}</h1>
+        <div class="spacer"></div>
+        <div class="actions" v-if="current">
+          <button @click="testConn" :disabled="busy"><ui-icon name="plug"></ui-icon>测试连接</button>
+          <button @click="askAbout" :disabled="!current.profile"><ui-icon name="bubble"></ui-icon>问 AI</button>
+          <button class="primary" @click="discover" :disabled="busy"><ui-icon name="refresh"></ui-icon>{{ current.profile ? '重新识别' : '识别环境' }}</button>
+          <button class="plain destructive icon-only" title="删除服务器" aria-label="删除服务器" @click="removeServer" :disabled="busy"><ui-icon name="trash"></ui-icon></button>
+        </div>
+      </header>
+
+      <div class="page">
+        <!-- Welcome -->
+        <div class="welcome" v-if="!servers.length">
+          <div class="app-mark"><ui-icon name="layers"></ui-icon></div>
+          <h2>用大白话管理你的服务器</h2>
+          <p>看状态、找问题、问 AI。三步开始：</p>
+          <div class="group">
+            <div class="row">
+              <span class="step-num" :class="{done: ai.hasKey}">1</span>
+              <div class="grow"><b>设置 AI 模型</b><div class="small secondary">推荐 DeepSeek V4.1 Flash，便宜好用</div></div>
+              <button @click="go('settings')">去设置</button>
+            </div>
+            <div class="row">
+              <span class="step-num">2</span>
+              <div class="grow"><b>添加服务器</b><div class="small secondary">填 IP、用户名和密码</div></div>
+              <button class="primary" @click="openAdd">添加服务器</button>
+            </div>
+            <div class="row">
+              <span class="step-num">3</span>
+              <div class="grow"><b>识别环境</b><div class="small secondary">自动看出装了什么：1Panel、宝塔、网站、数据库……只读，不会改动任何东西</div></div>
+            </div>
+          </div>
+        </div>
+
+        <template v-if="current">
+          <div class="page-head">
             <h2>{{ current.server.name }}</h2>
-            <div class="muted small">{{ current.server.username }}@{{ current.server.host }}:{{ current.server.port }}
-              <span v-if="current.server.hostKey"> · 指纹 {{ current.server.hostKey }}</span></div>
+            <p>{{ current.server.username }}@{{ current.server.host }}:{{ current.server.port }}
+              <span v-if="current.collectedAt"> · 识别于 {{ fmtTime(current.collectedAt) }}</span></p>
           </div>
-          <div class="actions">
-            <button @click="testConn" :disabled="busy">测试连接</button>
-            <button class="primary" @click="discover" :disabled="busy">{{ current.profile ? '重新识别' : '识别环境' }}</button>
-            <button @click="askAbout" :disabled="!current.profile">问 AI</button>
-            <button class="danger" @click="removeServer" :disabled="busy">删除</button>
-          </div>
-        </div>
-        <div class="card info" v-if="busy">⏳ {{ busyText }}</div>
 
-        <div class="card" v-if="!current.profile && !busy">
-          <p>这台服务器还没识别过。点「识别环境」，Miao Panel 会登录服务器执行一个<b>只读</b>检查脚本（大约十几秒），看看上面装了什么、运行得怎么样。</p>
-        </div>
+          <div class="notice" v-if="busy"><span class="spinner"></span>{{ busyText }}</div>
 
-        <template v-if="p">
-          <div class="card findings">
-            <h3>发现的问题</h3>
-            <div v-if="!p.findings || !p.findings.length" class="ok">✅ 没有发现明显问题</div>
-            <div v-for="(f, i) in p.findings" :key="i" class="finding" :class="f.level">
-              <span class="badge" :class="f.level">{{ levelName(f.level) }}</span>
-              <b>{{ f.title }}</b> <span class="muted">{{ f.detail }}</span>
+          <div class="group" v-if="!current.profile && !busy">
+            <div class="row">
+              <ui-icon name="info" class="lg" style="color: var(--accent)"></ui-icon>
+              <div class="grow">这台服务器还没识别过。点击「识别环境」，会登录服务器运行一个<b>只读</b>检查脚本（大约十几秒），看看上面装了什么、运行得怎么样。</div>
             </div>
           </div>
 
-          <div class="grid">
-            <div class="card">
-              <h3>系统</h3>
-              <dl>
-                <dt>系统</dt><dd>{{ p.os || '未知' }}</dd>
-                <dt>内核</dt><dd>{{ p.kernel }}</dd>
-                <dt>CPU</dt><dd>{{ p.cpuCores }} 核，负载 {{ p.load }}</dd>
-                <dt>环境</dt><dd><span class="badge info">{{ adapterName(p.adapter) }}</span></dd>
-                <dt>识别时间</dt><dd>{{ fmtTime(current.collectedAt) }}</dd>
-              </dl>
-            </div>
-
-            <div class="card">
-              <h3>内存</h3>
-              <div class="bar"><div :style="{width: memPct + '%'}" :class="pctClass(memPct)"></div></div>
-              <p class="small">已用 {{ mb(p.memory.usedMB) }} / 共 {{ mb(p.memory.totalMB) }}，<b>可用 {{ mb(p.memory.availableMB) }}</b></p>
-              <p class="small muted">swap：{{ p.memory.swapTotalMB ? mb(p.memory.swapTotalMB) + '（已用 ' + mb(p.memory.swapUsedMB) + '）' : '没有' }}</p>
-              <p class="small muted">「可用」才是真正还能用的内存，Linux 会把空闲内存拿来做缓存，所以「已用」看起来总是偏高。</p>
-            </div>
-
-            <div class="card">
-              <h3>磁盘</h3>
-              <div v-for="d in p.disks" :key="d.mount" class="disk">
-                <div class="small">{{ d.mount }} <span class="muted">{{ d.used }} / {{ d.size }}</span></div>
-                <div class="bar"><div :style="{width: d.usePct + '%'}" :class="pctClass(d.usePct)"></div></div>
+          <template v-if="p">
+            <div class="tiles">
+              <div class="tile">
+                <div class="label"><ui-icon name="memory"></ui-icon>内存使用</div>
+                <div class="value">{{ memPct }}%</div>
+                <div class="meter" :class="meterClass(memPct)" role="meter" :aria-valuenow="memPct" aria-valuemin="0" aria-valuemax="100" aria-label="内存使用率"><div :style="{width: memPct + '%'}"></div></div>
+                <div class="sub">可用 {{ mb(p.memory.availableMB) }} / 共 {{ mb(p.memory.totalMB) }}</div>
+              </div>
+              <div class="tile">
+                <div class="label"><ui-icon name="disk"></ui-icon>系统盘</div>
+                <div class="value">{{ rootDisk ? rootDisk.usePct + '%' : '—' }}</div>
+                <div class="meter" v-if="rootDisk" :class="meterClass(rootDisk.usePct)" role="meter" :aria-valuenow="rootDisk.usePct" aria-valuemin="0" aria-valuemax="100" aria-label="系统盘使用率"><div :style="{width: rootDisk.usePct + '%'}"></div></div>
+                <div class="sub" v-if="rootDisk">已用 {{ rootDisk.used }} / 共 {{ rootDisk.size }}</div>
+              </div>
+              <div class="tile">
+                <div class="label"><ui-icon name="cpu"></ui-icon>CPU</div>
+                <div class="value">{{ p.cpuCores || '—' }} 核</div>
+                <div class="sub" style="margin-top: 14px">负载 {{ p.load || '—' }}</div>
+              </div>
+              <div class="tile">
+                <div class="label"><ui-icon name="layers"></ui-icon>环境</div>
+                <div class="value sm">{{ adapterName(p.adapter) }}</div>
+                <div class="sub">{{ envSub }}</div>
               </div>
             </div>
 
-            <div class="card" v-if="p.panel && p.panel.kind !== 'none'">
-              <h3>面板</h3>
-              <dl>
-                <dt>类型</dt><dd>{{ p.panel.kind === '1panel' ? '1Panel' : '宝塔' }} {{ p.panel.version }}</dd>
-                <dt v-if="p.panel.port">端口</dt><dd v-if="p.panel.port">{{ p.panel.port }}</dd>
-              </dl>
-              <div class="chips" v-if="p.panel.apps && p.panel.apps.length"><span class="muted small">应用：</span><span class="chip" v-for="a in p.panel.apps" :key="a">{{ a }}</span></div>
-              <div class="chips" v-if="p.panel.runtimes && p.panel.runtimes.length"><span class="muted small">PHP 运行环境：</span><span class="chip" v-for="a in p.panel.runtimes" :key="a">{{ a }}</span></div>
+            <div class="group-title">需要注意</div>
+            <div class="group">
+              <div class="finding ok" v-if="!p.findings || !p.findings.length">
+                <ui-icon name="check"></ui-icon><div><div class="title">一切正常</div><div class="detail">没有发现需要处理的问题</div></div>
+              </div>
+              <div v-for="(f, i) in p.findings" :key="i" class="finding" :class="levelClass(f.level)">
+                <ui-icon :name="levelIcon(f.level)"></ui-icon>
+                <div><div class="title">{{ f.title }}<span class="level">{{ levelName(f.level) }}</span></div><div class="detail">{{ f.detail }}</div></div>
+              </div>
             </div>
 
-            <div class="card">
-              <h3>网站</h3>
-              <p class="small muted">Web 服务：{{ p.webServer || '未发现' }}</p>
-              <div class="chips"><span class="chip" v-for="w in p.websites" :key="w">{{ w }}</span></div>
-              <p class="small muted" v-if="!p.websites || !p.websites.length">没有发现网站配置</p>
+            <div class="two-col">
+              <div>
+                <div class="group-title">系统</div>
+                <div class="group">
+                  <div class="row"><span class="k">操作系统</span><span class="v">{{ p.os || '未知' }}</span></div>
+                  <div class="row"><span class="k">内核</span><span class="v">{{ p.kernel }}</span></div>
+                  <div class="row"><span class="k">swap</span><span class="v">{{ p.memory.swapTotalMB ? mb(p.memory.swapTotalMB) + '，已用 ' + mb(p.memory.swapUsedMB) : '没有' }}</span></div>
+                  <div class="row"><span class="k">服务器指纹</span><span class="v small mono ellipsis" :title="current.server.hostKey">{{ current.server.hostKey || '—' }}</span></div>
+                </div>
+
+                <div class="group-title">存储</div>
+                <div class="group">
+                  <div class="row stack" v-for="d in p.disks" :key="d.mount">
+                    <div style="display: flex"><span>{{ d.mount }}</span><span class="secondary" style="margin-left: auto">{{ d.used }} / {{ d.size }} · {{ d.usePct }}%</span></div>
+                    <div class="meter" :class="meterClass(d.usePct)" role="meter" :aria-valuenow="d.usePct" aria-valuemin="0" aria-valuemax="100" :aria-label="d.mount + ' 使用率'" style="margin-bottom: 2px"><div :style="{width: d.usePct + '%'}"></div></div>
+                  </div>
+                  <div class="row secondary" v-if="!p.disks || !p.disks.length">没有磁盘信息</div>
+                </div>
+              </div>
+
+              <div>
+                <div class="group-title">网站和应用</div>
+                <div class="group">
+                  <div class="row"><span class="k">Web 服务</span><span class="v">{{ p.webServer || '未发现' }}</span></div>
+                  <div class="row"><span class="k">网站</span><span class="v"><span class="tags" v-if="p.websites && p.websites.length"><span class="tag" v-for="w in p.websites" :key="w">{{ w }}</span></span><template v-else>未发现</template></span></div>
+                  <div class="row" v-if="p.panel && p.panel.apps && p.panel.apps.length"><span class="k">面板应用</span><span class="v"><span class="tags"><span class="tag" v-for="a in p.panel.apps" :key="a">{{ a }}</span></span></span></div>
+                  <div class="row" v-if="p.panel && p.panel.runtimes && p.panel.runtimes.length"><span class="k">PHP 运行环境</span><span class="v">{{ p.panel.runtimes.join('、') }}</span></div>
+                  <div class="row" v-for="w in p.wordpress" :key="w"><span class="k">WordPress</span><span class="v small">{{ w }}</span></div>
+                  <div class="row" v-for="j in p.java" :key="j"><span class="k">Java</span><span class="v small">{{ j }}</span></div>
+                  <div class="row"><span class="k">数据库</span><span class="v">{{ p.databases && p.databases.length ? p.databases.join('、') : '未发现' }}</span></div>
+                  <div class="row"><span class="k">Docker</span><span class="v">{{ dockerText }}</span></div>
+                </div>
+              </div>
             </div>
 
-            <div class="card">
-              <h3>应用和数据库</h3>
-              <p class="small" v-for="w in p.wordpress" :key="w">📝 WordPress：{{ w }}</p>
-              <p class="small" v-for="j in p.java" :key="j">☕ Java：{{ j }}</p>
-              <p class="small" v-for="d in p.databases" :key="d">🗄️ {{ d }}</p>
-              <p class="small">🐳 Docker：{{ dockerText }}</p>
-              <div class="chips" v-if="p.docker.containers && p.docker.containers.length"><span class="chip" v-for="c in p.docker.containers" :key="c">{{ c }}</span></div>
+            <div class="group">
+              <details class="raw-box">
+                <summary><ui-icon name="chevron"></ui-icon>原始识别结果（已脱敏）</summary>
+                <pre class="raw">{{ current.raw }}</pre>
+              </details>
             </div>
-          </div>
-
-          <details class="card">
-            <summary>查看原始识别结果（已脱敏）</summary>
-            <pre class="raw">{{ current.raw }}</pre>
-          </details>
+          </template>
         </template>
-      </template>
-    </section>
-  </main>
+      </div>
+    </template>
 
-  <!-- AI 助手 -->
-  <main v-if="tab === 'chat'" class="chat">
-    <div class="card warn" v-if="!ai.hasKey">还没有设置 AI 模型的 API Key。<button class="link" @click="go('settings')">去设置</button></div>
-    <div class="messages" ref="msgBox">
-      <div class="msg assistant" v-if="!messages.length">
-        <div class="bubble">你好，我是喵面板的运维助手 🐱。可以问我服务器的状态、帮你排查问题、给出优化建议。我现在只能<b>查看</b>，不会改动你的服务器；需要修改时我会写成「建议」，你在「建议」页查看。</div>
-        <div class="chips suggestions">
-          <span class="chip clickable" v-for="q in suggestions" :key="q" @click="draft = q">{{ q }}</span>
+    <!-- AI assistant -->
+    <template v-if="tab === 'chat'">
+      <header class="toolbar">
+        <h1>AI 助手</h1>
+        <div class="spacer"></div>
+        <button class="plain" @click="newChat" :disabled="chatBusy || !messages.length"><ui-icon name="plus"></ui-icon>新对话</button>
+      </header>
+      <div class="chat">
+        <div class="messages" ref="msgBox">
+          <div class="messages-inner">
+            <div class="group" v-if="!ai.hasKey">
+              <div class="row"><ui-icon name="info" class="lg" style="color: var(--accent)"></ui-icon><div class="grow">还没有设置 AI 模型的 API Key。</div><button @click="go('settings')">去设置</button></div>
+            </div>
+            <div class="intro" v-if="!messages.length">
+              <h2>有什么可以帮你？</h2>
+              <p>可以问服务器的状态、让我排查问题、给优化建议。我现在只能<b>查看</b>，不会改动服务器；需要修改时会写成「建议」。</p>
+              <div class="suggestions">
+                <button v-for="q in suggestions" :key="q" @click="draft = q">{{ q }}</button>
+              </div>
+            </div>
+            <div v-for="(m, i) in messages" :key="i" class="msg" :class="m.role">
+              <div class="bubble" v-if="m.role === 'user'">{{ m.text }}</div>
+              <div class="bubble" v-else-if="m.role === 'error'">{{ m.text }}</div>
+              <div class="answer" v-else>
+                <details class="steps-box" v-if="m.steps && m.steps.length">
+                  <summary><ui-icon name="chevron"></ui-icon>查看了 {{ m.steps.length }} 项数据</summary>
+                  <div class="group">
+                    <div v-for="(s, j) in m.steps" :key="j">
+                      <div class="row"><b>{{ toolName(s.tool) }}</b><span class="v small">{{ s.args }}</span></div>
+                      <pre v-if="s.error" class="raw err">{{ s.error }}</pre>
+                      <pre v-else class="raw">{{ s.output }}</pre>
+                    </div>
+                  </div>
+                </details>
+                <div v-html="md(m.text)"></div>
+                <div class="msg-meta">本次约 {{ money(m.cost, m.currency) }} · 输入 {{ m.usage.input }} tokens（缓存 {{ m.usage.cachedInput }}）· 输出 {{ m.usage.output }}</div>
+              </div>
+            </div>
+            <div class="msg" v-if="chatBusy"><div class="typing"><span class="spinner"></span>正在查看服务器数据……</div></div>
+          </div>
+        </div>
+        <div class="composer-wrap">
+          <div class="composer">
+            <textarea v-model="draft" placeholder="问点什么，比如：服务器内存为什么这么高？" @keydown.enter.exact="onEnter" :disabled="chatBusy" aria-label="输入问题"></textarea>
+            <button class="primary send" @click="send" :disabled="chatBusy || !draft.trim()" title="发送" aria-label="发送"><ui-icon name="arrow-up"></ui-icon></button>
+          </div>
+          <div class="composer-hint"><span>Enter 发送，Shift + Enter 换行</span><span>AI 只读，不会修改服务器</span></div>
         </div>
       </div>
-      <div v-for="(m, i) in messages" :key="i" class="msg" :class="m.role">
-        <div class="bubble" v-if="m.role === 'user'">{{ m.text }}</div>
-        <div class="bubble" v-else-if="m.role === 'error'">⚠️ {{ m.text }}</div>
-        <template v-else>
-          <details class="steps-box" v-if="m.steps && m.steps.length">
-            <summary>AI 查看了 {{ m.steps.length }} 项数据</summary>
-            <div v-for="(s, j) in m.steps" :key="j" class="step">
-              <div><b>{{ toolName(s.tool) }}</b> <span class="muted small">{{ s.args }}</span></div>
-              <pre v-if="s.error" class="raw err">{{ s.error }}</pre>
-              <pre v-else class="raw">{{ s.output }}</pre>
+    </template>
+
+    <!-- Plans -->
+    <template v-if="tab === 'plans'">
+      <header class="toolbar"><h1>建议</h1></header>
+      <div class="page">
+        <div class="page-head">
+          <p>AI 提出的修改建议会保存在这里。当前版本只记录，不执行；下一版起可以确认后自动执行，并带备份和自动回滚。</p>
+        </div>
+        <div v-for="pl in plans" :key="pl.id">
+          <div class="group-title">{{ serverName(pl.serverId) }} · {{ fmtTime(pl.createdAt) }}</div>
+          <div class="group">
+            <div class="row stack"><b>{{ pl.title }}</b><div class="secondary small">{{ pl.reason }}</div></div>
+            <div class="row" v-for="(s, i) in parseSteps(pl.steps)" :key="i">
+              <span class="risk" :title="riskName(s.risk)">{{ s.risk }} {{ riskName(s.risk) }}</span>
+              <span class="grow">{{ s.summary }}</span>
+              <span class="small tertiary">{{ s.capability }}</span>
             </div>
-          </details>
-          <div class="bubble md" v-html="md(m.text)"></div>
-          <div class="muted small">本次花费约 {{ money(m.cost, m.currency) }}（输入 {{ m.usage.input }} tokens，其中缓存 {{ m.usage.cachedInput }}；输出 {{ m.usage.output }}）</div>
+          </div>
+        </div>
+        <div class="group" v-if="!plans.length"><div class="row secondary">还没有建议。在「AI 助手」里让 AI 分析服务器，它会把修改建议保存到这里。</div></div>
+      </div>
+    </template>
+
+    <!-- Audit -->
+    <template v-if="tab === 'audit'">
+      <header class="toolbar"><h1>操作记录</h1></header>
+      <div class="page">
+        <div class="group">
+          <table class="table">
+            <thead><tr><th>时间</th><th>操作人</th><th>操作</th><th>对象</th><th>详情</th></tr></thead>
+            <tbody>
+              <tr v-for="e in audit" :key="e.id">
+                <td class="nowrap num">{{ fmtTime(e.at) }}</td><td>{{ actorName(e.actor) }}</td><td>{{ actionName(e.action) }}</td><td>{{ e.target }}</td><td class="secondary">{{ e.detail }}</td>
+              </tr>
+              <tr v-if="!audit.length"><td colspan="5" class="secondary">还没有记录</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </template>
+
+    <!-- Settings -->
+    <template v-if="tab === 'settings'">
+      <header class="toolbar"><h1>设置</h1></header>
+      <div class="page">
+        <div class="group-title">AI 模型</div>
+        <div class="group">
+          <div class="row form"><span class="k">模型</span>
+            <span class="v"><select v-model="aiForm.presetId" @change="applyPreset" aria-label="模型">
+              <option v-for="pr in presets" :key="pr.id" :value="pr.id">{{ pr.name }}</option>
+            </select><div class="small tertiary" v-if="presetNote" style="margin-top: 4px">{{ presetNote }}</div></span></div>
+          <div class="row form" v-if="aiForm.kind === 'openai'"><span class="k">接口地址</span><span class="v"><input v-model="aiForm.baseUrl" placeholder="https://..." aria-label="接口地址"></span></div>
+          <div class="row form"><span class="k">模型名</span><span class="v"><input v-model="aiForm.model" aria-label="模型名"></span></div>
+          <div class="row form"><span class="k">API Key</span><span class="v"><input type="password" v-model="aiForm.apiKey" :placeholder="ai.hasKey ? '已保存（留空表示不修改）' : '在模型服务商的控制台创建'" autocomplete="off" aria-label="API Key"></span></div>
+        </div>
+
+        <div class="group-title">价格和预算</div>
+        <div class="group">
+          <div class="row form"><span class="k">输入价格</span><span class="v"><input type="number" step="0.01" v-model.number="aiForm.inputPrice" aria-label="输入价格"></span></div>
+          <div class="row form"><span class="k">缓存命中价格</span><span class="v"><input type="number" step="0.01" v-model.number="aiForm.cachedPrice" aria-label="缓存命中价格"></span></div>
+          <div class="row form"><span class="k">输出价格</span><span class="v"><input type="number" step="0.01" v-model.number="aiForm.outputPrice" aria-label="输出价格"></span></div>
+          <div class="row form"><span class="k">每月花费上限</span><span class="v"><input type="number" step="1" v-model.number="aiForm.monthlyBudget" aria-label="每月花费上限"></span></div>
+        </div>
+        <p class="small tertiary" style="margin: -16px 4px 22px">价格单位：{{ aiForm.currency === 'USD' ? '美元' : '元' }} / 百万 tokens，用来估算花费；上限为 0 表示不限制。价格来自 2026 年 9 月的公开资料，服务商经常调整，以官方为准。</p>
+
+        <div class="sheet-actions" style="justify-content: flex-start; margin-bottom: 30px">
+          <button class="primary" @click="saveAI" :disabled="busy">保存</button>
+          <button @click="testAI" :disabled="busy || !ai.hasKey">测试连接</button>
+        </div>
+
+        <div class="group-title">安全</div>
+        <div class="group">
+          <div class="row"><span class="k">密码和 API Key</span><span class="v">{{ info.secretsKind === 'keychain' ? '保存在系统钥匙串（Windows 凭据管理器）' : '保存在数据目录的 secrets.json（仅当前用户可读）' }}</span></div>
+          <div class="row"><span class="k">访问范围</span><span class="v">只在本机打开（127.0.0.1），不会发给 AI</span></div>
+          <div class="row"><span class="k">版本</span><span class="v">{{ info.version }}</span></div>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <!-- Add server sheet -->
+  <div class="sheet-mask" v-if="showAdd" @click.self="showAdd = false">
+    <div class="sheet" role="dialog" aria-label="添加服务器">
+      <h2>添加服务器</h2>
+      <p>密码只保存在你的电脑上，不会上传，也不会发给 AI。</p>
+      <div class="group">
+        <div class="row form"><span class="k">名称</span><span class="v"><input v-model="addForm.name" placeholder="可不填，比如：博客服务器" aria-label="名称"></span></div>
+        <div class="row form"><span class="k">IP 或域名</span><span class="v"><input v-model="addForm.host" placeholder="比如 1.2.3.4" aria-label="IP 或域名"></span></div>
+        <div class="row form"><span class="k">SSH 端口</span><span class="v"><input type="number" v-model.number="addForm.port" aria-label="SSH 端口"></span></div>
+        <div class="row form"><span class="k">用户名</span><span class="v"><input v-model="addForm.username" aria-label="用户名"></span></div>
+      </div>
+      <div class="hint">公网 IP 在云服务器控制台的实例详情里。用户名一般是 root，腾讯云轻量服务器的 Ubuntu 系统默认是 ubuntu。</div>
+      <div class="group">
+        <div class="row form"><span class="k">登录方式</span><span class="v"><span class="segmented">
+          <button :class="{on: addForm.authKind === 'password'}" @click="addForm.authKind = 'password'">密码</button>
+          <button :class="{on: addForm.authKind === 'key'}" @click="addForm.authKind = 'key'">密钥文件</button>
+        </span></span></div>
+        <div class="row form" v-if="addForm.authKind === 'password'"><span class="k">密码</span><span class="v"><input type="password" v-model="addForm.password" autocomplete="off" aria-label="密码"></span></div>
+        <template v-else>
+          <div class="row form"><span class="k">密钥文件位置</span><span class="v"><input v-model="addForm.keyPath" placeholder="比如 C:\Users\你\.ssh\id_ed25519" aria-label="密钥文件位置"></span></div>
+          <div class="row form"><span class="k">密钥密码</span><span class="v"><input type="password" v-model="addForm.keyPassphrase" placeholder="没有就留空" autocomplete="off" aria-label="密钥密码"></span></div>
         </template>
       </div>
-      <div class="msg assistant" v-if="chatBusy"><div class="bubble">⏳ 正在查看服务器数据、思考中……</div></div>
-    </div>
-    <div class="composer">
-      <textarea v-model="draft" placeholder="比如：我的服务器内存为什么这么高？（Ctrl+Enter 发送）" @keydown.ctrl.enter="send" @keydown.meta.enter="send" :disabled="chatBusy"></textarea>
-      <div class="composer-actions">
-        <button class="primary" @click="send" :disabled="chatBusy || !draft.trim()">发送</button>
-        <button @click="newChat" :disabled="chatBusy">新对话</button>
-      </div>
-    </div>
-  </main>
-
-  <!-- 建议 -->
-  <main v-if="tab === 'plans'" class="page">
-    <h2>建议</h2>
-    <p class="muted">AI 提出的修改建议会保存在这里。当前版本只记录建议，不会执行；下一个版本起可以确认后自动执行（带备份和自动回滚）。</p>
-    <div class="card" v-for="pl in plans" :key="pl.id">
-      <h3>{{ pl.title }}</h3>
-      <p class="small muted">{{ serverName(pl.serverId) }} · {{ fmtTime(pl.createdAt) }}</p>
-      <p>{{ pl.reason }}</p>
-      <ol>
-        <li v-for="(s, i) in parseSteps(pl.steps)" :key="i">
-          <span class="badge" :class="riskClass(s.risk)">{{ s.risk }}</span> {{ s.summary }}
-          <span class="muted small">（{{ s.capability }}）</span>
-        </li>
-      </ol>
-    </div>
-    <p class="muted" v-if="!plans.length">还没有建议。在「AI 助手」里让 AI 分析服务器，它会把修改建议保存到这里。</p>
-  </main>
-
-  <!-- 操作记录 -->
-  <main v-if="tab === 'audit'" class="page">
-    <h2>操作记录</h2>
-    <table class="table">
-      <thead><tr><th>时间</th><th>操作人</th><th>操作</th><th>对象</th><th>详情</th></tr></thead>
-      <tbody>
-        <tr v-for="e in audit" :key="e.id">
-          <td class="nowrap">{{ fmtTime(e.at) }}</td><td>{{ actorName(e.actor) }}</td><td>{{ actionName(e.action) }}</td><td>{{ e.target }}</td><td class="muted">{{ e.detail }}</td>
-        </tr>
-      </tbody>
-    </table>
-  </main>
-
-  <!-- 设置 -->
-  <main v-if="tab === 'settings'" class="page">
-    <h2>AI 模型</h2>
-    <div class="card">
-      <label>选择模型
-        <select v-model="aiForm.presetId" @change="applyPreset">
-          <option v-for="pr in presets" :key="pr.id" :value="pr.id">{{ pr.name }}</option>
-        </select>
-      </label>
-      <p class="small muted" v-if="presetNote">{{ presetNote }}</p>
-      <label v-if="aiForm.kind === 'openai'">接口地址 <input v-model="aiForm.baseUrl" placeholder="https://..."></label>
-      <label>模型名 <input v-model="aiForm.model"></label>
-      <label>API Key
-        <input type="password" v-model="aiForm.apiKey" :placeholder="ai.hasKey ? '已保存（留空表示不修改）' : '在模型服务商的控制台创建'" autocomplete="off">
-      </label>
-      <div class="row3">
-        <label>输入价格 <input type="number" step="0.01" v-model.number="aiForm.inputPrice"></label>
-        <label>缓存命中价格 <input type="number" step="0.01" v-model.number="aiForm.cachedPrice"></label>
-        <label>输出价格 <input type="number" step="0.01" v-model.number="aiForm.outputPrice"></label>
-      </div>
-      <p class="small muted">价格单位：{{ aiForm.currency === 'USD' ? '美元' : '元' }} / 百万 tokens，用来估算花费。价格来自 2026 年 9 月的公开资料，服务商经常调整，以官方为准。</p>
-      <label>每月花费上限（{{ aiForm.currency === 'USD' ? '美元' : '元' }}，0 表示不限制） <input type="number" step="1" v-model.number="aiForm.monthlyBudget"></label>
-      <div class="actions">
-        <button class="primary" @click="saveAI" :disabled="busy">保存</button>
-        <button @click="testAI" :disabled="busy || !ai.hasKey">测试连接</button>
-      </div>
-    </div>
-    <div class="card">
-      <h3>安全</h3>
-      <p class="small">密码和 API Key 保存在：<b>{{ info.secretsKind === 'keychain' ? '系统钥匙串（Windows 凭据管理器）' : '数据目录下的 secrets.json（仅当前用户可读）' }}</b>，不会写进数据库，也不会发给 AI。</p>
-      <p class="small">这个页面只在你自己的电脑上打开（127.0.0.1），别人访问不到。版本 {{ info.version }}。</p>
-    </div>
-  </main>
-
-  <!-- 添加服务器 -->
-  <div class="modal-mask" v-if="showAdd" @click.self="showAdd = false">
-    <div class="modal">
-      <h2>添加服务器</h2>
-      <label>名称 <input v-model="addForm.name" placeholder="比如：博客服务器（可不填）"></label>
-      <label>IP 或域名 <input v-model="addForm.host" placeholder="比如 1.2.3.4"></label>
-      <p class="small muted">在云服务器控制台的实例详情里可以看到「公网 IP」。</p>
-      <div class="row2">
-        <label>SSH 端口 <input type="number" v-model.number="addForm.port"></label>
-        <label>用户名 <input v-model="addForm.username"></label>
-      </div>
-      <p class="small muted">用户名一般是 root；腾讯云轻量服务器的 Ubuntu 系统默认是 ubuntu。</p>
-      <div class="radio">
-        <label><input type="radio" value="password" v-model="addForm.authKind"> 密码登录</label>
-        <label><input type="radio" value="key" v-model="addForm.authKind"> 密钥文件登录（更安全）</label>
-      </div>
-      <label v-if="addForm.authKind === 'password'">密码 <input type="password" v-model="addForm.password" autocomplete="off"></label>
-      <template v-else>
-        <label>密钥文件位置 <input v-model="addForm.keyPath" placeholder="比如 C:\Users\你\.ssh\id_ed25519"></label>
-        <label>密钥密码（没有就留空） <input type="password" v-model="addForm.keyPassphrase" autocomplete="off"></label>
-      </template>
-      <p class="small muted">密码只保存在你的电脑上（系统钥匙串），不会上传到任何地方，也不会发给 AI。第一次连接时会记下服务器的身份指纹，以后如果指纹变了会拒绝连接，防止被冒充。</p>
-      <div class="actions">
-        <button class="primary" @click="addServer" :disabled="busy">添加并测试连接</button>
+      <div class="hint">第一次连接时会记下服务器的指纹；以后指纹变了会拒绝连接，防止被冒充。</div>
+      <div class="sheet-actions">
         <button @click="showAdd = false">取消</button>
+        <button class="primary" @click="addServer" :disabled="busy">添加并测试连接</button>
       </div>
     </div>
+  </div>
+
+  <div class="toast" v-if="toast.text" :class="toast.kind" role="status">
+    <ui-icon :name="toast.kind === 'error' ? 'alert' : 'check'" class="lg"></ui-icon><div>{{ toast.text }}</div>
   </div>
 </div>
 </body>
