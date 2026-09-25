@@ -61,6 +61,10 @@ func New(a *app.App, token string, port int, version string) *Server {
 	api("GET /api/plans/{id}", s.plan)
 	api("POST /api/plans/{id}/execute", s.executePlan)
 	api("POST /api/plans/{id}/steps/{idx}/undo", s.undoStep)
+	api("POST /api/plans/{id}/undo", s.undoPlan)
+	api("GET /api/exec", s.execLogs)
+	api("GET /api/exec/{id}", s.execEntry)
+	api("POST /api/exec/{id}/rollback", s.rollback)
 	api("GET /api/servers/{id}/onepanel", s.getOnePanel)
 	api("PUT /api/servers/{id}/onepanel", s.putOnePanel)
 	api("POST /api/servers/{id}/onepanel/test", s.testOnePanel)
@@ -277,6 +281,34 @@ func (s *Server) undoStep(_ http.ResponseWriter, r *http.Request) (any, error) {
 		return nil, &app.UserError{Msg: "步骤编号不对"}
 	}
 	return s.app.UndoStep(r.Context(), id, idx)
+}
+
+func (s *Server) undoPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	return s.app.UndoPlan(r.Context(), id)
+}
+
+func (s *Server) execLogs(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.ExecLogs(r.URL.Query().Get("changes") == "1")
+}
+
+func (s *Server) execEntry(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	return s.app.ExecEntry(id)
+}
+
+func (s *Server) rollback(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	return s.app.Rollback(r.Context(), id)
 }
 
 func (s *Server) getOnePanel(_ http.ResponseWriter, r *http.Request) (any, error) {

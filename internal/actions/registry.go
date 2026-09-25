@@ -32,6 +32,7 @@ type Impl struct {
 	Args     []string // parameter names passed to the script, in order
 	Panel    string   // panel operation (API implementations)
 	Downtime string   // what the user will notice while it runs
+	Undo     string   // what rolling it back does, in plain words
 }
 
 // Capability is one kind of change.
@@ -44,6 +45,8 @@ type Capability struct {
 	// Impls maps an adapter (1panel, bt, linux) to its implementation;
 	// "*" applies to every adapter without its own entry.
 	Impls map[string]Impl
+	// NoUndo says why a change that is not Reversible cannot be rolled back.
+	NoUndo string
 	// Check validates parameters as a whole, after each one is checked.
 	Check func(v map[string]string) error
 }
@@ -59,16 +62,54 @@ func init() {
 		Name: "swap.set", Title: "添加 swap", Risk: core.R2, Reversible: true,
 		Params: []Param{{Name: "size_gb", Kind: "int", Min: 1, Max: 16, Required: true,
 			Desc: "swap 大小（GB）。小内存服务器一般 1~2GB"}},
-		Impls: map[string]Impl{"*": {Via: "系统脚本", Script: "swap.sh", Args: []string{"size_gb"}, Downtime: "不影响网站"}},
+		Impls: map[string]Impl{"*": {Via: "系统脚本", Script: "swap.sh", Args: []string{"size_gb"}, Downtime: "不影响网站",
+			Undo: "关闭并删除新建的 swap 文件，swappiness 恢复成原来的值"}},
 	})
 	register(&Capability{
 		Name: "logs.clean", Title: "清理旧日志", Risk: core.R2,
-		Impls: map[string]Impl{"*": {Via: "系统脚本", Script: "logs_clean.sh", Downtime: "不影响网站"}},
+		NoUndo: "删掉的旧日志无法恢复。只删了 7 天前的归档日志、精简了系统日志和过大的容器日志，不影响网站运行",
+		Impls:  map[string]Impl{"*": {Via: "系统脚本", Script: "logs_clean.sh", Downtime: "不影响网站"}},
 	})
 	register(&Capability{
 		Name: "service.restart", Title: "重启服务", Risk: core.R2,
+		NoUndo: "重启服务没有修改任何配置，不需要回滚",
 		Params: []Param{{Name: "name", Kind: "name", Required: true, Desc: "systemd 服务名，例如 nginx、php8.2-fpm、mysql"}},
 		Impls:  map[string]Impl{"*": {Via: "系统脚本", Script: "service_restart.sh", Args: []string{"name"}, Downtime: "这个服务会中断几秒"}},
+	})
+	register(&Capability{
+		Name: "container.restart", Title: "重启容器", Risk: core.R2,
+		NoUndo: "重启容器没有修改任何配置，不需要回滚",
+		Params: []Param{{Name: "name", Kind: "name", Required: true, Desc: "Docker 容器名（docker ps 里的 NAMES，例如 1Panel-halo-xxxx）"}},
+		Impls:  map[string]Impl{"*": {Via: "系统脚本", Script: "container_restart.sh", Args: []string{"name"}, Downtime: "这个容器里的服务会中断几秒到几十秒"}},
+	})
+	register(&Capability{
+		Name: "app.limits.set", Title: "设置应用内存上限", Risk: core.R2, Reversible: true,
+		Params: []Param{
+			{Name: "app", Kind: "name", Required: true, Desc: "1Panel 应用名称（应用商店 → 已安装 里显示的名字，例如 halo、mysql）"},
+			{Name: "memory_mb", Kind: "int", Min: 0, Max: 262144, Required: true,
+				Desc: "内存上限（MB），0 表示取消限制。不能低于当前实际占用的 1.2 倍。注意 Java 应用（如 Halo）的 JVM 默认最大堆是上限的 1/4，上限太小会导致 Java 内存不足"},
+		},
+		Impls: map[string]Impl{
+			"1panel": {Via: "1Panel 接口", Panel: "app_limits", Downtime: "1Panel 会重建这个应用的容器，服务中断十几秒到一分钟",
+				Undo: "通过 1Panel 把内存上限改回原来的值（会再重建一次容器）"},
+		},
+		Check: func(v map[string]string) error {
+			if n, _ := strconv.Atoi(v["memory_mb"]); n > 0 && n < 64 {
+				return fmt.Errorf("memory_mb 至少 64，或者填 0 表示取消限制")
+			}
+			return nil
+		},
+	})
+	register(&Capability{
+		Name: "backup.create", Title: "备份应用或数据库", Risk: core.R1,
+		NoUndo: "备份只是新增了一份备份文件，没有改动任何东西，不需要回滚；不需要时可以在 1Panel「备份」里删除",
+		Params: []Param{
+			{Name: "app", Kind: "name", Required: true, Desc: "1Panel 应用名称。MySQL/MariaDB 应用会备份里面的数据库，其他应用备份整个应用（程序和数据）"},
+			{Name: "database", Kind: "name", Desc: "只备份这一个数据库（仅 MySQL/MariaDB；不填则备份全部）"},
+		},
+		Impls: map[string]Impl{
+			"1panel": {Via: "1Panel 接口", Panel: "backup", Downtime: "不影响网站，大的数据库需要几分钟"},
+		},
 	})
 	register(&Capability{
 		Name: "php_fpm.set", Title: "调整 PHP-FPM 进程数", Risk: core.R2, Reversible: true,
@@ -80,8 +121,10 @@ func init() {
 			{Name: "runtime", Kind: "name", Desc: "1Panel 的 PHP 运行环境名称（只有一个时可以不填）"},
 		},
 		Impls: map[string]Impl{
-			"linux":  {Via: "系统脚本", Script: "php_fpm.sh", Args: []string{"max_children", "pm"}, Downtime: "平滑重载，不中断网站"},
-			"1panel": {Via: "1Panel 接口", Panel: "php_fpm", Downtime: "PHP 运行环境会重启，网站中断几秒"},
+			"linux": {Via: "系统脚本", Script: "php_fpm.sh", Args: []string{"max_children", "pm"}, Downtime: "平滑重载，不中断网站",
+				Undo: "用修改前备份的配置文件覆盖回去，检查通过后平滑重载 PHP-FPM"},
+			"1panel": {Via: "1Panel 接口", Panel: "php_fpm", Downtime: "PHP 运行环境会重启，网站中断几秒",
+				Undo: "通过 1Panel 把 PHP-FPM 参数改回原来的值（PHP 运行环境会重启，网站中断几秒）"},
 		},
 	})
 	register(&Capability{
@@ -93,7 +136,8 @@ func init() {
 			{Name: "database", Kind: "name", Desc: "1Panel 里 MySQL 应用的名称（只有一个时可以不填）"},
 		},
 		Impls: map[string]Impl{
-			"1panel": {Via: "1Panel 接口", Panel: "mysql_vars", Downtime: "MySQL 会重启，网站中断约 10 秒"},
+			"1panel": {Via: "1Panel 接口", Panel: "mysql_vars", Downtime: "MySQL 会重启，网站中断约 10 秒",
+				Undo: "通过 1Panel 把 MySQL 参数改回原来的值（MySQL 会重启，网站中断约 10 秒）"},
 		},
 		Check: func(v map[string]string) error {
 			if v["innodb_buffer_pool_size_mb"] == "" && v["max_connections"] == "" {

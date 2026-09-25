@@ -121,6 +121,7 @@ func (c *Client) Dial(network, addr string) (net.Conn, error) { return c.conn.Di
 
 // Result is the outcome of one remote command.
 type Result struct {
+	Command   string // the command line that ran
 	Stdout    string
 	Stderr    string
 	ExitCode  int
@@ -150,7 +151,7 @@ func (l *limitedBuffer) Write(p []byte) (int, error) {
 func (c *Client) Run(ctx context.Context, cmd, stdin string, maxOut int) (Result, error) {
 	sess, err := c.conn.NewSession()
 	if err != nil {
-		return Result{}, err
+		return Result{Command: cmd}, err
 	}
 	defer sess.Close()
 	stdout := &limitedBuffer{max: maxOut}
@@ -158,7 +159,7 @@ func (c *Client) Run(ctx context.Context, cmd, stdin string, maxOut int) (Result
 	sess.Stdout, sess.Stderr = stdout, stderr
 	sess.Stdin = strings.NewReader(stdin)
 	if err := sess.Start(cmd); err != nil {
-		return Result{}, err
+		return Result{Command: cmd}, err
 	}
 	done := make(chan error, 1)
 	go func() { done <- sess.Wait() }()
@@ -166,11 +167,11 @@ func (c *Client) Run(ctx context.Context, cmd, stdin string, maxOut int) (Result
 	case <-ctx.Done():
 		_ = sess.Signal(ssh.SIGKILL)
 		_ = sess.Close()
-		return Result{}, ctx.Err()
+		return Result{Command: cmd}, ctx.Err()
 	case err = <-done:
 	}
 	res := Result{
-		Stdout: stdout.buf.String(), Stderr: stderr.buf.String(),
+		Command: cmd, Stdout: stdout.buf.String(), Stderr: stderr.buf.String(),
 		Truncated: stdout.truncated || stderr.truncated,
 	}
 	var exitErr *ssh.ExitError

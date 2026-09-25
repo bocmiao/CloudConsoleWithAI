@@ -32,6 +32,8 @@ type Client struct {
 	host   string // Host header: the panel's bound domain, or 127.0.0.1:port
 	key    string
 	now    func() time.Time
+	// Trace, when set, is told about every request (never the credentials).
+	Trace func(method, path string, body []byte)
 }
 
 // New creates a client for the panel listening on port. host overrides the
@@ -97,12 +99,16 @@ func (c *Client) sign(req *http.Request) {
 // do calls /api/v2+path and decodes the envelope's data into out.
 func (c *Client) do(ctx context.Context, method, path string, in, out any) error {
 	var body io.Reader
+	var data []byte
 	if in != nil {
-		data, err := json.Marshal(in)
-		if err != nil {
+		var err error
+		if data, err = json.Marshal(in); err != nil {
 			return err
 		}
 		body = bytes.NewReader(data)
+	}
+	if c.Trace != nil {
+		c.Trace(method, "/api/v2"+path, data)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.Scheme+"://"+c.host+"/api/v2"+path, body)
 	if err != nil {
@@ -211,4 +217,105 @@ type MySQLVariable struct {
 func (c *Client) UpdateMySQLVariables(ctx context.Context, dbType, name string, vars []MySQLVariable) error {
 	return c.do(ctx, http.MethodPost, "/databases/variables/update",
 		map[string]any{"type": dbType, "database": name, "variables": vars}, nil)
+}
+
+// InstalledApp is an app installed from the 1Panel app store.
+type InstalledApp struct {
+	ID        uint   `json:"id"`
+	Name      string `json:"name"`
+	AppKey    string `json:"appKey"`
+	Container string `json:"container"`
+	Status    string `json:"status"`
+	Version   string `json:"version"`
+}
+
+// InstalledApps lists the installed apps.
+func (c *Client) InstalledApps(ctx context.Context) ([]InstalledApp, error) {
+	var page struct {
+		Items []InstalledApp `json:"items"`
+	}
+	err := c.do(ctx, http.MethodPost, "/apps/installed/search", map[string]any{"page": 1, "pageSize": 200}, &page)
+	return page.Items, err
+}
+
+// ContainerConfig is the "advanced settings" of an installed app: resource
+// limits and how its ports are published.
+type ContainerConfig struct {
+	CPUQuota      float64 `json:"cpuQuota"`
+	MemoryLimit   float64 `json:"memoryLimit"` // 0 means no limit
+	MemoryUnit    string  `json:"memoryUnit"`
+	ContainerName string  `json:"containerName"`
+	AllowPort     bool    `json:"allowPort"`
+	SpecifyIP     string  `json:"specifyIP"`
+	HostMode      bool    `json:"hostMode"`
+	RestartPolicy string  `json:"restartPolicy"`
+}
+
+// AppConfig returns an installed app's container settings.
+func (c *Client) AppConfig(ctx context.Context, installID uint) (ContainerConfig, error) {
+	var cfg ContainerConfig
+	err := c.do(ctx, http.MethodGet, fmt.Sprintf("/apps/installed/params/%d", installID), nil, &cfg)
+	return cfg, err
+}
+
+// UpdateAppConfig writes an installed app's container settings; 1Panel
+// then rebuilds its containers. Every other setting is sent back exactly
+// as AppConfig returned it, so that only the limits change.
+func (c *Client) UpdateAppConfig(ctx context.Context, installID uint, cfg ContainerConfig) error {
+	return c.do(ctx, http.MethodPost, "/apps/installed/params/update", map[string]any{
+		"installId": installID, "params": map[string]any{}, "advanced": true, "editCompose": false,
+		"cpuQuota": cfg.CPUQuota, "memoryLimit": cfg.MemoryLimit, "memoryUnit": cfg.MemoryUnit,
+		"containerName": cfg.ContainerName, "allowPort": cfg.AllowPort, "specifyIP": cfg.SpecifyIP,
+		"hostMode": cfg.HostMode, "restartPolicy": cfg.RestartPolicy,
+	}, nil)
+}
+
+// Databases lists the databases 1Panel manages inside a MySQL/MariaDB app.
+func (c *Client) Databases(ctx context.Context, app string) ([]string, error) {
+	var page struct {
+		Items []struct {
+			Name string `json:"name"`
+		} `json:"items"`
+	}
+	err := c.do(ctx, http.MethodPost, "/databases/search",
+		map[string]any{"page": 1, "pageSize": 200, "database": app, "orderBy": "createdAt", "order": "null"}, &page)
+	var out []string
+	for _, it := range page.Items {
+		out = append(out, it.Name)
+	}
+	return out, err
+}
+
+// Backup asks 1Panel to back something up into its local backup account.
+// kind is "app" (name = app key, detail = install name) or a database type
+// such as "mysql" (name = database app, detail = database name).
+func (c *Client) Backup(ctx context.Context, kind, name, detail, taskID string) error {
+	return c.do(ctx, http.MethodPost, "/backups/backup", map[string]any{
+		"type": kind, "name": name, "detailName": detail, "taskID": taskID,
+		"description": "Miao Panel 修改前备份",
+	}, nil)
+}
+
+// BackupRecord is one entry in 1Panel's backup list.
+type BackupRecord struct {
+	TaskID   string `json:"taskID"`
+	Status   string `json:"status"` // Waiting, Success, Failed
+	Message  string `json:"message"`
+	FileDir  string `json:"fileDir"`
+	FileName string `json:"fileName"`
+}
+
+// FindBackup looks up the record of the backup started with taskID.
+func (c *Client) FindBackup(ctx context.Context, kind, name, detail, taskID string) (BackupRecord, bool, error) {
+	var page struct {
+		Items []BackupRecord `json:"items"`
+	}
+	err := c.do(ctx, http.MethodPost, "/backups/record/search",
+		map[string]any{"page": 1, "pageSize": 20, "type": kind, "name": name, "detailName": detail}, &page)
+	for _, r := range page.Items {
+		if r.TaskID == taskID {
+			return r, true, err
+		}
+	}
+	return BackupRecord{}, false, err
 }

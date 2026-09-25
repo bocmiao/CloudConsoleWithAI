@@ -1,5 +1,5 @@
 /* Miao Panel web UI. Plain Vue 3 (global build), no build step. */
-const { createApp, ref, reactive, computed, onMounted, onUnmounted, nextTick } = Vue;
+const { createApp, ref, reactive, computed, watch, onMounted, onUnmounted, nextTick, inject, provide } = Vue;
 
 async function api(method, path, body) {
   const opts = { method, headers: { 'X-Miao': '1' }, credentials: 'same-origin' };
@@ -72,6 +72,9 @@ const ICONS = {
   cpu: 'M7 7h10v10H7zM10 10h4v4h-4zM9 3v4M15 3v4M9 17v4M15 17v4M3 9h4M3 15h4M17 9h4M17 15h4',
   memory: 'M3 8h18v8H3zM7 16v3M12 16v3M17 16v3M7 11v2M12 11v2M17 11v2',
   disk: 'M3 13h18v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM3 13l3-8h12l3 8M7 16.5h.01',
+  terminal: 'M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM7 10l3 2.5L7 15M12.5 15H17',
+  undo: 'M9 14L4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11',
+  eye: 'M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
 };
 
 // Toast shared by the app and its components.
@@ -91,7 +94,8 @@ const STEP_STATUS = {
   rolled_back: { icon: 'warn', cls: 'warn', text: '失败了，已自动恢复原状' },
   failed: { icon: 'alert', cls: 'crit', text: '失败了，需要检查' },
   skipped: { icon: 'info', cls: 'info', text: '已跳过' },
-  undone: { icon: 'refresh', cls: 'info', text: '已撤销' },
+  undone: { icon: 'undo', cls: 'info', text: '已撤销' },
+  interrupted: { icon: 'warn', cls: 'warn', text: '中断：Miao Panel 在执行时被关闭，结果未知' },
 };
 const RISK_NAME = { R0: '只读', R1: '可撤销', R2: '影响线上', R3: '高风险' };
 
@@ -101,6 +105,7 @@ const mbText = v => v >= 1024 ? (v / 1024).toFixed(1) + ' GB' : (v || 0) + ' MB'
 const PlanCard = {
   props: { plan: { type: Object, required: true }, serverName: { type: String, default: '' } },
   setup(props) {
+    const openLog = inject('openLog', () => {});
     const p = ref(props.plan);
     const picked = ref(new Set());
     const confirming = ref(false);
@@ -149,6 +154,15 @@ const PlanCard = {
         notify('已撤销');
       } catch (e) { notify(e.message, 'error'); await refresh(); } finally { busy.value = false; }
     }
+    const undoable = computed(() => steps.value.filter(s => s.status === 'done' && s.reversible).length);
+    async function undoAll() {
+      if (!confirm(`确定要把这份清单里已执行的 ${undoable.value} 项全部撤销吗？会从最后一项开始，按相反的顺序逐项恢复。`)) return;
+      busy.value = true;
+      try {
+        p.value = await api('POST', `/api/plans/${p.value.id}/undo`);
+        notify('已全部撤销');
+      } catch (e) { notify(e.message, 'error'); await refresh(); } finally { busy.value = false; }
+    }
 
     resetPicks();
     if (running.value) poll();
@@ -166,7 +180,7 @@ const PlanCard = {
       ];
       return rows;
     });
-    return { p, steps, running, canPick, picked, toggle, chosen, chosenSteps, confirming, busy, run, undo, status, deltas, riskName: r => RISK_NAME[r] || '' };
+    return { p, steps, running, canPick, picked, toggle, chosen, chosenSteps, confirming, busy, run, undo, undoable, undoAll, openLog, status, deltas, riskName: r => RISK_NAME[r] || '' };
   },
   template: `
   <div class="plan">
@@ -185,10 +199,10 @@ const PlanCard = {
             <span class="risk">{{ s.risk }} {{ riskName(s.risk) }}</span>{{ s.via }} · {{ s.downtime }} · {{ s.reversible ? '可以撤销' : '无法撤销' }}
           </div>
           <div class="small secondary" v-else>暂时不能自动执行：{{ s.blocked }}</div>
-          <div class="small" v-if="status(s)" :class="'st-' + status(s).cls">{{ status(s).text }}</div>
+          <div class="small" v-if="status(s)" :class="'st-' + status(s).cls">{{ status(s).text }}<button v-if="s.logId" class="link small log-link" @click="openLog(s.logId)">查看执行日志</button></div>
           <div class="step-log" v-if="s.log && s.log.length"><div v-for="(l, j) in s.log" :key="j">{{ l }}</div></div>
         </div>
-        <button v-if="s.status === 'done' && s.reversible" class="plain" @click="undo(i)" :disabled="busy || running"><ui-icon name="refresh"></ui-icon>撤销</button>
+        <button v-if="s.status === 'done' && s.reversible" class="plain" @click="undo(i)" :disabled="busy || running"><ui-icon name="undo"></ui-icon>撤销</button>
       </div>
       <div class="row" v-if="deltas.length">
         <div class="grow">
@@ -199,7 +213,8 @@ const PlanCard = {
       <div class="row plan-foot">
         <span class="grow small secondary" v-if="running"><span class="spinner inline"></span>正在执行，请不要关闭 Miao Panel……</span>
         <span class="grow small secondary" v-else-if="!steps.some(s => s.executable)">这份清单里没有能自动执行的项目</span>
-        <span class="grow small secondary" v-else>执行前会先检查和备份；失败会自动恢复原状</span>
+ <span class="grow small secondary" v-else>执行前会先检查和备份；失败会自动恢复原状</span>
+        <button v-if="undoable && !running" @click="undoAll" :disabled="busy"><ui-icon name="undo"></ui-icon>撤销全部</button>
         <button class="primary" :disabled="!chosen.length || running || busy" @click="confirming = true">执行选中的 {{ chosen.length }} 项</button>
       </div>
     </div>
@@ -224,6 +239,111 @@ const PlanCard = {
   </div>`,
 };
 
+const ORIGIN_NAME = { ai: 'AI 检查', user: '你操作的', plan: '清单（你确认后执行）' };
+const EXEC_STATUS = {
+  running: { icon: '', cls: 'info', text: '执行中' },
+  done: { icon: 'check', cls: 'ok', text: '完成' },
+  undone: { icon: 'undo', cls: 'ok', text: '已回滚' },
+  refused: { icon: 'info', cls: 'info', text: '没有执行（条件不满足）' },
+  rolled_back: { icon: 'warn', cls: 'warn', text: '失败，已自动恢复' },
+  failed: { icon: 'alert', cls: 'crit', text: '失败' },
+  interrupted: { icon: 'warn', cls: 'warn', text: '中断' },
+};
+
+// Everything Miao Panel ran on servers, with details and rollback.
+const ExecLog = {
+  props: { focus: { type: Number, default: 0 } },
+  setup(props) {
+    const list = ref([]);
+    const changesOnly = ref(false);
+    const open = ref(0);
+    const detail = reactive({});
+    const busy = ref(false);
+    const loading = ref(false);
+
+    async function load() {
+      loading.value = true;
+      try { list.value = await api('GET', '/api/exec' + (changesOnly.value ? '?changes=1' : '')); }
+      catch (e) { notify(e.message, 'error'); } finally { loading.value = false; }
+    }
+    async function toggle(id) {
+      if (open.value === id) { open.value = 0; return; }
+      open.value = id;
+      try { detail[id] = await api('GET', `/api/exec/${id}`); } catch (e) { notify(e.message, 'error'); }
+    }
+    async function rollback(e) {
+      const how = e.rollbackHow ? `\n\n回滚会：${e.rollbackHow}` : '';
+      if (!confirm(`确定要回滚「${e.title}」吗？${how}`)) return;
+      busy.value = true;
+      try {
+        const v = await api('POST', `/api/exec/${e.id}/rollback`);
+        detail[e.id] = v;
+        notify('已回滚');
+      } catch (err) { notify(err.message, 'error'); }
+      finally { busy.value = false; await load(); }
+    }
+    watch(changesOnly, load);
+    watch(() => props.focus, id => { if (id) { open.value = 0; toggle(id); } });
+    onMounted(async () => { await load(); if (props.focus) toggle(props.focus); });
+
+    const status = e => EXEC_STATUS[e.status] || { icon: 'info', cls: 'info', text: e.status };
+    const kindIcon = e => ({ read: 'eye', change: 'sliders', rollback: 'undo' }[e.kind] || 'terminal');
+    const fmtTime = t => t ? new Date(t).toLocaleString('zh-CN', { hour12: false }) : '';
+    const undoLines = e => Object.entries(e.undo || {}).map(([k, v]) => `${k} = ${v}`).join('\n');
+    return { list, changesOnly, open, detail, busy, loading, load, toggle, rollback, status, kindIcon, fmtTime, undoLines, originName: o => ORIGIN_NAME[o] || o };
+  },
+  template: `
+  <div>
+    <div class="log-bar">
+      <span class="segmented">
+        <button :class="{on: !changesOnly}" @click="changesOnly = false">全部</button>
+        <button :class="{on: changesOnly}" @click="changesOnly = true">只看修改和回滚</button>
+      </span>
+      <span class="grow small tertiary">Miao Panel 在服务器上执行的每一条命令都记在这里，包括 AI 做的只读检查</span>
+      <button class="plain" @click="load" :disabled="loading"><ui-icon name="refresh"></ui-icon>刷新</button>
+    </div>
+    <div class="group">
+      <div v-if="!list.length" class="row secondary">{{ loading ? '正在读取……' : '还没有记录' }}</div>
+      <template v-for="e in list" :key="e.id">
+        <div class="row exec" :class="{active: open === e.id}" @click="toggle(e.id)">
+          <ui-icon :name="kindIcon(e)" class="kind" :class="'k-' + e.kind"></ui-icon>
+          <div class="grow">
+            <div class="exec-title">{{ e.title }}</div>
+            <div class="small tertiary">#{{ e.id }} · {{ e.serverName }} · {{ originName(e.origin) }} · {{ fmtTime(e.startedAt) }}<span v-if="e.via"> · {{ e.via }}</span></div>
+          </div>
+          <span class="exec-status small" :class="'st-' + status(e).cls">
+            <span v-if="e.status === 'running'" class="spinner inline"></span><ui-icon v-else :name="status(e).icon"></ui-icon>{{ e.undoneBy ? '已回滚' : status(e).text }}
+          </span>
+          <button v-if="e.canRollback" @click.stop="rollback(e)" :disabled="busy"><ui-icon name="undo"></ui-icon>回滚</button>
+          <ui-icon name="chevron" class="chev"></ui-icon>
+        </div>
+        <div class="exec-detail" v-if="open === e.id">
+          <div v-if="!detail[e.id]" class="small secondary"><span class="spinner inline"></span>正在读取……</div>
+          <template v-else>
+            <div class="kv" v-if="detail[e.id].note"><span class="k">AI 的说明</span><span>{{ detail[e.id].note }}</span></div>
+            <div class="kv"><span class="k">回滚</span>
+              <span v-if="detail[e.id].canRollback">可以一键回滚：{{ detail[e.id].rollbackHow }}</span>
+              <span v-else class="secondary">{{ detail[e.id].noRollback }}</span>
+            </div>
+            <div class="kv" v-if="detail[e.id].rollbackFile"><span class="k">服务器上的回滚文件</span>
+              <span><code>{{ detail[e.id].rollbackFile }}</code><br><span class="small secondary">就算这台电脑上的 Miao Panel 不在了，也可以在服务器上用 root 执行 <code>sh {{ detail[e.id].rollbackFile }}</code> 恢复到修改前</span></span>
+            </div>
+            <div class="kv" v-if="detail[e.id].backupDir"><span class="k">备份位置</span><span><code>{{ detail[e.id].backupDir }}</code></span></div>
+            <div class="kv" v-if="detail[e.id].planId"><span class="k">来自清单</span><span>#{{ detail[e.id].planId }} 第 {{ detail[e.id].stepIdx + 1 }} 项</span></div>
+            <div class="kv" v-if="detail[e.id].undoOf"><span class="k">撤销的记录</span><span><button class="link" @click="toggle(detail[e.id].undoOf)">#{{ detail[e.id].undoOf }}</button></span></div>
+            <div class="kv" v-if="detail[e.id].undoneBy"><span class="k">回滚记录</span><span><button class="link" @click="toggle(detail[e.id].undoneBy)">#{{ detail[e.id].undoneBy }}</button></span></div>
+            <div class="sub-title">结果</div>
+            <pre class="raw">{{ detail[e.id].output || '（没有输出）' }}</pre>
+            <details><summary class="sub-title"><ui-icon name="chevron"></ui-icon>实际执行的命令（原样记录，给懂命令的人核对）</summary><pre class="raw">{{ detail[e.id].commands || '（没有记录）' }}</pre></details>
+            <details v-if="undoLines(detail[e.id])"><summary class="sub-title"><ui-icon name="chevron"></ui-icon>回滚需要的数据（修改前的状态）</summary><pre class="raw">{{ undoLines(detail[e.id]) }}</pre></details>
+            <details v-if="detail[e.id].script"><summary class="sub-title"><ui-icon name="chevron"></ui-icon>脚本全文：{{ detail[e.id].scriptName }}</summary><pre class="raw">{{ detail[e.id].script }}</pre></details>
+          </template>
+        </div>
+      </template>
+    </div>
+  </div>`,
+};
+
 const app = createApp({
   setup() {
     const tab = ref('servers');
@@ -239,6 +359,8 @@ const app = createApp({
     const spend = ref({});
     const plans = ref([]);
     const audit = ref([]);
+    const logView = ref('exec');
+    const logFocus = ref(0);
     const showAdd = ref(false);
     const addForm = reactive({});
     const messages = ref([]);
@@ -293,8 +415,11 @@ const app = createApp({
     function go(id) {
       tab.value = id;
       if (id === 'plans') api('GET', '/api/plans').then(v => { plans.value = v; }).catch(e => notify(e.message, 'error'));
-      if (id === 'audit') api('GET', '/api/audit').then(v => { audit.value = v; }).catch(e => notify(e.message, 'error'));
+      if (id === 'logs') loadAudit();
     }
+    function loadAudit() { api('GET', '/api/audit').then(v => { audit.value = v; }).catch(e => notify(e.message, 'error')); }
+    function openLog(id) { logView.value = 'exec'; logFocus.value = id; tab.value = 'logs'; }
+    provide('openLog', openLog);
 
     function openAdd() {
       Object.assign(addForm, { name: '', host: '', port: 22, username: 'root', authKind: 'password', password: '', keyPath: '', keyPassphrase: '' });
@@ -441,7 +566,7 @@ const app = createApp({
     const actorName = a => ({ user: '你', ai: 'AI', system: '系统' }[a] || a);
     const actionName = a => ({ 'server.add': '添加服务器', 'server.delete': '删除服务器', 'server.test': '测试连接', 'server.discover': '识别环境',
       'server.hostkey.recorded': '记录服务器指纹', 'settings.ai': '修改 AI 设置', 'ai.chat': 'AI 对话', 'plan.propose': 'AI 生成清单',
-      'plan.execute': '执行清单', 'plan.step': '执行步骤', 'plan.undo': '撤销步骤', 'onepanel.settings': '修改 1Panel 接口设置' }[a] || a);
+      'plan.execute': '执行清单', 'plan.step': '执行步骤', 'plan.undo': '撤销步骤', 'exec.rollback': '回滚', 'onepanel.settings': '修改 1Panel 接口设置' }[a] || a);
 
     onMounted(async () => {
       try {
@@ -454,7 +579,7 @@ const app = createApp({
 
     return {
       tab, go, servers, selectedId, current, p, busy, busyText, toast, info, ai, presets, aiForm, presetNote,
-      spendText, plans, audit, showAdd, addForm, messages, draft, chatBusy, msgBox, suggestions,
+      spendText, plans, audit, logView, logFocus, loadAudit, openLog, showAdd, addForm, messages, draft, chatBusy, msgBox, suggestions,
       select, openAdd, addServer, testConn, discover, removeServer, askAbout, send, onEnter, newChat, applyPreset, saveAI, testAI,
       op, saveOnePanel, testOnePanel,
       memPct, rootDisk, envSub, dockerText, money, mb, meterClass, levelClass, levelIcon, levelName, riskName, adapterName,
@@ -464,6 +589,7 @@ const app = createApp({
 });
 
 app.component('plan-card', PlanCard);
+app.component('exec-log', ExecLog);
 app.component('ui-icon', {
   props: { name: { type: String, required: true } },
   setup(props) { return { d: computed(() => ICONS[props.name] || '') }; },

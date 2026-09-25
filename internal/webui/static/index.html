@@ -19,7 +19,7 @@
     <div class="side-section">
       <div class="side-item" :class="{active: tab === 'chat'}" @click="go('chat')"><ui-icon name="sparkles"></ui-icon>AI 助手</div>
       <div class="side-item" :class="{active: tab === 'plans'}" @click="go('plans')"><ui-icon name="bulb"></ui-icon>建议</div>
-      <div class="side-item" :class="{active: tab === 'audit'}" @click="go('audit')"><ui-icon name="clock"></ui-icon>操作记录</div>
+      <div class="side-item" :class="{active: tab === 'logs'}" @click="go('logs')"><ui-icon name="terminal"></ui-icon>日志</div>
     </div>
 
     <div class="side-section">
@@ -253,11 +253,17 @@
       </div>
     </template>
 
-    <!-- Audit -->
-    <template v-if="tab === 'audit'">
-      <header class="toolbar"><h1>操作记录</h1></header>
+    <!-- Logs -->
+    <template v-if="tab === 'logs'">
+      <header class="toolbar"><h1>日志</h1><span class="spacer"></span>
+        <span class="segmented">
+          <button :class="{on: logView === 'exec'}" @click="logView = 'exec'">执行日志</button>
+          <button :class="{on: logView === 'audit'}" @click="logView = 'audit'; loadAudit()">操作记录</button>
+        </span>
+      </header>
       <div class="page">
-        <div class="group">
+        <exec-log v-if="logView === 'exec'" :focus="logFocus"></exec-log>
+        <div class="group" v-else>
           <table class="table">
             <thead><tr><th>时间</th><th>操作人</th><th>操作</th><th>对象</th><th>详情</th></tr></thead>
             <tbody>

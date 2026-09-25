@@ -178,7 +178,7 @@ func (a *App) Chat(ctx context.Context, convID, text string) (ChatReply, error) 
 	conv.mu.Lock()
 	defer conv.mu.Unlock()
 	collector := &planCollector{}
-	reply, err := conv.agent.Ask(context.WithValue(ctx, planCollectorKey{}, collector), text)
+	reply, err := conv.agent.Ask(withOrigin(context.WithValue(ctx, planCollectorKey{}, collector), OriginAI), text)
 	cost := settings.Cost(reply.Usage)
 	if reply.Usage.Input+reply.Usage.Output > 0 {
 		_ = a.Store.AddUsage(store.Usage{

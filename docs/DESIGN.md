@@ -1046,7 +1046,21 @@ conversations    id, ...;  messages  id, conversation_id, role, content, plan_id
 | `service.restart` | 重启 systemd 服务（ssh、docker、面板等关键服务禁止） | 全部（需 systemd） | 否 |
 | `php_fpm.set` | 调整 PHP-FPM 进程数 / 进程管理方式 | 纯 Linux（脚本）、1Panel（接口） | 是 |
 | `mysql.vars.set` | 调整 innodb_buffer_pool_size、max_connections | 1Panel（接口） | 是 |
+| `app.limits.set` | 设置 1Panel 应用（容器）的内存上限；低于当前占用 1.2 倍时拒绝；改完核对端口开放方式没变 | 1Panel（接口） | 是 |
+| `backup.create` | 让 1Panel 备份应用，或备份 MySQL/MariaDB 里的数据库，等备份文件写完才算完成 | 1Panel（接口） | 不需要 |
+| `container.restart` | 重启 Docker 容器并等它恢复运行（有健康检查时等到 healthy） | 全部 | 不需要 |
 
 脚本约定：必须 root 运行；先检查再修改，修改前备份；失败自动回滚；退出码 0 完成、10 拒绝（未做修改）、20 已回滚、30 失败。脚本以后台方式运行，SSH 断开会自动重连继续读取进度。
 
-还没做：宝塔面板的 PHP / MySQL 接口、受限的 AI 自由命令（第 7.5 节）、腾讯云 EO / DNSPod 相关操作。
+### 执行日志与回滚（已完成）
+
+「日志 → 执行日志」记录 Miao Panel 在服务器上执行的每一件事，包括 AI 回答问题时做的只读检查：
+
+- 每条记录：时间、服务器、谁发起的（AI 检查 / 你操作的 / 清单）、类型（只读 / 修改 / 回滚）、结果和完整输出；
+- 原样记录实际执行的命令（1Panel 操作记录请求的方法、路径和内容，不记录密钥），修改类操作保存脚本全文；
+- 修改类记录写明能不能回滚：能回滚的说明回滚会做什么，并提供「回滚」按钮；不能回滚的写明原因（比如删掉的日志无法恢复、重启不需要回滚）；
+- 回滚本身也是一条记录，和原记录互相链接；清单卡片上的每一步可以跳到对应记录，还可以「撤销全部」（按相反顺序逐项回滚，遇到失败就停）；
+- 服务器上也留有记录：每次脚本执行在 `/var/log/miaopanel/actions.log` 记一行；能回滚的脚本修改会在备份目录里生成独立的 `rollback.sh`，就算电脑上的 Miao Panel 丢了，也能在服务器上用 root 执行它回滚；从 Miao Panel 回滚后它会改名为 `rollback.sh.done`；1Panel 接口的操作在 1Panel 自己的「日志审计 → 操作日志」里也能查到；
+- Miao Panel 在执行中被关闭时，下次启动会把没结束的记录和清单步骤标记为「中断」，提示重新识别服务器确认结果。
+
+还没做：宝塔面板的 PHP / MySQL 接口、1Panel 应用的其他参数（比如 Java 应用的 JVM 堆大小）、受限的 AI 自由命令（第 7.5 节）、腾讯云 EO / DNSPod 相关操作。

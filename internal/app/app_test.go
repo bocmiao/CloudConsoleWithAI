@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bocmiao/CloudConsoleWithAI/internal/actions"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/core"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/secrets"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/sshx/sshtest"
@@ -289,5 +290,136 @@ func TestExecutePlanFlow(t *testing.T) {
 	}
 	if !sawExecute {
 		t.Fatal("execution was not audited")
+	}
+}
+
+// fakeSwap stands in for swap.sh so tests change nothing on the machine.
+const fakeSwap = `
+case "$1" in
+apply) echo "MIAO_INFO 已添加 swap"; echo "MIAO_UNDO swapfile=/swapfile"; exit 0 ;;
+undo) echo "MIAO_INFO 已撤销：swap 已移除 $UNDO_swapfile"; exit 0 ;;
+esac
+`
+
+func TestExecLogAndRollback(t *testing.T) {
+	t.Cleanup(actions.UseTestScripts(t.TempDir(), func(string) (string, error) { return fakeSwap, nil }))
+	a := newApp(t)
+	srv := sshtest.Start(t, "root", "pw")
+	sv := addTestServer(t, a, srv, "pw")
+	ctx := context.Background()
+	if _, _, err := a.Discover(ctx, sv.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	// A check the AI runs is logged as the AI's, with the exact command.
+	if _, _, err := a.Discover(withOrigin(ctx, OriginAI), sv.ID, []string{"system"}); err != nil {
+		t.Fatal(err)
+	}
+	args, _ := json.Marshal(map[string]any{
+		"server_id": sv.ID, "title": "加 swap", "reason": "内存不够",
+		"steps": []map[string]any{{"capability": "swap.set", "summary": "添加 1G swap", "params": map[string]any{"size_gb": 1}}},
+	})
+	collector := &planCollector{}
+	if _, err := a.toolProposePlan(context.WithValue(ctx, planCollectorKey{}, collector), args); err != nil {
+		t.Fatal(err)
+	}
+	planID := collector.ids[0]
+	if _, err := a.ExecutePlan(planID, []int{0}); err != nil {
+		t.Fatal(err)
+	}
+	v := waitPlan(t, a, planID)
+	st := v.StepList[0]
+	if st.Status != actions.StatusDone || st.LogID == 0 {
+		t.Fatalf("step = %+v", st)
+	}
+
+	logs, err := a.ExecLogs(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawAICheck, sawBefore bool
+	for _, e := range logs {
+		sawAICheck = sawAICheck || (e.Origin == OriginAI && e.Kind == store.ExecRead && e.Title == "只读检查：system")
+		sawBefore = sawBefore || (e.Origin == OriginPlan && strings.HasPrefix(e.Title, "执行前识别"))
+	}
+	if !sawAICheck || !sawBefore {
+		t.Fatalf("read-only runs missing from the log: %+v", logs)
+	}
+	e, err := a.ExecEntry(st.LogID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Kind != store.ExecChange || e.Title != "添加 swap（size_gb=1）" || e.Note != "添加 1G swap" || !e.CanRollback ||
+		e.RollbackHow == "" || e.Script != fakeSwap || !strings.Contains(e.Commands, "actions.log") || !strings.Contains(e.Output, "已添加 swap") {
+		t.Fatalf("change entry = %+v", e)
+	}
+	if e.RollbackFile == "" {
+		t.Fatal("no rollback file on the server")
+	}
+
+	rolled, err := a.Rollback(ctx, e.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rolled.UndoneBy == 0 || rolled.CanRollback {
+		t.Fatalf("after rollback = %+v", rolled)
+	}
+	rb, _ := a.ExecEntry(rolled.UndoneBy)
+	if rb.Kind != store.ExecRollback || rb.UndoOf != e.ID || rb.Status != actions.StatusUndone || !strings.Contains(rb.Commands, "rollback.sh.done") {
+		t.Fatalf("rollback entry = %+v", rb)
+	}
+	if p, _ := a.Plan(planID); p.StepList[0].Status != actions.StatusUndone {
+		t.Fatalf("plan step not marked undone: %+v", p.StepList[0])
+	}
+	if _, err := a.Rollback(ctx, e.ID); err == nil {
+		t.Fatal("rolled back twice")
+	}
+	if _, err := a.UndoPlan(ctx, planID); err == nil {
+		t.Fatal("nothing left to undo, UndoPlan should say so")
+	}
+	if changes, _ := a.ExecLogs(true); len(changes) != 2 {
+		t.Fatalf("changes only = %+v", changes)
+	}
+}
+
+func TestUndoPlanRevertsEverything(t *testing.T) {
+	t.Cleanup(actions.UseTestScripts(t.TempDir(), func(string) (string, error) { return fakeSwap, nil }))
+	a := newApp(t)
+	srv := sshtest.Start(t, "root", "pw")
+	sv := addTestServer(t, a, srv, "pw")
+	args, _ := json.Marshal(map[string]any{
+		"server_id": sv.ID, "title": "加 swap", "reason": "内存不够",
+		"steps": []map[string]any{{"capability": "swap.set", "summary": "添加 swap", "params": map[string]any{"size_gb": 2}}},
+	})
+	collector := &planCollector{}
+	if _, err := a.toolProposePlan(context.WithValue(context.Background(), planCollectorKey{}, collector), args); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.ExecutePlan(collector.ids[0], []int{0}); err != nil {
+		t.Fatal(err)
+	}
+	waitPlan(t, a, collector.ids[0])
+	v, err := a.UndoPlan(context.Background(), collector.ids[0])
+	if err != nil || v.StepList[0].Status != actions.StatusUndone {
+		t.Fatalf("undo plan: %+v %v", v.StepList, err)
+	}
+}
+
+func TestInterruptedRunsAreFlagged(t *testing.T) {
+	st, err := store.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	e, _ := st.AddExec(store.ExecLog{ServerID: 1, ServerName: "blog", Origin: OriginPlan, Kind: store.ExecChange, Title: "x", Status: store.ExecRunning})
+	steps, _ := json.Marshal([]core.Step{{Capability: "swap.set", Status: "running"}, {Capability: "logs.clean", Status: "queued"}})
+	p, _ := st.AddPlan(store.Plan{ServerID: 1, Title: "t", Steps: string(steps), Status: core.PlanRunning})
+
+	a := New(st, secrets.OpenFile(t.TempDir()))
+	if got, _ := st.GetExec(e.ID); got.Status != store.ExecInterrupted {
+		t.Fatalf("exec status = %q", got.Status)
+	}
+	v, _ := a.Plan(p.ID)
+	if v.Status != core.PlanPartial || v.StepList[0].Status != store.ExecInterrupted || v.StepList[1].Status != store.ExecInterrupted {
+		t.Fatalf("plan = %+v", v)
 	}
 }

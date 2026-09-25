@@ -3,6 +3,7 @@ package actions
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -101,9 +102,7 @@ func testEnv(t *testing.T) *Env {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { c.Close() })
-	old := loadScript
-	loadScript = func(string) (string, error) { return testScript, nil }
-	t.Cleanup(func() { loadScript = old })
+	t.Cleanup(UseTestScripts(t.TempDir(), func(string) (string, error) { return testScript, nil }))
 	return &Env{SSH: c, User: "root", PollInterval: 50 * time.Millisecond}
 }
 
@@ -123,13 +122,36 @@ func TestRunScriptDetachedApplyAndUndo(t *testing.T) {
 		t.Fatalf("argument was not passed intact: %v", out.Log)
 	}
 
+	// Everything that ran is recorded, and the server keeps its own journal.
+	cmds := strings.Join(out.Commands, "\n")
+	if out.Script != testScript || out.ScriptName != "t.sh" || !strings.Contains(cmds, "actions.log") || !strings.Contains(cmds, "rollback.sh") {
+		t.Fatalf("recorded commands: %q script=%q", cmds, out.ScriptName)
+	}
+	journal, err := os.ReadFile(journalDir + "/actions.log")
+	if err != nil || !strings.Contains(string(journal), "action=t mode=apply") || !strings.Contains(string(journal), "rc=0") {
+		t.Fatalf("journal = %q, %v", journal, err)
+	}
+
+	// The rollback file on the server works on its own, without Miao Panel.
+	if out.RollbackFile == "" || !strings.HasPrefix(out.RollbackFile, backupRoot+"/") {
+		t.Fatalf("rollback file = %q", out.RollbackFile)
+	}
+	res, err := env.SSH.Run(ctx, "sh "+shq(out.RollbackFile), "", 4096)
+	if err != nil || res.ExitCode != 0 || !strings.Contains(res.Stdout, "undo token=["+tricky+"]") {
+		t.Fatalf("standalone rollback: %+v %v", res, err)
+	}
+
 	undone := Undo(ctx, env, r, out.Undo)
 	if undone.Status != StatusUndone || !strings.Contains(strings.Join(undone.Log, "\n"), "undo token=["+tricky+"]") {
 		t.Fatalf("undo: %+v", undone)
 	}
+	RetireRollbackFile(ctx, env, out.RollbackFile)
+	if _, err := os.Stat(out.RollbackFile + ".done"); err != nil {
+		t.Fatalf("rollback file not retired: %v", err)
+	}
 
 	r.Values["code"] = "20"
-	if out := Apply(ctx, env, r, nil); out.Status != StatusRolledBack {
+	if out := Apply(ctx, env, r, nil); out.Status != StatusRolledBack || out.RollbackFile != "" {
 		t.Fatalf("exit 20 should be rolled back, got %+v", out)
 	}
 	r.Values["code"] = "10"

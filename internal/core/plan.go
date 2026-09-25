@@ -35,26 +35,28 @@ type Step struct {
 	Log        []string          `json:"log,omitempty"`
 	Undo       map[string]string `json:"undo,omitempty"`
 	FinishedAt string            `json:"finishedAt,omitempty"`
+	LogID      int64             `json:"logId,omitempty"` // execution log entry of the latest run
 }
 
 // capabilityRisk is the policy table for known capabilities. Anything else
 // would have to run as a free command, which is at least R2.
 var capabilityRisk = map[string]Risk{
-	"backup.create":   R1,
-	"snapshot.create": R1,
-	"firewall.open":   R1,
-	"swap.set":        R2,
-	"php_fpm.set":     R2,
-	"php_ini.set":     R2,
-	"mysql.vars.set":  R2,
-	"redis.conf.set":  R2,
-	"app.limits.set":  R2,
-	"nginx.conf.set":  R2,
-	"logs.clean":      R2,
-	"service.restart": R2,
-	"free_command":    R2,
-	"package.install": R3,
-	"server.reboot":   R3,
+	"backup.create":     R1,
+	"container.restart": R2,
+	"snapshot.create":   R1,
+	"firewall.open":     R1,
+	"swap.set":          R2,
+	"php_fpm.set":       R2,
+	"php_ini.set":       R2,
+	"mysql.vars.set":    R2,
+	"redis.conf.set":    R2,
+	"app.limits.set":    R2,
+	"nginx.conf.set":    R2,
+	"logs.clean":        R2,
+	"service.restart":   R2,
+	"free_command":      R2,
+	"package.install":   R3,
+	"server.reboot":     R3,
 }
 
 // RiskOf returns the policy risk for a capability.

@@ -13,7 +13,6 @@ import (
 	"github.com/bocmiao/CloudConsoleWithAI/internal/profile"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/sshx"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/store"
-	"github.com/bocmiao/CloudConsoleWithAI/scripts"
 )
 
 // runTimeout bounds one plan run.
@@ -50,7 +49,7 @@ func prepareSteps(steps []core.Step, adapter string) []core.Step {
 	for i := range steps {
 		s := &steps[i]
 		s.Risk = core.RiskOf(s.Capability)
-		s.Executable, s.Blocked, s.Status, s.Log, s.Undo = false, "", "", nil, nil
+		s.Executable, s.Blocked, s.Status, s.Log, s.Undo, s.LogID = false, "", "", nil, nil, 0
 		r, err := actions.Resolve(s.Capability, s.Params, adapter)
 		if err != nil {
 			s.Blocked = err.Error()
@@ -168,18 +167,17 @@ func (a *App) env(ctx context.Context, id int64) (store.Server, *actions.Env, er
 	if raw, _, err := a.Store.GetProfile(id); err == nil {
 		env.PanelApps = profile.Parse(raw).Panel.Apps
 	}
-	if sv.Adapter == "1panel" {
-		if env.OnePanel, err = a.onePanelClient(id, c); err != nil {
-			c.Close()
-			return sv, nil, err
-		}
+	// Configured or not, the 1Panel API is only used by 1Panel operations.
+	if env.OnePanel, err = a.onePanelClient(id, c); err != nil {
+		c.Close()
+		return sv, nil, err
 	}
 	return sv, env, nil
 }
 
 // discoverWith refreshes the saved profile over an open connection.
-func (a *App) discoverWith(ctx context.Context, sv store.Server, c *sshx.Client) (*profile.Profile, error) {
-	res, err := c.RunScript(ctx, sv.Username, scripts.Discover, nil, maxDiscoverOutput)
+func (a *App) discoverWith(ctx context.Context, sv store.Server, c *sshx.Client, title string) (*profile.Profile, error) {
+	res, err := a.runDiscover(ctx, sv, c, nil, title)
 	if err != nil || strings.TrimSpace(res.Stdout) == "" {
 		return nil, fmt.Errorf("识别失败：%v", err)
 	}
@@ -247,7 +245,7 @@ func now() string { return time.Now().UTC().Format(time.RFC3339) }
 
 func (a *App) runPlan(planID, serverID int64) {
 	defer a.locks.release(serverID)
-	ctx, cancel := context.WithTimeout(context.Background(), runTimeout)
+	ctx, cancel := context.WithTimeout(withOrigin(context.Background(), OriginPlan), runTimeout)
 	defer cancel()
 	v, err := a.Plan(planID)
 	if err != nil {
@@ -270,7 +268,7 @@ func (a *App) runPlan(planID, serverID int64) {
 	}
 	defer func() { env.SSH.Close() }()
 
-	if prof, err := a.discoverWith(ctx, sv, env.SSH); err == nil {
+	if prof, err := a.discoverWith(ctx, sv, env.SSH, "执行前识别（记录修改前的状态）"); err == nil {
 		v.Before = snapshotOf(prof)
 		env.PanelApps = prof.Panel.Apps
 	}
@@ -290,12 +288,22 @@ func (a *App) runPlan(planID, serverID int64) {
 			st.Status, st.Log, ok = actions.StatusRefused, []string{err.Error()}, false
 			continue
 		}
-		st.Status = "running"
+		title := r.Cap.Title
+		if pt := paramText(r.Values); pt != "" {
+			title += "（" + pt + "）"
+		}
+		entry := a.startExec(store.ExecLog{
+			ServerID: sv.ID, ServerName: sv.Name, Adapter: sv.Adapter, Origin: OriginPlan, Kind: store.ExecChange,
+			Title: title, Note: st.Summary, Capability: st.Capability, Params: st.Params, Via: r.Impl.Via,
+			Reversible: r.Cap.Reversible, PlanID: v.ID, StepIdx: i,
+		})
+		st.Status, st.LogID = "running", entry.ID
 		_ = a.savePlan(&v)
 		out := actions.Apply(ctx, env, r, func(log []string) {
 			st.Log = log
 			_ = a.savePlan(&v)
 		})
+		a.finishAction(&entry, out)
 		st.Status, st.Log, st.Undo, st.FinishedAt = out.Status, out.Log, out.Undo, now()
 		if out.Status != actions.StatusDone {
 			ok = false
@@ -303,7 +311,7 @@ func (a *App) runPlan(planID, serverID int64) {
 		_ = a.savePlan(&v)
 		_ = a.Store.Audit("system", "plan.step", st.Title, fmt.Sprintf("%s：%s", sv.Name, out.Status))
 	}
-	if prof, err := a.discoverWith(ctx, sv, env.SSH); err == nil {
+	if prof, err := a.discoverWith(ctx, sv, env.SSH, "执行后识别（对比效果）"); err == nil {
 		v.After = snapshotOf(prof)
 	}
 	v.Status = core.PlanDone
@@ -322,7 +330,7 @@ func (a *App) UndoStep(ctx context.Context, planID int64, idx int) (PlanView, er
 	if idx < 0 || idx >= len(v.StepList) {
 		return v, userErr("步骤编号不对")
 	}
-	st := &v.StepList[idx]
+	st := v.StepList[idx]
 	if st.Status != actions.StatusDone || !st.Reversible {
 		return v, userErr("这一步不能撤销")
 	}
@@ -334,31 +342,54 @@ func (a *App) UndoStep(ctx context.Context, planID int64, idx int) (PlanView, er
 		return v, userErr("这台服务器上正在执行其他操作，请稍后再试")
 	}
 	defer a.locks.release(sv.ID)
-	r, err := actions.Resolve(st.Capability, st.Params, sv.Adapter)
+	var e store.ExecLog
+	if st.LogID > 0 {
+		if e, err = a.Store.GetExec(st.LogID); err != nil {
+			return v, err
+		}
+	} else {
+		// Run before the execution log existed: the step has what we need.
+		e = store.ExecLog{
+			ServerID: sv.ID, ServerName: sv.Name, Adapter: sv.Adapter, Kind: store.ExecChange, Title: st.Title,
+			Capability: st.Capability, Params: st.Params, Via: st.Via, Status: st.Status, Undo: st.Undo,
+			Reversible: st.Reversible, PlanID: planID, StepIdx: idx,
+		}
+	}
+	if e.UndoneBy > 0 {
+		return v, userErr("这一步已经回滚过了")
+	}
+	_, rerr := a.rollback(ctx, &e)
+	nv, err := a.Plan(planID)
+	if rerr != nil {
+		return nv, rerr
+	}
+	return nv, err
+}
+
+// UndoPlan reverts every executed, reversible step of a plan, newest
+// first, and stops at the first failure.
+func (a *App) UndoPlan(ctx context.Context, planID int64) (PlanView, error) {
+	v, err := a.Plan(planID)
 	if err != nil {
-		return v, userErr("无法撤销：%v", err)
-	}
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
-	defer cancel()
-	sv, env, err := a.env(ctx, sv.ID)
-	if err != nil {
-		return v, friendlySSHError(err)
-	}
-	defer func() { env.SSH.Close() }()
-	out := actions.Undo(ctx, env, r, st.Undo)
-	st.Log = append(st.Log, out.Log...)
-	if out.Status == actions.StatusUndone {
-		st.Status = actions.StatusUndone
-	}
-	if prof, err := a.discoverWith(ctx, sv, env.SSH); err == nil {
-		v.After = snapshotOf(prof)
-	}
-	if err := a.savePlan(&v); err != nil {
 		return v, err
 	}
-	_ = a.Store.Audit("user", "plan.undo", st.Title, fmt.Sprintf("%s：%s", sv.Name, out.Status))
-	if out.Status != actions.StatusUndone {
-		return v, userErr("撤销没有成功：%s", strings.Join(out.Log, "；"))
+	if v.Status == core.PlanRunning {
+		return v, userErr("这个清单正在执行中")
 	}
-	return v, nil
+	var idxs []int
+	for i, st := range v.StepList {
+		if st.Status == actions.StatusDone && st.Reversible {
+			idxs = append(idxs, i)
+		}
+	}
+	if len(idxs) == 0 {
+		return v, userErr("这份清单里没有可以撤销的步骤")
+	}
+	for j := len(idxs) - 1; j >= 0; j-- {
+		if _, err := a.UndoStep(ctx, planID, idxs[j]); err != nil {
+			nv, _ := a.Plan(planID)
+			return nv, userErr("第 %d 步撤销失败，已停止：%v", idxs[j]+1, err)
+		}
+	}
+	return a.Plan(planID)
 }

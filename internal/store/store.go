@@ -4,6 +4,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -65,6 +66,34 @@ CREATE TABLE IF NOT EXISTS ai_usage (
 	output_tokens INTEGER NOT NULL,
 	cost          REAL NOT NULL,
 	currency      TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS exec_logs (
+	id            INTEGER PRIMARY KEY AUTOINCREMENT,
+	started_at    TEXT NOT NULL,
+	finished_at   TEXT NOT NULL DEFAULT '',
+	server_id     INTEGER NOT NULL,
+	server_name   TEXT NOT NULL,           -- kept so the entry survives deleting the server
+	adapter       TEXT NOT NULL DEFAULT '',-- environment the action was resolved for
+	origin        TEXT NOT NULL,           -- ai | user | plan
+	kind          TEXT NOT NULL,           -- read | change | rollback
+	title         TEXT NOT NULL,
+	note          TEXT NOT NULL DEFAULT '',-- the AI's explanation of a change
+	capability    TEXT NOT NULL DEFAULT '',
+	params        TEXT NOT NULL DEFAULT '',-- JSON
+	via           TEXT NOT NULL DEFAULT '',
+	commands      TEXT NOT NULL DEFAULT '',-- exactly what ran on the server
+	script_name   TEXT NOT NULL DEFAULT '',
+	script        TEXT NOT NULL DEFAULT '',-- full text of an action script
+	status        TEXT NOT NULL,
+	output        TEXT NOT NULL DEFAULT '',
+	undo          TEXT NOT NULL DEFAULT '',-- JSON: what a rollback needs
+	reversible    INTEGER NOT NULL DEFAULT 0,
+	backup_dir    TEXT NOT NULL DEFAULT '',
+	rollback_file TEXT NOT NULL DEFAULT '',-- standalone rollback script on the server
+	plan_id       INTEGER NOT NULL DEFAULT 0,
+	step_idx      INTEGER NOT NULL DEFAULT -1,
+	undo_of       INTEGER NOT NULL DEFAULT 0,-- for a rollback: the entry it reverted
+	undone_by     INTEGER NOT NULL DEFAULT 0 -- for a change: the rollback that reverted it
 );
 CREATE TABLE IF NOT EXISTS settings (
 	key   TEXT PRIMARY KEY,
@@ -348,6 +377,148 @@ func (s *Store) ListAudit(limit int) ([]AuditEntry, error) {
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// ExecLog is one thing Miao Panel ran on a server: a read-only check, a
+// change, or a rollback.
+type ExecLog struct {
+	ID           int64             `json:"id"`
+	StartedAt    string            `json:"startedAt"`
+	FinishedAt   string            `json:"finishedAt"`
+	ServerID     int64             `json:"serverId"`
+	ServerName   string            `json:"serverName"`
+	Adapter      string            `json:"adapter"`
+	Origin       string            `json:"origin"`
+	Kind         string            `json:"kind"`
+	Title        string            `json:"title"`
+	Note         string            `json:"note"`
+	Capability   string            `json:"capability"`
+	Params       map[string]any    `json:"params"`
+	Via          string            `json:"via"`
+	Commands     string            `json:"commands"`
+	ScriptName   string            `json:"scriptName"`
+	Script       string            `json:"script,omitempty"`
+	Status       string            `json:"status"`
+	Output       string            `json:"output,omitempty"`
+	Undo         map[string]string `json:"undo"`
+	Reversible   bool              `json:"reversible"`
+	BackupDir    string            `json:"backupDir"`
+	RollbackFile string            `json:"rollbackFile"`
+	PlanID       int64             `json:"planId"`
+	StepIdx      int               `json:"stepIdx"`
+	UndoOf       int64             `json:"undoOf"`
+	UndoneBy     int64             `json:"undoneBy"`
+}
+
+// Execution kinds.
+const (
+	ExecRead     = "read"
+	ExecChange   = "change"
+	ExecRollback = "rollback"
+)
+
+// ExecRunning marks an entry whose command has not finished;
+// ExecInterrupted one that never will, because Miao Panel was closed.
+const (
+	ExecRunning     = "running"
+	ExecInterrupted = "interrupted"
+)
+
+func jsonText(v any) string {
+	data, err := json.Marshal(v)
+	if err != nil || string(data) == "null" {
+		return ""
+	}
+	return string(data)
+}
+
+// AddExec records the start of an execution and returns it with its ID.
+func (s *Store) AddExec(e ExecLog) (ExecLog, error) {
+	if e.StartedAt == "" {
+		e.StartedAt = now()
+	}
+	res, err := s.db.Exec(`INSERT INTO exec_logs (started_at, finished_at, server_id, server_name, adapter, origin, kind,
+		title, note, capability, params, via, commands, script_name, script, status, output, undo, reversible,
+		backup_dir, rollback_file, plan_id, step_idx, undo_of, undone_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		e.StartedAt, e.FinishedAt, e.ServerID, e.ServerName, e.Adapter, e.Origin, e.Kind,
+		e.Title, e.Note, e.Capability, jsonText(e.Params), e.Via, e.Commands, e.ScriptName, e.Script, e.Status, e.Output,
+		jsonText(e.Undo), e.Reversible, e.BackupDir, e.RollbackFile, e.PlanID, e.StepIdx, e.UndoOf, e.UndoneBy)
+	if err != nil {
+		return e, err
+	}
+	e.ID, err = res.LastInsertId()
+	return e, err
+}
+
+// UpdateExec saves an entry's outcome.
+func (s *Store) UpdateExec(e ExecLog) error {
+	_, err := s.db.Exec(`UPDATE exec_logs SET finished_at = ?, commands = ?, script_name = ?, script = ?, status = ?,
+		output = ?, undo = ?, backup_dir = ?, rollback_file = ?, undone_by = ? WHERE id = ?`,
+		e.FinishedAt, e.Commands, e.ScriptName, e.Script, e.Status, e.Output, jsonText(e.Undo),
+		e.BackupDir, e.RollbackFile, e.UndoneBy, e.ID)
+	return err
+}
+
+const execCols = `id, started_at, finished_at, server_id, server_name, adapter, origin, kind, title, note, capability,
+	params, via, commands, script_name, %s, status, %s, undo, reversible, backup_dir, rollback_file, plan_id, step_idx,
+	undo_of, undone_by`
+
+func scanExec(row interface{ Scan(...any) error }) (ExecLog, error) {
+	var e ExecLog
+	var params, undo string
+	err := row.Scan(&e.ID, &e.StartedAt, &e.FinishedAt, &e.ServerID, &e.ServerName, &e.Adapter, &e.Origin, &e.Kind,
+		&e.Title, &e.Note, &e.Capability, &params, &e.Via, &e.Commands, &e.ScriptName, &e.Script, &e.Status, &e.Output,
+		&undo, &e.Reversible, &e.BackupDir, &e.RollbackFile, &e.PlanID, &e.StepIdx, &e.UndoOf, &e.UndoneBy)
+	if err != nil {
+		return e, err
+	}
+	if params != "" {
+		_ = json.Unmarshal([]byte(params), &e.Params)
+	}
+	if undo != "" {
+		_ = json.Unmarshal([]byte(undo), &e.Undo)
+	}
+	return e, nil
+}
+
+// GetExec returns one entry with its script and output.
+func (s *Store) GetExec(id int64) (ExecLog, error) {
+	e, err := scanExec(s.db.QueryRow(`SELECT `+fmt.Sprintf(execCols, "script", "output")+` FROM exec_logs WHERE id = ?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return ExecLog{}, ErrNotFound
+	}
+	return e, err
+}
+
+// ListExec returns entries newest first, without scripts and output. With
+// changesOnly, read-only checks are left out.
+func (s *Store) ListExec(changesOnly bool, limit int) ([]ExecLog, error) {
+	where := ""
+	if changesOnly {
+		where = `WHERE kind != 'read'`
+	}
+	rows, err := s.db.Query(`SELECT `+fmt.Sprintf(execCols, "''", "''")+` FROM exec_logs `+where+` ORDER BY id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ExecLog{}
+	for rows.Next() {
+		e, err := scanExec(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// MarkInterrupted flags entries left running by a previous run of Miao
+// Panel, which was closed before they finished.
+func (s *Store) MarkInterrupted() error {
+	_, err := s.db.Exec(`UPDATE exec_logs SET status = ?, finished_at = ? WHERE status = ?`, ExecInterrupted, now(), ExecRunning)
+	return err
 }
 
 // Usage is the token count and cost of one model call.

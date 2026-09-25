@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bocmiao/CloudConsoleWithAI/internal/actions"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/profile"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/secrets"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/sshx"
@@ -35,7 +36,9 @@ type App struct {
 
 // New creates an App.
 func New(st *store.Store, sec secrets.Store) *App {
-	return &App{Store: st, Secrets: sec, Dial: sshx.Dial, convs: map[string]*conversation{}}
+	a := &App{Store: st, Secrets: sec, Dial: sshx.Dial, convs: map[string]*conversation{}}
+	a.recoverInterrupted()
+	return a
 }
 
 // UserError is an error whose message is meant for the user as-is.
@@ -211,10 +214,15 @@ func (a *App) TestConnection(ctx context.Context, id int64) (TestResult, error) 
 		return TestResult{}, err
 	}
 	defer c.Close()
+	e := a.startExec(store.ExecLog{ServerID: sv.ID, ServerName: sv.Name, Adapter: sv.Adapter, Origin: originOf(ctx),
+		Kind: store.ExecRead, Title: "测试连接", Via: "SSH 命令"})
 	res, err := c.Run(ctx, "uname -srm; id -un", "", 4096)
+	e.Commands = res.Command
 	if err != nil {
+		a.finishExec(&e, actions.StatusFailed, err.Error())
 		return TestResult{}, friendlySSHError(err)
 	}
+	a.finishExec(&e, actions.StatusDone, res.Stdout+res.Stderr)
 	_ = a.Store.Audit("user", "server.test", sv.Name, "ok")
 	return TestResult{HostKey: sv.HostKey, Output: strings.TrimSpace(res.Stdout)}, nil
 }
@@ -236,7 +244,11 @@ func (a *App) Discover(ctx context.Context, id int64, sections []string) (string
 		return "", nil, err
 	}
 	defer c.Close()
-	res, err := c.RunScript(ctx, sv.Username, scripts.Discover, sections, maxDiscoverOutput)
+	title := "识别服务器环境"
+	if len(sections) > 0 {
+		title = "只读检查：" + strings.Join(sections, "、")
+	}
+	res, err := a.runDiscover(ctx, sv, c, sections, title)
 	if err != nil {
 		return "", nil, friendlySSHError(err)
 	}
@@ -256,6 +268,23 @@ func (a *App) Discover(ctx context.Context, id int64, sections []string) (string
 			fmt.Sprintf("适配器 %s，发现 %d 项", prof.Adapter, len(prof.Findings)))
 	}
 	return raw, prof, nil
+}
+
+// runDiscover runs the read-only discover.sh and logs it.
+func (a *App) runDiscover(ctx context.Context, sv store.Server, c *sshx.Client, sections []string, title string) (sshx.Result, error) {
+	e := a.startExec(store.ExecLog{ServerID: sv.ID, ServerName: sv.Name, Adapter: sv.Adapter, Origin: originOf(ctx),
+		Kind: store.ExecRead, Title: title, Via: "只读脚本", ScriptName: "discover.sh"})
+	res, err := c.RunScript(ctx, sv.Username, scripts.Discover, sections, maxDiscoverOutput)
+	e.Commands = "# 把只读识别脚本 discover.sh 通过标准输入交给服务器执行（全文见「脚本」）\n" + res.Command
+	switch {
+	case err != nil:
+		a.finishExec(&e, actions.StatusFailed, err.Error())
+	case strings.TrimSpace(res.Stdout) == "":
+		a.finishExec(&e, actions.StatusFailed, fmt.Sprintf("没有输出（退出码 %d）：%s", res.ExitCode, res.Stderr))
+	default:
+		a.finishExec(&e, actions.StatusDone, res.Stdout)
+	}
+	return res, err
 }
 
 // ProfileView is a server with its latest parsed profile.
