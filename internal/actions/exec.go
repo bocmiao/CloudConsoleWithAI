@@ -21,7 +21,7 @@ import (
 
 // Env is what running an action on one server needs.
 type Env struct {
-	SSH  *sshx.Client
+	SSH  sshx.Conn
 	User string // login user; others than root go through passwordless sudo
 	// OnePanel is set when the server's 1Panel API is configured.
 	OnePanel *onepanel.Client
@@ -30,7 +30,7 @@ type Env struct {
 	// Cloud is set when Tencent Cloud credentials are configured.
 	Cloud *tencent.Client
 	// Reconnect replaces SSH after a dropped connection while waiting.
-	Reconnect func(ctx context.Context) (*sshx.Client, error)
+	Reconnect func(ctx context.Context) (sshx.Conn, error)
 	// PollInterval defaults to one second.
 	PollInterval time.Duration
 }
@@ -352,7 +352,7 @@ func tracePanel(env *Env, run func() Outcome) Outcome {
 	}
 	defer func() { env.OnePanel.Trace = nil }()
 	out := run()
-	out.Commands = append([]string{"# 通过 SSH 隧道调用服务器本机的 1Panel 接口（请求带签名，密钥不记录）；1Panel 自己的「日志审计 → 操作日志」里也有记录"}, cmds...)
+	out.Commands = append([]string{"# 在服务器本机调用 1Panel 接口（经 SSH 隧道，或用自动化助手运行 curl；请求带签名，密钥不记录）；1Panel 自己的「日志审计 → 操作日志」里也有记录"}, cmds...)
 	return out
 }
 
@@ -381,6 +381,8 @@ func applyPanel(ctx context.Context, env *Env, r Resolved, progress Progress) Ou
 			return applyBackup(ctx, env, r.Values, out, report)
 		case "java_heap":
 			return applyJavaHeap(ctx, env, r.Values, out, report)
+		case "site_create":
+			return applySiteCreate(ctx, env, r.Values, out, report)
 		}
 		out.Status = StatusFailed
 		out.logf("未知的面板操作 %s", r.Impl.Panel)
@@ -561,6 +563,8 @@ func undoPanel(ctx context.Context, env *Env, r Resolved, undo map[string]string
 			}
 		case "app_limits":
 			err = undoAppLimits(ctx, env.OnePanel, undo)
+		case "site_create":
+			err = undoSiteCreate(ctx, env.OnePanel, undo)
 		case "java_heap":
 			id, _ := strconv.ParseUint(undo["install_id"], 10, 64)
 			var cfg onepanel.ContainerConfig

@@ -136,7 +136,7 @@ func TestEdgeOneWithoutSite(t *testing.T) {
 	env, _ := cloudEnv(t)
 	r := mustResolve(t, "eo.domain.add", map[string]any{"domain": "shop.other.org", "origin": "1.2.3.4"})
 	out := Apply(context.Background(), env, r, nil)
-	if out.Status != StatusRefused || !strings.Contains(strings.Join(out.Log, ""), "EdgeOne 控制台添加站点") {
+	if out.Status != StatusRefused || !strings.Contains(strings.Join(out.Log, ""), "eo.zone.create") {
 		t.Fatalf("got %+v", out)
 	}
 	if out := Apply(context.Background(), &Env{}, r, nil); out.Status != StatusRefused || !strings.Contains(strings.Join(out.Log, ""), "腾讯云密钥") {

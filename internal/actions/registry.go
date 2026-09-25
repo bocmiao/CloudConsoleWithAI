@@ -18,7 +18,7 @@ import (
 type Param struct {
 	Name     string
 	Desc     string
-	Kind     string // int | enum | name | host | subdomain | text | instance | region | port | cidr
+	Kind     string // int | enum | name | host | subdomain | text | instance | region | port | cidr | iplist | path
 	Min, Max int
 	Enum     []string
 	Default  string
@@ -62,6 +62,7 @@ var (
 	instanceRe  = regexp.MustCompile(`^(lhins|ins)-[a-z0-9]{6,20}$`)
 	regionRe    = regexp.MustCompile(`^[a-z]{2,3}(-[a-z0-9]+){1,3}$`)
 	portRe      = regexp.MustCompile(`^(ALL|[0-9]{1,5}(-[0-9]{1,5})?(,[0-9]{1,5}(-[0-9]{1,5})?)*)$`)
+	pathRe      = regexp.MustCompile(`^/[A-Za-z0-9._~!&()*+,;=:@%/-]*$`)
 	subdomainRe = regexp.MustCompile(`^(@|\*|(\*\.)?[A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9])?)*)$`)
 )
 
@@ -233,10 +234,90 @@ func init() {
 			Undo: "改回原来的源站和端口"}},
 	})
 	register(&Capability{
+		Name: "eo.zone.create", Title: "新建 EdgeOne 站点", Risk: core.R2, Reversible: true,
+		Params: []Param{
+			{Name: "domain", Kind: "host", Required: true, Desc: "主域名，例如 example.com（不要带 www 等前缀）"},
+			{Name: "area", Kind: "enum", Enum: []string{"mainland", "overseas", "global"}, Required: true,
+				Desc: "加速区域：mainland 中国大陆（域名要有 ICP 备案）、overseas 全球不含中国大陆、global 全球含中国大陆（要备案）"},
+			{Name: "plan_id", Kind: "name", Desc: "绑定哪个套餐（edgeone- 开头），不填自动选一个还能绑定站点的套餐"},
+		},
+		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "eo_zone_create",
+			Downtime: "不影响现有访问：CNAME 接入的站点要等 DNS 解析到 EdgeOne 后才生效。域名在本账号的 DNSPod 里时，会自动添加验证记录完成归属验证",
+			Undo:     "删除新建的站点和自动添加的验证记录（站点里已经有加速域名时拒绝删除）"}},
+	})
+	register(&Capability{
+		Name: "eo.ip.block", Title: "EdgeOne 封禁 IP", Risk: core.R2, Reversible: true,
+		Params: []Param{
+			{Name: "domain", Kind: "host", Required: true, Desc: "站点或站点下的域名，用来找到 EdgeOne 站点；封禁对整个站点生效"},
+			{Name: "ips", Kind: "iplist", Required: true, Desc: "要封禁的 IP 或网段，多个用逗号分隔，例如 1.2.3.4,5.6.7.0/24"},
+		},
+		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "eo_ip_block", Downtime: "这些 IP 的访问会被 EdgeOne 拦截（返回拦截页面），几十秒内生效",
+			Undo: "把 Miao Panel 的封禁列表恢复成修改前的样子"}},
+	})
+	register(&Capability{
+		Name: "eo.ip.unblock", Title: "EdgeOne 解除 IP 封禁", Risk: core.R1, Reversible: true,
+		Params: []Param{
+			{Name: "domain", Kind: "host", Required: true, Desc: "站点或站点下的域名"},
+			{Name: "ips", Kind: "iplist", Required: true, Desc: "要解除封禁的 IP 或网段，多个用逗号分隔（只能解除 Miao Panel 封禁的）"},
+		},
+		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "eo_ip_unblock", Downtime: "这些 IP 可以重新访问",
+			Undo: "重新封禁这些 IP"}},
+	})
+	register(&Capability{
+		Name: "eo.ratelimit.set", Title: "EdgeOne 速率限制", Risk: core.R2, Reversible: true,
+		Params: []Param{
+			{Name: "domain", Kind: "host", Required: true, Desc: "填站点主域名表示整个站点；填站点下的域名只限制这个域名"},
+			{Name: "path", Kind: "path", Desc: "只统计路径里包含这段的请求，例如 /wp-login.php、/api/；不填统计所有请求"},
+			{Name: "threshold", Kind: "int", Min: 1, Max: 100000, Required: true, Desc: "同一个 IP 在统计周期内最多请求多少次"},
+			{Name: "period", Kind: "enum", Enum: []string{"1s", "5s", "10s", "20s", "30s", "40s", "50s", "1m", "2m", "5m", "10m", "1h"}, Default: "1m", Desc: "统计周期"},
+			{Name: "action", Kind: "enum", Enum: []string{"challenge", "deny", "monitor"}, Default: "challenge",
+				Desc: "超过后怎么处理：challenge JavaScript 挑战（真人浏览器能自动通过）、deny 直接拦截、monitor 只记录"},
+			{Name: "duration", Kind: "text", Default: "10m", Desc: "处理持续多久，例如 10m、1h（秒/分钟最多 120，小时最多 48，天最多 30）"},
+		},
+		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "eo_ratelimit", Downtime: "超过阈值的访客会被挑战或拦截；阈值太低可能误伤正常用户",
+			Undo: "删除这条规则；如果是修改了已有的同名规则，恢复原来的设置"}},
+		Check: func(v map[string]string) error { return checkDuration(v["duration"]) },
+	})
+	register(&Capability{
+		Name: "eo.ratelimit.remove", Title: "删除 EdgeOne 速率限制规则", Risk: core.R2, Reversible: true,
+		Params: []Param{
+			{Name: "domain", Kind: "host", Required: true, Desc: "站点或站点下的域名"},
+			{Name: "name", Kind: "text", Required: true, Desc: "规则名称（tencent_eo_security 返回的 name）"},
+		},
+		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "eo_ratelimit_remove", Downtime: "这条限制不再生效",
+			Undo: "把规则按原来的设置加回去"}},
+	})
+	register(&Capability{
+		Name: "eo.cc.set", Title: "设置 EdgeOne CC 防护", Risk: core.R2, Reversible: true,
+		Params: []Param{
+			{Name: "domain", Kind: "host", Required: true, Desc: "站点或站点下的域名；对整个站点生效"},
+			{Name: "enabled", Kind: "enum", Enum: []string{"on", "off"}, Required: true, Desc: "on 开启，off 关闭"},
+			{Name: "sensitivity", Kind: "enum", Enum: []string{"Loose", "Moderate", "Strict"}, Default: "Moderate", Desc: "灵敏度：Loose 宽松、Moderate 适中、Strict 严格"},
+			{Name: "action", Kind: "enum", Enum: []string{"challenge", "deny", "monitor"}, Default: "challenge", Desc: "识别到攻击后怎么处理"},
+		},
+		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "eo_cc", Downtime: "EdgeOne 按访问基线自动识别异常的高频访问并处理；严格模式可能误伤正常用户",
+			Undo: "恢复原来的 CC 防护设置"}},
+	})
+	register(&Capability{
 		Name: "container.restart", Title: "重启容器", Risk: core.R2,
 		NoUndo: "重启容器没有修改任何配置，不需要回滚",
 		Params: []Param{{Name: "name", Kind: "name", Required: true, Desc: "Docker 容器名（docker ps 里的 NAMES，例如 1Panel-halo-xxxx）"}},
 		Impls:  map[string]Impl{"*": {Via: "系统脚本", Script: "container_restart.sh", Args: []string{"name"}, Downtime: "这个容器里的服务会中断几秒到几十秒"}},
+	})
+	register(&Capability{
+		Name: "site.create", Title: "新建网站", Risk: core.R2, Reversible: true,
+		Params: []Param{
+			{Name: "domain", Kind: "host", Required: true, Desc: "网站域名，例如 blog.example.com"},
+			{Name: "type", Kind: "enum", Enum: []string{"proxy", "static"}, Default: "proxy",
+				Desc: "proxy 反向代理到一个应用（例如 1Panel 里装的 Halo、WordPress 容器）；static 静态网站（放 HTML 文件）"},
+			{Name: "app", Kind: "name", Desc: "反向代理到哪个 1Panel 应用（用它对外的端口），例如 halo"},
+			{Name: "proxy", Kind: "text", Desc: "或者直接填后端地址，例如 http://127.0.0.1:8090"},
+		},
+		Impls: map[string]Impl{
+			"1panel": {Via: "1Panel 接口", Panel: "site_create", Downtime: "不影响其他网站；1Panel 会重新加载 OpenResty",
+				Undo: "在 1Panel 里删除这个网站和它的目录（不删除应用和数据库；静态网站目录里后来放的文件也会一起删除）"},
+		},
+		Check: checkSiteParams,
 	})
 	register(&Capability{
 		Name: "app.limits.set", Title: "设置应用内存上限", Risk: core.R2, Reversible: true,
@@ -506,6 +587,20 @@ func paramValue(p Param, raw any) (string, error) {
 	case "cidr":
 		if err := checkCIDR(s); err != nil {
 			return "", err
+		}
+		return s, nil
+	case "iplist":
+		ips, err := parseIPList(s)
+		if err != nil {
+			return "", fmt.Errorf("参数 %s：%v", p.Name, err)
+		}
+		if len(ips) > 200 {
+			return "", fmt.Errorf("参数 %s 一次最多 200 个 IP", p.Name)
+		}
+		return strings.Join(ips, ","), nil
+	case "path":
+		if len(s) > 256 || !pathRe.MatchString(s) {
+			return "", fmt.Errorf("参数 %s 要是以 / 开头的网址路径，例如 /wp-login.php，%q 不是", p.Name, s)
 		}
 		return s, nil
 	case "text":

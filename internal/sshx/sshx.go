@@ -34,6 +34,17 @@ type Target struct {
 	KnownHostKey string
 }
 
+// Conn runs commands on a server: an SSH connection, or another way in
+// such as Tencent Cloud's automation agent.
+type Conn interface {
+	// Run executes cmd with stdin, keeping at most maxOut bytes of each
+	// stream. A non-zero exit status is reported in Result, not as an error.
+	Run(ctx context.Context, cmd, stdin string, maxOut int) (Result, error)
+	// RunScript pipes script into a shell, as root where possible.
+	RunScript(ctx context.Context, user, script string, args []string, maxOut int) (Result, error)
+	Close() error
+}
+
 // Client is an open SSH connection.
 type Client struct {
 	conn *ssh.Client
@@ -185,9 +196,9 @@ func (c *Client) Run(ctx context.Context, cmd, stdin string, maxOut int) (Result
 	return res, nil
 }
 
-// scriptCmd runs a script from stdin with bash when present, else sh.
+// ScriptCmd runs a script from stdin with bash when present, else sh.
 // args must already be safe words (callers validate them).
-func scriptCmd(args []string, sudo bool) string {
+func ScriptCmd(args []string, sudo bool) string {
 	cmd := `sh -c 'if command -v bash >/dev/null 2>&1; then exec bash -s -- "$@"; else exec sh -s -- "$@"; fi' miaopanel`
 	if len(args) > 0 {
 		cmd += " " + strings.Join(args, " ")
@@ -203,10 +214,10 @@ func scriptCmd(args []string, sudo bool) string {
 // privileges otherwise.
 func (c *Client) RunScript(ctx context.Context, user, script string, args []string, maxOut int) (Result, error) {
 	if user != "root" {
-		res, err := c.Run(ctx, scriptCmd(args, true), script, maxOut)
+		res, err := c.Run(ctx, ScriptCmd(args, true), script, maxOut)
 		if err == nil && !(res.ExitCode != 0 && strings.Contains(res.Stderr, "sudo")) {
 			return res, nil
 		}
 	}
-	return c.Run(ctx, scriptCmd(args, false), script, maxOut)
+	return c.Run(ctx, ScriptCmd(args, false), script, maxOut)
 }

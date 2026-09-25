@@ -72,9 +72,10 @@ func (a *App) SaveOnePanel(id int64, s OnePanelSettings, apiKey string) (OnePane
 	return a.OnePanel(id)
 }
 
-// onePanelClient builds an API client over an open SSH connection, or
-// returns nil when the server has no 1Panel API configured.
-func (a *App) onePanelClient(id int64, c *sshx.Client) (*onepanel.Client, error) {
+// onePanelClient builds an API client over an open connection, or returns
+// nil when the server has no 1Panel API configured. Over SSH requests go
+// through a tunnel; otherwise curl runs them on the server.
+func (a *App) onePanelClient(id int64, c sshx.Conn) (*onepanel.Client, error) {
 	s, err := a.OnePanel(id)
 	if err != nil || !s.HasKey || s.Port == 0 {
 		return nil, err
@@ -83,10 +84,17 @@ func (a *App) onePanelClient(id int64, c *sshx.Client) (*onepanel.Client, error)
 	if err != nil {
 		return nil, err
 	}
-	return onepanel.New(c.Dial, s.Port, key, s.Host, s.Scheme), nil
+	if sc, ok := c.(*sshx.Client); ok {
+		return onepanel.New(sc.Dial, s.Port, key, s.Host, s.Scheme), nil
+	}
+	shell := func(ctx context.Context, cmd, stdin string, maxOut int) (string, string, int, error) {
+		res, err := c.Run(ctx, cmd, stdin, maxOut)
+		return res.Stdout, res.Stderr, res.ExitCode, err
+	}
+	return onepanel.NewOverShell(shell, s.Port, key, s.Host, s.Scheme), nil
 }
 
-// TestOnePanel checks the 1Panel API through the SSH tunnel and remembers
+// TestOnePanel checks the 1Panel API from the server itself and remembers
 // whether the panel speaks HTTP or HTTPS.
 func (a *App) TestOnePanel(ctx context.Context, id int64) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)

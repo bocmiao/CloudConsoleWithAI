@@ -60,11 +60,17 @@ func friendly(e *Error) string {
 		return "电脑的时间不准，腾讯云拒绝了请求，请把电脑时间校准后再试"
 	case strings.HasPrefix(e.Code, "AuthFailure.UnauthorizedOperation"), strings.HasPrefix(e.Code, "UnauthorizedOperation"):
 		name := map[string]string{"dnspod": "DNSPod", "teo": "EdgeOne", "lighthouse": "轻量应用服务器", "cvm": "云服务器 CVM",
-			"vpc": "私有网络（安全组）", "cbs": "云硬盘（快照）", "monitor": "云监控"}[e.Service]
+			"vpc": "私有网络（安全组）", "cbs": "云硬盘（快照）", "monitor": "云监控", "tat": "自动化助手（TAT）"}[e.Service]
 		if name == "" {
 			name = e.Service
 		}
 		return fmt.Sprintf("这个腾讯云子账号没有 %s 的权限，请在访问管理里给它授权（%s）", name, e.Message)
+	case e.Code == "ResourceUnavailable.AgentNotInstalled":
+		return "这台服务器没有安装腾讯云自动化助手（TAT）"
+	case e.Code == "ResourceUnavailable.AgentStatusNotOnline":
+		return "这台服务器的腾讯云自动化助手（TAT）不在线：请确认服务器正在运行，并且 tat_agent 服务正常"
+	case e.Code == "ResourceUnavailable.InstanceStateNotRunning":
+		return "这台服务器没有在运行"
 	}
 	return fmt.Sprintf("腾讯云返回错误：%s（%s）", e.Message, e.Code)
 }

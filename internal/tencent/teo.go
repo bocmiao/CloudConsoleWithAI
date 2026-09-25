@@ -16,6 +16,27 @@ type Zone struct {
 	Area       string `json:"Area"`   // global, mainland, overseas
 	Paused     bool   `json:"Paused"`
 	CnameSpeed string `json:"CnameSpeedUp"`
+	// CnameStatus is finished once a CNAME site proved the domain is yours.
+	CnameStatus string       `json:"CnameStatus"`
+	CNAMEDetail *CNAMEDetail `json:"CNAMEDetail,omitempty"`
+}
+
+// CNAMEDetail describes a CNAME site.
+type CNAMEDetail struct {
+	OwnershipVerification *Ownership `json:"OwnershipVerification"`
+}
+
+// Ownership is how EdgeOne asks you to prove a domain is yours.
+type Ownership struct {
+	DNSVerification *DNSVerification `json:"DnsVerification"`
+}
+
+// Verification is the TXT record a CNAME site still waits for, if any.
+func (z Zone) Verification() *DNSVerification {
+	if z.Type != "partial" || z.CnameStatus != "pending" || z.CNAMEDetail == nil || z.CNAMEDetail.OwnershipVerification == nil {
+		return nil
+	}
+	return z.CNAMEDetail.OwnershipVerification.DNSVerification
 }
 
 // Zones lists the account's EdgeOne sites.
@@ -114,9 +135,7 @@ type DNSVerification struct {
 // ownership is not verified yet, EdgeOne returns the record to add.
 func (c *Client) CreateAccelerationDomain(ctx context.Context, d NewDomain) (*DNSVerification, error) {
 	var out struct {
-		OwnershipVerification *struct {
-			DNSVerification *DNSVerification `json:"DnsVerification"`
-		} `json:"OwnershipVerification"`
+		OwnershipVerification *Ownership `json:"OwnershipVerification"`
 	}
 	err := c.Call(ctx, "teo", teoVersion, "CreateAccelerationDomain", map[string]any{
 		"ZoneId": d.ZoneID, "DomainName": d.Name,

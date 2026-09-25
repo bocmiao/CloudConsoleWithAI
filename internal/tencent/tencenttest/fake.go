@@ -52,6 +52,16 @@ type Fake struct {
 	Firewall  map[string][]tencent.FirewallRule // by instance or security group
 	Snaps     map[string]*tencent.Snapshot
 	Regions   []string // regions the fake saw requests for
+
+	// EdgeOne: site-level security policies by zone, and plans.
+	Policies map[string]map[string]any
+	Plans    []tencent.Plan
+
+	// TAT: which instances have the agent online, and a function that
+	// plays the server running a command (defaults to echoing nothing).
+	AgentOnline map[string]bool
+	RunShell    func(instance, script string) (output string, exitCode int)
+	invocations map[string]*invocation
 }
 
 // Instance is a server held by the fake.
@@ -76,7 +86,19 @@ func New() *Fake {
 		Snaps:   map[string]*tencent.Snapshot{},
 		nextID:  100,
 		Records: map[string][]Record{"example.com": {{RecordID: 1, Name: "blog", Type: "A", Value: "1.2.3.4", Line: tencent.DefaultLine, TTL: 600, Status: "ENABLE"}}},
-		Zones:   []tencent.Zone{{ZoneID: "zone-abc", ZoneName: "example.com", Type: "partial", Status: "active", Area: "mainland"}},
+		Zones:   []tencent.Zone{{ZoneID: "zone-abc", ZoneName: "example.com", Type: "partial", Status: "active", Area: "mainland", CnameStatus: "finished"}},
+		Policies: map[string]map[string]any{"zone-abc": {
+			"CustomRules": map[string]any{"Rules": []any{map[string]any{"Id": "rule-1", "Name": "屏蔽海外", "Condition": "${http.request.ip.country} in ['US']",
+				"Action": map[string]any{"Name": "Deny"}, "Enabled": "on", "RuleType": "BasicAccessRule"}}},
+			"RateLimitingRules":  map[string]any{"Rules": []any{}},
+			"HttpDDoSProtection": map[string]any{"AdaptiveFrequencyControl": map[string]any{"Id": "afc-1", "Enabled": "off"}, "ClientFiltering": map[string]any{"Id": "cf-1", "Enabled": "on", "Action": map[string]any{"Name": "Monitor"}}},
+		}},
+		Plans: []tencent.Plan{
+			{PlanID: "edgeone-full1", PlanType: "plan-personal", Area: "mainland", Status: "normal", Bindable: "false"},
+			{PlanID: "edgeone-free2", PlanType: "plan-basic", Area: "global", Status: "normal", Bindable: "true"},
+		},
+		AgentOnline: map[string]bool{"lhins-abc12345": true},
+		invocations: map[string]*invocation{},
 	}
 	return f
 }

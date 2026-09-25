@@ -1,0 +1,161 @@
+package tencenttest
+
+import (
+	"fmt"
+	"net/http"
+	"strings"
+
+	"github.com/bocmiao/CloudConsoleWithAI/internal/tencent"
+)
+
+// serveEO handles EdgeOne sites, plans and security policies.
+func (f *Fake) serveEO(w http.ResponseWriter, service, action string, in map[string]any) bool {
+	str := func(k string) string { s, _ := in[k].(string); return s }
+	zone := func(id string) *tencent.Zone {
+		for i := range f.Zones {
+			if f.Zones[i].ZoneID == id {
+				return &f.Zones[i]
+			}
+		}
+		return nil
+	}
+	switch service + " " + action {
+	case "teo DescribeSecurityPolicy":
+		if str("Entity") != "ZoneDefaultPolicy" {
+			fail(w, "InvalidParameter", "fake only has site policies")
+			return true
+		}
+		p := f.Policies[str("ZoneId")]
+		if p == nil {
+			p = map[string]any{}
+			f.Policies[str("ZoneId")] = p
+		}
+		ok(w, map[string]any{"SecurityPolicy": p})
+	case "teo ModifySecurityPolicy":
+		p := f.Policies[str("ZoneId")]
+		sp, _ := in["SecurityPolicy"].(map[string]any)
+		if p == nil || str("Entity") != "ZoneDefaultPolicy" || sp == nil {
+			fail(w, "InvalidParameter.Security", "bad policy request")
+			return true
+		}
+		for _, module := range []string{"CustomRules", "RateLimitingRules"} {
+			m, present := sp[module].(map[string]any)
+			if !present {
+				continue // left out: unchanged
+			}
+			rules, _ := m["Rules"].([]any)
+			for _, r := range rules {
+				rule := r.(map[string]any)
+				if rule["Name"] == "" || rule["Condition"] == nil || !strings.Contains(rule["Condition"].(string), "${") {
+					fail(w, "InvalidParameter.Security", "rule needs a name and a condition")
+					return true
+				}
+				if id, _ := rule["Id"].(string); id == "" {
+					f.nextID++
+					rule["Id"] = fmt.Sprintf("rule-%d", f.nextID)
+				}
+			}
+			p[module] = map[string]any{"Rules": rules} // a list replaces the old one
+		}
+		if d, present := sp["HttpDDoSProtection"].(map[string]any); present {
+			cur, _ := p["HttpDDoSProtection"].(map[string]any)
+			if cur == nil {
+				cur = map[string]any{}
+			}
+			for k, sub := range d {
+				m := sub.(map[string]any)
+				if _, has := m["Id"]; has {
+					fail(w, "InvalidParameter.Security", "Id is output only")
+					return true
+				}
+				m["Id"] = k + "-id"
+				cur[k] = m
+			}
+			p["HttpDDoSProtection"] = cur
+		}
+		ok(w, nil)
+	case "teo DescribePlans":
+		ok(w, map[string]any{"TotalCount": len(f.Plans), "Plans": f.Plans})
+	case "teo CreateZone":
+		name := str("ZoneName")
+		if str("Type") != "partial" || strings.Count(name, ".") != 1 {
+			fail(w, "InvalidParameterValue.ZoneNameNotSupportSubDomain", "站点名称不支持子域名。")
+			return true
+		}
+		for _, z := range f.Zones {
+			if z.ZoneName == name {
+				fail(w, "ResourceInUse.Others", "站点已存在。")
+				return true
+			}
+		}
+		for i, p := range f.Plans {
+			if p.PlanID == str("PlanId") {
+				if p.Bindable != "true" {
+					fail(w, "LimitExceeded.ZoneBindPlan", "套餐可绑定站点数已达上限。")
+					return true
+				}
+				f.Plans[i].Bindable = "false"
+				f.nextID++
+				id := fmt.Sprintf("zone-%d", f.nextID)
+				dv := &tencent.DNSVerification{Subdomain: "_eo-verification", RecordType: "TXT", RecordValue: "verify-" + id}
+				z := tencent.Zone{ZoneID: id, ZoneName: name, Type: "partial", Status: "pending", Area: str("Area"), CnameStatus: "pending"}
+				z.CNAMEDetail = &tencent.CNAMEDetail{OwnershipVerification: &tencent.Ownership{DNSVerification: dv}}
+				f.Zones = append(f.Zones, z)
+				f.Policies[id] = map[string]any{}
+				ok(w, map[string]any{"ZoneId": id, "OwnershipVerification": map[string]any{"DnsVerification": dv}})
+				return true
+			}
+		}
+		fail(w, "InvalidParameter.PlanNotFound", "套餐不存在。")
+	case "teo VerifyOwnership":
+		for i, z := range f.Zones {
+			if z.ZoneName != str("Domain") {
+				continue
+			}
+			dv := z.Verification()
+			if dv == nil {
+				ok(w, map[string]any{"Status": "success"})
+				return true
+			}
+			for _, r := range f.Records[z.ZoneName] {
+				if r.Name == dv.Subdomain && r.Type == "TXT" && r.Value == dv.RecordValue {
+					f.Zones[i].CnameStatus, f.Zones[i].Status = "finished", "active"
+					ok(w, map[string]any{"Status": "success"})
+					return true
+				}
+			}
+			ok(w, map[string]any{"Status": "fail", "Result": "没有找到验证记录"})
+			return true
+		}
+		fail(w, "ResourceNotFound", "站点不存在。")
+	case "teo ModifyZoneStatus":
+		z := zone(str("ZoneId"))
+		if z == nil {
+			fail(w, "ResourceNotFound", "站点不存在。")
+			return true
+		}
+		z.Paused, _ = in["Paused"].(bool)
+		ok(w, nil)
+	case "teo DeleteZone":
+		for i, z := range f.Zones {
+			if z.ZoneID == str("ZoneId") {
+				if !z.Paused {
+					fail(w, "OperationDenied.DisableZoneNotCompleted", "请先停用站点。")
+					return true
+				}
+				f.Zones = append(f.Zones[:i:i], f.Zones[i+1:]...)
+				for j := range f.Plans {
+					if f.Plans[j].PlanID == "edgeone-free2" {
+						f.Plans[j].Bindable = "true"
+					}
+				}
+				ok(w, nil)
+				return true
+			}
+		}
+		fail(w, "ResourceNotFound", "站点不存在。")
+	default:
+		return false
+	}
+	return true
+}

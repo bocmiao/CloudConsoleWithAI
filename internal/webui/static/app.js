@@ -691,15 +691,19 @@ const app = createApp({
     provide('openLog', openLog);
 
     function openAdd() {
-      Object.assign(addForm, { name: '', host: '', port: 22, username: 'root', authKind: 'password', password: '', keyPath: '', keyPassphrase: '' });
+      Object.assign(addForm, { name: '', host: '', port: 22, username: 'root', authKind: 'password', password: '', keyPath: '', keyPassphrase: '', instanceId: '', region: '' });
       showAdd.value = true;
       cloudPick.value = '';
       if (tc.configured) api('GET', '/api/tencent/servers').then(r => { cloudList.value = (r.servers || []).filter(s => s.publicIPs && s.publicIPs.length); }).catch(() => {});
     }
     function pickCloud() {
       const s = cloudList.value.find(x => x.id === cloudPick.value);
-      if (!s) return;
-      Object.assign(addForm, { name: s.name, host: s.publicIPs[0], username: /ubuntu/i.test(s.os) ? 'ubuntu' : 'root' });
+      if (!s) {
+        Object.assign(addForm, { instanceId: '', region: '', authKind: addForm.authKind === 'tat' ? 'password' : addForm.authKind });
+        return;
+      }
+      Object.assign(addForm, { name: s.name, host: s.publicIPs[0], username: /ubuntu/i.test(s.os) ? 'ubuntu' : 'root',
+        instanceId: s.id, region: s.region, authKind: 'tat' });
     }
     function askAI(text) { draft.value = text; tab.value = 'chat'; newChat(); }
     const daysTo = t => t ? Math.floor((new Date(t) - Date.now()) / 86400000) : null;

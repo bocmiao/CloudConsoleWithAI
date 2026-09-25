@@ -207,18 +207,20 @@ func (a *App) toolTencentEO(ctx context.Context, raw json.RawMessage) (string, e
 		var b strings.Builder
 		if domain == "" {
 			if len(zones) == 0 {
-				return "EdgeOne 里还没有站点。添加站点需要在 EdgeOne 控制台选择套餐（涉及计费），要由用户自己操作。", nil
+				b.WriteString("EdgeOne 里还没有站点。\n")
 			}
 			for _, z := range zones {
-				fmt.Fprintf(&b, "站点 %s（%s）接入方式=%s 状态=%s 加速区域=%s 已停用=%v\n", z.ZoneName, z.ZoneID, orDash(zoneTypeName[z.Type]+" "+z.Type), z.Status, z.Area, z.Paused)
+				fmt.Fprintf(&b, "站点 %s（%s）接入方式=%s 状态=%s 加速区域=%s 已停用=%v%s\n", z.ZoneName, z.ZoneID, orDash(zoneTypeName[z.Type]+" "+z.Type), z.Status, z.Area, z.Paused, verifyText(z))
 			}
+			b.WriteString(plansText(ctx, c))
 			return b.String(), nil
 		}
 		z, ok := tencent.ZoneFor(zones, domain)
 		if !ok {
-			return fmt.Sprintf("EdgeOne 里没有 %s 所在的站点（现有 %d 个站点）。添加站点需要在 EdgeOne 控制台选择套餐（涉及计费），要由用户自己操作。", domain, len(zones)), nil
+			return fmt.Sprintf("EdgeOne 里没有 %s 所在的站点（现有 %d 个站点）。可以用 eo.zone.create 新建站点（CNAME 接入，绑定一个还能绑定站点的套餐）。\n", domain, len(zones)) +
+				plansText(ctx, c), nil
 		}
-		fmt.Fprintf(&b, "站点 %s（%s）接入方式=%s 状态=%s 加速区域=%s\n", z.ZoneName, z.ZoneID, zoneTypeName[z.Type]+" "+z.Type, z.Status, z.Area)
+		fmt.Fprintf(&b, "站点 %s（%s）接入方式=%s 状态=%s 加速区域=%s%s\n", z.ZoneName, z.ZoneID, zoneTypeName[z.Type]+" "+z.Type, z.Status, z.Area, verifyText(z))
 		name := ""
 		if domain != z.ZoneName {
 			name = domain

@@ -193,7 +193,7 @@ func (a *App) env(ctx context.Context, id int64) (store.Server, *actions.Env, er
 		return sv, nil, err
 	}
 	env := &actions.Env{SSH: c, User: sv.Username, PollInterval: a.PollInterval}
-	env.Reconnect = func(ctx context.Context) (*sshx.Client, error) {
+	env.Reconnect = func(ctx context.Context) (sshx.Conn, error) {
 		_, nc, err := a.connect(ctx, id)
 		return nc, err
 	}
@@ -225,7 +225,7 @@ func (a *App) planServer(id int64) (store.Server, error) {
 }
 
 // discoverWith refreshes the saved profile over an open connection.
-func (a *App) discoverWith(ctx context.Context, sv store.Server, c *sshx.Client, title string) (*profile.Profile, error) {
+func (a *App) discoverWith(ctx context.Context, sv store.Server, c sshx.Conn, title string) (*profile.Profile, error) {
 	res, err := a.runDiscover(ctx, sv, c, nil, title)
 	if err != nil || strings.TrimSpace(res.Stdout) == "" {
 		return nil, fmt.Errorf("识别失败：%v", err)

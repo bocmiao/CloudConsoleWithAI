@@ -6,10 +6,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
@@ -134,5 +136,59 @@ func TestBoundDomainHostHeader(t *testing.T) {
 	}
 	if gotHost != "panel.example.com" {
 		t.Fatalf("Host = %q", gotHost)
+	}
+}
+
+// localShell runs commands with the local sh, standing in for a server.
+func localShell(ctx context.Context, cmd, stdin string, _ int) (string, string, int, error) {
+	c := exec.CommandContext(ctx, "sh", "-c", cmd)
+	c.Stdin = strings.NewReader(stdin)
+	var out, errb strings.Builder
+	c.Stdout, c.Stderr = &out, &errb
+	err := c.Run()
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return out.String(), errb.String(), ee.ExitCode(), nil
+	}
+	return out.String(), errb.String(), 0, err
+}
+
+func portOf(t *testing.T, srv *httptest.Server) int {
+	_, p, _ := net.SplitHostPort(srv.Listener.Addr().String())
+	n, err := strconv.Atoi(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestClientOverShell(t *testing.T) {
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("curl not installed")
+	}
+	var bodies []map[string]any
+	srv := httptest.NewServer(fakePanel(t, &bodies))
+	defer srv.Close()
+	c := NewOverShell(localShell, portOf(t, srv), key, "", "")
+	ctx := context.Background()
+	if info, err := c.Probe(ctx); err != nil || info != "blog ubuntu 24.04" {
+		t.Fatalf("probe: %q %v", info, err)
+	}
+	if err := c.UpdateFPMConfig(ctx, 3, map[string]string{"pm.max_children": "it's 10"}); err != nil {
+		t.Fatal(err)
+	}
+	last := bodies[len(bodies)-1]
+	if last["params"].(map[string]any)["pm.max_children"] != "it's 10" {
+		t.Fatalf("body = %v", last)
+	}
+	if _, err := NewOverShell(localShell, portOf(t, srv), "wrong", "", "").Probe(ctx); err == nil || !strings.Contains(err.Error(), "API 密钥不对") {
+		t.Fatalf("wrong key: %v", err)
+	}
+
+	tls := httptest.NewTLSServer(fakePanel(t, &bodies))
+	defer tls.Close()
+	c = NewOverShell(localShell, portOf(t, tls), key, "", "")
+	if _, err := c.Probe(ctx); err != nil || c.Scheme != "https" {
+		t.Fatalf("probe over TLS: %v scheme=%s", err, c.Scheme)
 	}
 }

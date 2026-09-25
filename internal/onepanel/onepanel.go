@@ -40,12 +40,6 @@ type Client struct {
 // Host header for panels that are bound to a domain.
 func New(dial Dialer, port int, key, host, scheme string) *Client {
 	target := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
-	if host == "" {
-		host = target
-	}
-	if scheme == "" {
-		scheme = "http"
-	}
 	tr := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) { return dial("tcp", target) },
 		// The connection already runs inside the authenticated SSH tunnel to
@@ -53,7 +47,81 @@ func New(dial Dialer, port int, key, host, scheme string) *Client {
 		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
 		ResponseHeaderTimeout: 2 * time.Minute,
 	}
-	return &Client{hc: &http.Client{Transport: tr, Timeout: 3 * time.Minute}, Scheme: scheme, host: host, key: key, now: time.Now}
+	return newClient(tr, target, key, host, scheme)
+}
+
+// Shell runs a command on the server with stdin.
+type Shell func(ctx context.Context, cmd, stdin string, maxOut int) (stdout, stderr string, exitCode int, err error)
+
+// NewOverShell creates a client for servers without an SSH tunnel (such as
+// ones reached through Tencent Cloud's automation agent): each request
+// runs curl on the server against the panel's loopback port.
+func NewOverShell(sh Shell, port int, key, host, scheme string) *Client {
+	target := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	return newClient(&curlTransport{sh: sh, target: target}, target, key, host, scheme)
+}
+
+func newClient(rt http.RoundTripper, target, key, host, scheme string) *Client {
+	if host == "" {
+		host = target
+	}
+	if scheme == "" {
+		scheme = "http"
+	}
+	return &Client{hc: &http.Client{Transport: rt, Timeout: 3 * time.Minute}, Scheme: scheme, host: host, key: key, now: time.Now}
+}
+
+// curlTransport sends a request by running curl on the server.
+type curlTransport struct {
+	sh     Shell
+	target string
+}
+
+func shq(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+const statusMark = "\nMIAOHTTP "
+
+func (t *curlTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	var body []byte
+	if req.Body != nil {
+		var err error
+		if body, err = io.ReadAll(req.Body); err != nil {
+			return nil, err
+		}
+		req.Body.Close()
+	}
+	u := req.URL.Scheme + "://" + t.target + req.URL.EscapedPath()
+	if req.URL.RawQuery != "" {
+		u += "?" + req.URL.RawQuery
+	}
+	cmd := []string{"curl", "-sS", "-k", "--noproxy", "'*'", "-m", "170", "-X", req.Method, "-o", "-", "-w", shq(statusMark + "%{http_code}"), "-H", shq("Host: " + req.Host)}
+	for k, vs := range req.Header {
+		for _, v := range vs {
+			cmd = append(cmd, "-H", shq(k+": "+v))
+		}
+	}
+	if body != nil {
+		cmd = append(cmd, "--data-binary", "@-")
+	}
+	cmd = append(cmd, shq(u))
+	stdout, stderr, code, err := t.sh(req.Context(), strings.Join(cmd, " "), string(body), 8<<20)
+	switch {
+	case err != nil:
+		return nil, err
+	case code == 127:
+		return nil, errors.New("服务器上没有 curl，无法调用 1Panel 接口")
+	case code != 0:
+		return nil, fmt.Errorf("curl 连接 1Panel 失败（退出码 %d）：%s", code, strings.TrimSpace(stderr))
+	}
+	i := strings.LastIndex(stdout, statusMark)
+	if i < 0 {
+		return nil, fmt.Errorf("curl 返回了无法识别的内容：%.200s", stdout)
+	}
+	status, _ := strconv.Atoi(strings.TrimSpace(stdout[i+len(statusMark):]))
+	return &http.Response{
+		StatusCode: status, Status: http.StatusText(status), Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1,
+		Header: http.Header{}, Body: io.NopCloser(strings.NewReader(stdout[:i])), Request: req,
+	}, nil
 }
 
 // Error is an error reported by 1Panel.
@@ -228,6 +296,7 @@ type InstalledApp struct {
 	ServiceName string `json:"serviceName"` // the app's service in its docker-compose file
 	Status      string `json:"status"`
 	Version     string `json:"version"`
+	HTTPPort    int    `json:"httpPort"` // the port the app is published on, if any
 }
 
 // InstalledApps lists the installed apps.
@@ -325,4 +394,74 @@ func (c *Client) FindBackup(ctx context.Context, kind, name, detail, taskID stri
 		}
 	}
 	return BackupRecord{}, false, err
+}
+
+// Website is a site on 1Panel's 网站 page (served by its OpenResty).
+type Website struct {
+	ID            uint   `json:"id"`
+	PrimaryDomain string `json:"primaryDomain"`
+	Alias         string `json:"alias"`
+	Type          string `json:"type"` // static, proxy, deployment, runtime, subsite, stream
+	Status        string `json:"status"`
+	Proxy         string `json:"proxy"`
+	SitePath      string `json:"sitePath"`
+}
+
+// Websites lists all websites.
+func (c *Client) Websites(ctx context.Context) ([]Website, error) {
+	var list []Website
+	err := c.do(ctx, http.MethodGet, "/websites/list", nil, &list)
+	return list, err
+}
+
+// WebsiteGroup returns the default website group, which new sites go in.
+func (c *Client) WebsiteGroup(ctx context.Context) (uint, error) {
+	var groups []struct {
+		ID        uint `json:"id"`
+		IsDefault bool `json:"isDefault"`
+	}
+	if err := c.do(ctx, http.MethodPost, "/groups/search", map[string]any{"type": "website"}, &groups); err != nil {
+		return 0, err
+	}
+	for _, g := range groups {
+		if g.IsDefault {
+			return g.ID, nil
+		}
+	}
+	if len(groups) > 0 {
+		return groups[0].ID, nil
+	}
+	return 0, errors.New("1Panel 里没有网站分组")
+}
+
+// NewWebsite is what creating a static or reverse-proxy site needs.
+type NewWebsite struct {
+	Type    string // static or proxy
+	Domain  string
+	Alias   string // the site's directory name under /www/sites
+	Proxy   string // for proxy sites, e.g. http://127.0.0.1:8090
+	Port    int    // OpenResty's HTTP port
+	GroupID uint
+}
+
+// CreateWebsite adds a site; 1Panel writes its OpenResty config and
+// reloads it before answering.
+func (c *Client) CreateWebsite(ctx context.Context, w NewWebsite) error {
+	in := map[string]any{
+		"type": w.Type, "alias": w.Alias, "webSiteGroupID": w.GroupID, "remark": "Miao Panel",
+		"domains": []map[string]any{{"domain": w.Domain, "port": w.Port, "ssl": false}},
+		// Only used for sites that install an app, but always validated.
+		"appType": "installed",
+	}
+	if w.Type == "proxy" {
+		in["proxy"] = w.Proxy
+	}
+	return c.do(ctx, http.MethodPost, "/websites", in, nil)
+}
+
+// DeleteWebsite removes a site with its OpenResty config and directory,
+// keeping any app and database it uses.
+func (c *Client) DeleteWebsite(ctx context.Context, id uint) error {
+	return c.do(ctx, http.MethodPost, "/websites/del",
+		map[string]any{"id": id, "deleteApp": false, "deleteBackup": false, "forceDelete": false, "deleteDB": false}, nil)
 }

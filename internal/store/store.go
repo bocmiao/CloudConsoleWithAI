@@ -29,11 +29,13 @@ CREATE TABLE IF NOT EXISTS servers (
 	host       TEXT NOT NULL,
 	port       INTEGER NOT NULL DEFAULT 22,
 	username   TEXT NOT NULL,
-	auth_kind  TEXT NOT NULL,              -- password | key
+	auth_kind  TEXT NOT NULL,              -- password | key | tat
 	key_path   TEXT NOT NULL DEFAULT '',
 	host_key   TEXT NOT NULL DEFAULT '',   -- SHA256 fingerprint recorded on first connect
 	adapter    TEXT NOT NULL DEFAULT '',   -- 1panel | bt | linux, from discovery
-	created_at TEXT NOT NULL
+	created_at TEXT NOT NULL,
+	instance_id TEXT NOT NULL DEFAULT '',  -- Tencent Cloud instance, for auth_kind tat
+	region      TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS host_profiles (
 	server_id    INTEGER PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
@@ -152,9 +154,15 @@ func open(dsn string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
-	if err := addColumn(db, "plans", "result", "TEXT NOT NULL DEFAULT ''"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate: %w", err)
+	for _, c := range [][3]string{
+		{"plans", "result", "TEXT NOT NULL DEFAULT ''"},
+		{"servers", "instance_id", "TEXT NOT NULL DEFAULT ''"},
+		{"servers", "region", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := addColumn(db, c[0], c[1], c[2]); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("migrate: %w", err)
+		}
 	}
 	return &Store{db: db}, nil
 }
@@ -202,13 +210,17 @@ type Server struct {
 	CreatedAt string `json:"createdAt"`
 	// ProfiledAt is when discovery last ran; empty if never.
 	ProfiledAt string `json:"profiledAt"`
+	// InstanceID and Region locate a Tencent Cloud instance reached
+	// through its automation agent (AuthKind "tat").
+	InstanceID string `json:"instanceId,omitempty"`
+	Region     string `json:"region,omitempty"`
 }
 
 // AddServer inserts a server and returns it with its new ID.
 func (s *Store) AddServer(sv Server) (Server, error) {
 	sv.CreatedAt = now()
-	res, err := s.db.Exec(`INSERT INTO servers (name, host, port, username, auth_kind, key_path, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`, sv.Name, sv.Host, sv.Port, sv.Username, sv.AuthKind, sv.KeyPath, sv.CreatedAt)
+	res, err := s.db.Exec(`INSERT INTO servers (name, host, port, username, auth_kind, key_path, created_at, instance_id, region)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, sv.Name, sv.Host, sv.Port, sv.Username, sv.AuthKind, sv.KeyPath, sv.CreatedAt, sv.InstanceID, sv.Region)
 	if err != nil {
 		return Server{}, err
 	}
@@ -217,12 +229,12 @@ func (s *Store) AddServer(sv Server) (Server, error) {
 }
 
 const serverCols = `s.id, s.name, s.host, s.port, s.username, s.auth_kind, s.key_path, s.host_key, s.adapter, s.created_at,
-	COALESCE(p.collected_at, '')`
+	COALESCE(p.collected_at, ''), s.instance_id, s.region`
 
 func scanServer(row interface{ Scan(...any) error }) (Server, error) {
 	var sv Server
 	err := row.Scan(&sv.ID, &sv.Name, &sv.Host, &sv.Port, &sv.Username, &sv.AuthKind, &sv.KeyPath,
-		&sv.HostKey, &sv.Adapter, &sv.CreatedAt, &sv.ProfiledAt)
+		&sv.HostKey, &sv.Adapter, &sv.CreatedAt, &sv.ProfiledAt, &sv.InstanceID, &sv.Region)
 	return sv, err
 }
 

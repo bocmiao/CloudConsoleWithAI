@@ -205,7 +205,7 @@ func (f *Fake) serveMore(w http.ResponseWriter, service, action, region string, 
 		}
 		ok(w, nil)
 	default:
-		return false
+		return f.serveEO(w, service, action, in) || f.serveTAT(w, service, action, region, in)
 	}
 	return true
 }

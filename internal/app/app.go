@@ -19,6 +19,7 @@ import (
 	"github.com/bocmiao/CloudConsoleWithAI/internal/secrets"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/sshx"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/store"
+	"github.com/bocmiao/CloudConsoleWithAI/internal/tatx"
 	"github.com/bocmiao/CloudConsoleWithAI/scripts"
 )
 
@@ -83,11 +84,20 @@ type AddServerRequest struct {
 	Host          string `json:"host"`
 	Port          int    `json:"port"`
 	Username      string `json:"username"`
-	AuthKind      string `json:"authKind"` // password | key
+	AuthKind      string `json:"authKind"` // password | key | tat
 	Password      string `json:"password"`
 	KeyPath       string `json:"keyPath"`
 	KeyPassphrase string `json:"keyPassphrase"`
+	// For tat: the Tencent Cloud instance, reached through its automation
+	// agent instead of SSH.
+	InstanceID string `json:"instanceId"`
+	Region     string `json:"region"`
 }
+
+var (
+	instanceRe = regexp.MustCompile(`^(lhins|ins)-[a-z0-9]{6,20}$`)
+	regionRe   = regexp.MustCompile(`^[a-z]{2,3}(-[a-z0-9]+){1,3}$`)
+)
 
 var hostRe = regexp.MustCompile(`^[A-Za-z0-9.:\-\[\]]+$`)
 
@@ -109,8 +119,8 @@ func (a *App) AddServer(req AddServerRequest) (store.Server, error) {
 	if req.Port < 1 || req.Port > 65535 {
 		return store.Server{}, userErr("端口必须在 1 到 65535 之间")
 	}
-	if req.Username == "" {
-		req.Username = "root"
+	if req.Username == "" || req.AuthKind == "tat" {
+		req.Username = "root" // the automation agent runs commands as root
 	}
 	if req.Name == "" {
 		req.Name = req.Host
@@ -124,12 +134,19 @@ func (a *App) AddServer(req AddServerRequest) (store.Server, error) {
 		if strings.TrimSpace(req.KeyPath) == "" {
 			return store.Server{}, userErr("请填写密钥文件的位置")
 		}
+	case "tat":
+		if !instanceRe.MatchString(req.InstanceID) || !regionRe.MatchString(req.Region) {
+			return store.Server{}, userErr("请从腾讯云里选择这台服务器（需要实例 ID 和地域）")
+		}
+		if a.tencentClient() == nil {
+			return store.Server{}, userErr("用自动化助手连接要先在「设置 → 腾讯云」填写密钥")
+		}
 	default:
 		return store.Server{}, userErr("请选择登录方式")
 	}
 	sv, err := a.Store.AddServer(store.Server{
 		Name: req.Name, Host: req.Host, Port: req.Port, Username: req.Username,
-		AuthKind: req.AuthKind, KeyPath: strings.TrimSpace(req.KeyPath),
+		AuthKind: req.AuthKind, KeyPath: strings.TrimSpace(req.KeyPath), InstanceID: req.InstanceID, Region: req.Region,
 	})
 	if err != nil {
 		return sv, err
@@ -180,11 +197,16 @@ func (a *App) target(sv store.Server) (sshx.Target, error) {
 	return t, nil
 }
 
-// connect opens SSH to a server, pinning its host key on first use.
-func (a *App) connect(ctx context.Context, id int64) (store.Server, *sshx.Client, error) {
+// connect opens a way into a server: SSH, pinning its host key on first
+// use, or Tencent Cloud's automation agent.
+func (a *App) connect(ctx context.Context, id int64) (store.Server, sshx.Conn, error) {
 	sv, err := a.Store.GetServer(id)
 	if err != nil {
 		return sv, nil, userErr("找不到这台服务器（编号 %d）", id)
+	}
+	if sv.AuthKind == "tat" {
+		c, err := a.tatConn(sv)
+		return sv, c, err
 	}
 	t, err := a.target(sv)
 	if err != nil {
@@ -205,6 +227,27 @@ func (a *App) connect(ctx context.Context, id int64) (store.Server, *sshx.Client
 	return sv, c, nil
 }
 
+// tatConn reaches a server through Tencent Cloud's automation agent.
+func (a *App) tatConn(sv store.Server) (*tatx.Conn, error) {
+	cloud := a.tencentClient()
+	if cloud == nil {
+		return nil, userErr("这台服务器通过腾讯云自动化助手连接，请先在「设置 → 腾讯云」填写密钥")
+	}
+	poll := time.Second
+	if a.PollInterval > 0 {
+		poll = a.PollInterval
+	}
+	return &tatx.Conn{Cloud: cloud, Region: sv.Region, Instance: sv.InstanceID, Poll: poll}, nil
+}
+
+// viaOf says how commands reach a server, for the execution log.
+func viaOf(sv store.Server) string {
+	if sv.AuthKind == "tat" {
+		return "腾讯云自动化助手"
+	}
+	return "SSH 命令"
+}
+
 // TestResult is shown after "测试连接".
 type TestResult struct {
 	HostKey string `json:"hostKey"`
@@ -221,7 +264,7 @@ func (a *App) TestConnection(ctx context.Context, id int64) (TestResult, error) 
 	}
 	defer c.Close()
 	e := a.startExec(store.ExecLog{ServerID: sv.ID, ServerName: sv.Name, Adapter: sv.Adapter, Origin: originOf(ctx),
-		Kind: store.ExecRead, Title: "测试连接", Via: "SSH 命令"})
+		Kind: store.ExecRead, Title: "测试连接", Via: viaOf(sv)})
 	res, err := c.Run(ctx, "uname -srm; id -un", "", 4096)
 	e.Commands = res.Command
 	if err != nil {
@@ -277,7 +320,7 @@ func (a *App) Discover(ctx context.Context, id int64, sections []string) (string
 }
 
 // runDiscover runs the read-only discover.sh and logs it.
-func (a *App) runDiscover(ctx context.Context, sv store.Server, c *sshx.Client, sections []string, title string) (sshx.Result, error) {
+func (a *App) runDiscover(ctx context.Context, sv store.Server, c sshx.Conn, sections []string, title string) (sshx.Result, error) {
 	e := a.startExec(store.ExecLog{ServerID: sv.ID, ServerName: sv.Name, Adapter: sv.Adapter, Origin: originOf(ctx),
 		Kind: store.ExecRead, Title: title, Via: "只读脚本", ScriptName: "discover.sh"})
 	res, err := c.RunScript(ctx, sv.Username, scripts.Discover, sections, maxDiscoverOutput)

@@ -89,6 +89,16 @@ func applyCloud(ctx context.Context, env *Env, r Resolved, progress Progress) Ou
 			return applyDomainStatus(ctx, env, r.Values, out, report)
 		case "eo_origin":
 			return applyOrigin(ctx, env, r.Values, out, report)
+		case "eo_zone_create":
+			return applyZoneCreate(ctx, env, r.Values, out, report)
+		case "eo_ip_block", "eo_ip_unblock":
+			return applyIPBlock(ctx, env, r.Impl.Cloud == "eo_ip_block", r.Values, out, report)
+		case "eo_ratelimit":
+			return applyRateLimit(ctx, env, r.Values, out, report)
+		case "eo_ratelimit_remove":
+			return applyRateLimitRemove(ctx, env, r.Values, out, report)
+		case "eo_cc":
+			return applyCC(ctx, env, r.Values, out, report)
 		}
 		out.Status = StatusFailed
 		out.logf("未知的云操作 %s", r.Impl.Cloud)
@@ -127,6 +137,14 @@ func undoCloud(ctx context.Context, env *Env, r Resolved, undo map[string]string
 			err = env.Cloud.SetAccelerationDomainStatus(ctx, undo["zone_id"], []string{undo["domain"]}, undo["status"])
 		case "eo_origin":
 			err = undoOrigin(ctx, env.Cloud, undo)
+		case "eo_zone_create":
+			err = undoZoneCreate(ctx, env, undo)
+		case "eo_ip_block", "eo_ip_unblock":
+			err = undoIPBlock(ctx, env.Cloud, undo)
+		case "eo_ratelimit", "eo_ratelimit_remove":
+			err = undoRateLimit(ctx, env.Cloud, undo)
+		case "eo_cc":
+			err = undoCC(ctx, env.Cloud, undo)
 		case "eo_https":
 			var ids []string
 			if undo["cert_ids"] != "" {
@@ -363,7 +381,7 @@ func findZone(ctx context.Context, c *tencent.Client, name string) (tencent.Zone
 	}
 	z, ok := tencent.ZoneFor(zones, name)
 	if !ok {
-		return z, fmt.Errorf("EdgeOne 里没有 %s 所在的站点。请先在 EdgeOne 控制台添加站点并选好套餐（这一步涉及计费，需要你自己操作），之后的步骤都可以自动完成", name)
+		return z, fmt.Errorf("EdgeOne 里没有 %s 所在的站点。可以先用 eo.zone.create 新建站点（账号里要有能绑定站点的套餐；购买套餐涉及计费，需要你在控制台操作）", name)
 	}
 	return z, nil
 }
