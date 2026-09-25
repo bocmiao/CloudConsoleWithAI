@@ -125,10 +125,11 @@ type conversation struct {
 
 // ChatReply is one answer in the AI 助手 tab.
 type ChatReply struct {
-	ConversationID string   `json:"conversationId"`
-	Reply          ai.Reply `json:"reply"`
-	Cost           float64  `json:"cost"`
-	Currency       string   `json:"currency"`
+	ConversationID string     `json:"conversationId"`
+	Reply          ai.Reply   `json:"reply"`
+	Cost           float64    `json:"cost"`
+	Currency       string     `json:"currency"`
+	Plans          []PlanView `json:"plans"` // checklists proposed in this answer
 }
 
 func newID() string {
@@ -176,7 +177,8 @@ func (a *App) Chat(ctx context.Context, convID, text string) (ChatReply, error) 
 
 	conv.mu.Lock()
 	defer conv.mu.Unlock()
-	reply, err := conv.agent.Ask(ctx, text)
+	collector := &planCollector{}
+	reply, err := conv.agent.Ask(context.WithValue(ctx, planCollectorKey{}, collector), text)
 	cost := settings.Cost(reply.Usage)
 	if reply.Usage.Input+reply.Usage.Output > 0 {
 		_ = a.Store.AddUsage(store.Usage{
@@ -192,5 +194,11 @@ func (a *App) Chat(ctx context.Context, convID, text string) (ChatReply, error) 
 		return ChatReply{}, userErr("AI 回答失败：%v", err)
 	}
 	_ = a.Store.Audit("ai", "ai.chat", settings.Model, fmt.Sprintf("查询 %d 次", len(reply.Steps)))
-	return ChatReply{ConversationID: convID, Reply: reply, Cost: cost, Currency: settings.Currency}, nil
+	out := ChatReply{ConversationID: convID, Reply: reply, Cost: cost, Currency: settings.Currency, Plans: []PlanView{}}
+	for _, id := range collector.ids {
+		if v, err := a.Plan(id); err == nil {
+			out.Plans = append(out.Plans, v)
+		}
+	}
+	return out, nil
 }

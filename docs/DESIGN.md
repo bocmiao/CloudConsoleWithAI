@@ -1012,7 +1012,7 @@ conversations    id, ...;  messages  id, conversation_id, role, content, plan_id
 
 **关于名称的一点提醒**：「Panel」容易让人以为这是又一个服务器面板，和 1Panel、宝塔是竞争关系；其实它是在这些面板之上工作的 AI 助手。建议在介绍里始终带上一句定位，比如「Miao Panel —— 帮你管服务器和云的 AI 助手，支持 1Panel、宝塔和纯 Linux」。
 
-## 18. 当前进度（M0 第一版）
+## 18. 当前进度（M0 + M1 第一步）
 
 已完成（代码在 `cmd/`、`internal/`、`scripts/`）：
 
@@ -1025,3 +1025,28 @@ conversations    id, ...;  messages  id, conversation_id, role, content, plan_id
 - 自动化测试：进程内 SSH 服务器端到端测试、模拟模型 API 测试、HTTP 安全测试；GitHub Actions 自动测试并构建 Windows / macOS / Linux 程序。
 
 还没做（M0 剩余）：腾讯云 TAT 连接方式、新手向导里的 SSH 密钥和腾讯云子账号引导、对话记录持久化（目前关闭程序后对话清空）。
+
+### M1 第一步：清单 + 一键执行（已完成）
+
+完整流程「说需求 → AI 检查 → 生成清单 → 点一下执行 → 看结果 / 撤销」已经打通：
+
+- AI 在对话里直接给出清单卡片（`propose_plan`），每一项显示风险等级、执行方式（系统脚本 / 1Panel 接口）、对网站的影响、能否撤销；当前环境不支持的项会标明原因并不能勾选；
+- 勾选后二次确认，后台按顺序执行，前一项失败就停下，界面实时显示每一步的日志；
+- 执行前后各做一次环境识别，显示「执行前后对比」（可用内存、swap、根分区、发现的问题数）；
+- 能撤销的项目保存了撤销数据（原配置备份在服务器 `/var/backups/miaopanel/`），一键撤销；
+- 同一台服务器同一时间只执行一个清单；每次执行和撤销都写入操作记录；
+- 1Panel 服务器可以在服务器页填写 1Panel API 密钥，修改走 1Panel 自己的接口（通过 SSH 隧道访问，不需要把面板端口暴露到公网）。
+
+目前能自动执行的操作（`internal/actions`，脚本在 `scripts/actions/`）：
+
+| 操作 | 说明 | 支持环境 | 可撤销 |
+|---|---|---|---|
+| `swap.set` | 添加 swap 文件并设置 swappiness=10 | 全部 | 是 |
+| `logs.clean` | 清理 journal、7 天前的归档日志、超过 100MB 的 Docker 日志 | 全部 | 否 |
+| `service.restart` | 重启 systemd 服务（ssh、docker、面板等关键服务禁止） | 全部（需 systemd） | 否 |
+| `php_fpm.set` | 调整 PHP-FPM 进程数 / 进程管理方式 | 纯 Linux（脚本）、1Panel（接口） | 是 |
+| `mysql.vars.set` | 调整 innodb_buffer_pool_size、max_connections | 1Panel（接口） | 是 |
+
+脚本约定：必须 root 运行；先检查再修改，修改前备份；失败自动回滚；退出码 0 完成、10 拒绝（未做修改）、20 已回滚、30 失败。脚本以后台方式运行，SSH 断开会自动重连继续读取进度。
+
+还没做：宝塔面板的 PHP / MySQL 接口、受限的 AI 自由命令（第 7.5 节）、腾讯云 EO / DNSPod 相关操作。

@@ -1,7 +1,10 @@
 // Package scripts embeds the shell scripts that Miao Panel runs on servers.
 package scripts
 
-import _ "embed"
+import (
+	"embed"
+	"fmt"
+)
 
 // Discover is the read-only environment discovery script. Pass section
 // names as arguments to limit its output; see the header of discover.sh.
@@ -24,4 +27,21 @@ func ValidSection(name string) bool {
 		}
 	}
 	return false
+}
+
+//go:embed actions/*.sh
+var actions embed.FS
+
+// Action returns the runnable text of an action script: the shared helper
+// library followed by the action itself.
+func Action(file string) (string, error) {
+	lib, err := actions.ReadFile("actions/_lib.sh")
+	if err != nil {
+		return "", err
+	}
+	body, err := actions.ReadFile("actions/" + file)
+	if err != nil {
+		return "", fmt.Errorf("unknown action script %q", file)
+	}
+	return string(lib) + "\n" + string(body), nil
 }

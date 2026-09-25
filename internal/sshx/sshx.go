@@ -115,6 +115,10 @@ func authMethods(t Target) ([]ssh.AuthMethod, error) {
 // Close closes the connection.
 func (c *Client) Close() error { return c.conn.Close() }
 
+// Dial opens a TCP connection from the server's side, e.g. to a panel that
+// only listens on the server's loopback.
+func (c *Client) Dial(network, addr string) (net.Conn, error) { return c.conn.Dial(network, addr) }
+
 // Result is the outcome of one remote command.
 type Result struct {
 	Stdout    string

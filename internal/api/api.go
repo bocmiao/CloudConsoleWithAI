@@ -58,6 +58,12 @@ func New(a *app.App, token string, port int, version string) *Server {
 	api("POST /api/settings/ai/test", s.testAI)
 	api("POST /api/chat", s.chat)
 	api("GET /api/plans", s.plans)
+	api("GET /api/plans/{id}", s.plan)
+	api("POST /api/plans/{id}/execute", s.executePlan)
+	api("POST /api/plans/{id}/steps/{idx}/undo", s.undoStep)
+	api("GET /api/servers/{id}/onepanel", s.getOnePanel)
+	api("PUT /api/servers/{id}/onepanel", s.putOnePanel)
+	api("POST /api/servers/{id}/onepanel/test", s.testOnePanel)
 	api("GET /api/audit", s.audit)
 	api("GET /api/usage", s.usage)
 	return s
@@ -236,7 +242,73 @@ func (s *Server) chat(_ http.ResponseWriter, r *http.Request) (any, error) {
 }
 
 func (s *Server) plans(_ http.ResponseWriter, _ *http.Request) (any, error) {
-	return s.app.Store.ListPlans(100)
+	return s.app.Plans(100)
+}
+
+func (s *Server) plan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	return s.app.Plan(id)
+}
+
+func (s *Server) executePlan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	var req struct {
+		Steps []int `json:"steps"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.ExecutePlan(id, req.Steps)
+}
+
+func (s *Server) undoStep(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	idx, err := strconv.Atoi(r.PathValue("idx"))
+	if err != nil {
+		return nil, &app.UserError{Msg: "步骤编号不对"}
+	}
+	return s.app.UndoStep(r.Context(), id, idx)
+}
+
+func (s *Server) getOnePanel(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	return s.app.OnePanel(id)
+}
+
+func (s *Server) putOnePanel(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	var req struct {
+		app.OnePanelSettings
+		APIKey string `json:"apiKey"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.SaveOnePanel(id, req.OnePanelSettings, req.APIKey)
+}
+
+func (s *Server) testOnePanel(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	info, err := s.app.TestOnePanel(r.Context(), id)
+	return map[string]string{"info": info}, err
 }
 
 func (s *Server) audit(_ http.ResponseWriter, _ *http.Request) (any, error) {

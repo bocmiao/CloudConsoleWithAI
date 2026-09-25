@@ -30,6 +30,7 @@ type App struct {
 
 	mu    sync.Mutex
 	convs map[string]*conversation
+	locks serverLocks
 }
 
 // New creates an App.

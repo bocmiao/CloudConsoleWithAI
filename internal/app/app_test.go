@@ -10,7 +10,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/bocmiao/CloudConsoleWithAI/internal/core"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/secrets"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/sshx/sshtest"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/store"
@@ -204,5 +206,88 @@ func TestProposePlanAssignsPolicyRisk(t *testing.T) {
 	plans, _ := a.Store.ListPlans(10)
 	if len(plans) != 1 || !strings.Contains(plans[0].Steps, `"risk":"R2"`) || !strings.Contains(plans[0].Steps, `"risk":"R3"`) {
 		t.Fatalf("plans = %+v", plans)
+	}
+}
+
+func waitPlan(t *testing.T, a *App, id int64) PlanView {
+	t.Helper()
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) {
+		v, err := a.Plan(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v.Status != core.PlanRunning {
+			return v
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal("plan did not finish")
+	return PlanView{}
+}
+
+func TestExecutePlanFlow(t *testing.T) {
+	a := newApp(t)
+	srv := sshtest.Start(t, "root", "pw")
+	sv := addTestServer(t, a, srv, "pw")
+	if _, _, err := a.Discover(context.Background(), sv.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	args, _ := json.Marshal(map[string]any{
+		"server_id": sv.ID, "title": "清理磁盘", "reason": "磁盘快满了",
+		"steps": []map[string]any{
+			{"capability": "logs.clean", "summary": "清理旧日志"},
+			{"capability": "mysql.vars.set", "summary": "改 MySQL", "params": map[string]any{"max_connections": 200}},
+			{"capability": "swap.set", "summary": "加 swap", "params": map[string]any{"size_gb": 99}},
+		},
+	})
+	collector := &planCollector{}
+	msg, err := a.toolProposePlan(context.WithValue(context.Background(), planCollectorKey{}, collector), args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(collector.ids) != 1 || !strings.Contains(msg, "1. logs.clean：可以自动执行") || !strings.Contains(msg, "不能自动执行") {
+		t.Fatalf("propose result: %s", msg)
+	}
+	v, _ := a.Plan(collector.ids[0])
+	if !v.StepList[0].Executable || v.StepList[1].Executable || v.StepList[2].Executable {
+		t.Fatalf("executable flags: %+v", v.StepList)
+	}
+	if v.StepList[2].Blocked == "" || v.StepList[0].Via != "系统脚本" {
+		t.Fatalf("step details: %+v", v.StepList)
+	}
+
+	for _, bad := range [][]int{{}, {7}, {0, 0}, {1}} {
+		if _, err := a.ExecutePlan(v.ID, bad); err == nil {
+			t.Errorf("ExecutePlan(%v) should fail", bad)
+		}
+	}
+
+	if _, err := a.ExecutePlan(v.ID, []int{0}); err != nil {
+		t.Fatal(err)
+	}
+	done := waitPlan(t, a, v.ID)
+	st := done.StepList[0]
+	// As root the logs are cleaned; as an ordinary user the script refuses
+	// and changes nothing. Either way the run must finish cleanly.
+	if st.Status != "done" && st.Status != "refused" {
+		t.Fatalf("step status = %q, log = %v", st.Status, st.Log)
+	}
+	if len(st.Log) == 0 || done.Before == nil || done.After == nil {
+		t.Fatalf("missing log or snapshots: %+v", done)
+	}
+	if done.StepList[1].Status != "" || done.StepList[2].Status != "" {
+		t.Fatalf("unselected steps were touched: %+v", done.StepList)
+	}
+	if _, err := a.UndoStep(context.Background(), v.ID, 0); err == nil {
+		t.Fatal("log cleaning cannot be undone")
+	}
+	entries, _ := a.Store.ListAudit(50)
+	var sawExecute bool
+	for _, e := range entries {
+		sawExecute = sawExecute || e.Action == "plan.execute"
+	}
+	if !sawExecute {
+		t.Fatal("execution was not audited")
 	}
 }

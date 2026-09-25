@@ -1,5 +1,5 @@
 /* Miao Panel web UI. Plain Vue 3 (global build), no build step. */
-const { createApp, ref, reactive, computed, onMounted, nextTick } = Vue;
+const { createApp, ref, reactive, computed, onMounted, onUnmounted, nextTick } = Vue;
 
 async function api(method, path, body) {
   const opts = { method, headers: { 'X-Miao': '1' }, credentials: 'same-origin' };
@@ -74,6 +74,156 @@ const ICONS = {
   disk: 'M3 13h18v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM3 13l3-8h12l3 8M7 16.5h.01',
 };
 
+// Toast shared by the app and its components.
+const toast = reactive({ text: '', kind: 'ok' });
+let toastTimer = null;
+function notify(text, kind = 'ok') {
+  toast.text = text; toast.kind = kind;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { toast.text = ''; }, kind === 'error' ? 8000 : 3500);
+}
+
+const STEP_STATUS = {
+  queued: { icon: 'clock', cls: 'info', text: '等待执行' },
+  running: { icon: '', cls: 'info', text: '执行中' },
+  done: { icon: 'check', cls: 'ok', text: '完成' },
+  refused: { icon: 'info', cls: 'info', text: '没有执行：条件不满足，没有做任何修改' },
+  rolled_back: { icon: 'warn', cls: 'warn', text: '失败了，已自动恢复原状' },
+  failed: { icon: 'alert', cls: 'crit', text: '失败了，需要检查' },
+  skipped: { icon: 'info', cls: 'info', text: '已跳过' },
+  undone: { icon: 'refresh', cls: 'info', text: '已撤销' },
+};
+const RISK_NAME = { R0: '只读', R1: '可撤销', R2: '影响线上', R3: '高风险' };
+
+const mbText = v => v >= 1024 ? (v / 1024).toFixed(1) + ' GB' : (v || 0) + ' MB';
+
+// A checklist the AI proposed: pick steps, run them, follow progress, undo.
+const PlanCard = {
+  props: { plan: { type: Object, required: true }, serverName: { type: String, default: '' } },
+  setup(props) {
+    const p = ref(props.plan);
+    const picked = ref(new Set());
+    const confirming = ref(false);
+    const busy = ref(false);
+    let timer = null;
+
+    const steps = computed(() => p.value.stepList || []);
+    const running = computed(() => p.value.status === 'running');
+    const canPick = s => s.executable && !['done', 'running', 'queued'].includes(s.status);
+    const chosen = computed(() => steps.value.map((s, i) => i).filter(i => picked.value.has(i)));
+    const chosenSteps = computed(() => chosen.value.map(i => steps.value[i]));
+
+    function resetPicks() {
+      picked.value = new Set(steps.value.map((s, i) => i).filter(i => canPick(steps.value[i]) && !steps.value[i].status));
+    }
+    function toggle(i) {
+      const next = new Set(picked.value);
+      next.has(i) ? next.delete(i) : next.add(i);
+      picked.value = next;
+    }
+    async function refresh() {
+      try {
+        p.value = await api('GET', `/api/plans/${p.value.id}`);
+        if (p.value.status !== 'running') {
+          stop();
+          const failed = steps.value.some(s => ['failed', 'rolled_back', 'refused'].includes(s.status));
+          notify(failed ? '执行结束，有步骤没有成功，请查看详情' : '全部执行完成', failed ? 'error' : 'ok');
+        }
+      } catch (e) { stop(); notify(e.message, 'error'); }
+    }
+    function poll() { stop(); timer = setInterval(refresh, 1500); }
+    function stop() { if (timer) { clearInterval(timer); timer = null; } }
+    async function run() {
+      busy.value = true;
+      try {
+        p.value = await api('POST', `/api/plans/${p.value.id}/execute`, { steps: chosen.value });
+        confirming.value = false;
+        poll();
+      } catch (e) { notify(e.message, 'error'); } finally { busy.value = false; }
+    }
+    async function undo(i) {
+      if (!confirm(`确定要撤销「${steps.value[i].title || steps.value[i].summary}」吗？`)) return;
+      busy.value = true;
+      try {
+        p.value = await api('POST', `/api/plans/${p.value.id}/steps/${i}/undo`);
+        notify('已撤销');
+      } catch (e) { notify(e.message, 'error'); await refresh(); } finally { busy.value = false; }
+    }
+
+    resetPicks();
+    if (running.value) poll();
+    onUnmounted(stop);
+
+    const status = s => STEP_STATUS[s.status] || null;
+    const deltas = computed(() => {
+      const b = p.value.before, a = p.value.after;
+      if (!b || !a) return [];
+      const rows = [
+        ['可用内存', mbText(b.memAvailableMB), mbText(a.memAvailableMB)],
+        ['swap', b.swapMB ? mbText(b.swapMB) : '没有', a.swapMB ? mbText(a.swapMB) : '没有'],
+        ['系统盘使用率', b.rootDiskPct + '%', a.rootDiskPct + '%'],
+        ['需要注意的问题', b.findings + ' 项', a.findings + ' 项'],
+      ];
+      return rows;
+    });
+    return { p, steps, running, canPick, picked, toggle, chosen, chosenSteps, confirming, busy, run, undo, status, deltas, riskName: r => RISK_NAME[r] || '' };
+  },
+  template: `
+  <div class="plan">
+    <div class="group-title">清单<span v-if="serverName"> · {{ serverName }}</span></div>
+    <div class="group">
+      <div class="row stack"><b>{{ p.title }}</b><div class="small secondary">{{ p.reason }}</div></div>
+      <div class="row step" v-for="(s, i) in steps" :key="i" :class="{off: !s.executable}">
+        <span class="step-mark">
+          <span v-if="s.status === 'running'" class="spinner"></span>
+          <ui-icon v-else-if="status(s)" :name="status(s).icon" :class="'st-' + status(s).cls"></ui-icon>
+          <input v-else type="checkbox" :disabled="!canPick(s) || running" :checked="picked.has(i)" @change="toggle(i)" :aria-label="'选择第 ' + (i + 1) + ' 项'">
+        </span>
+        <div class="grow">
+          <div>{{ s.summary }}</div>
+          <div class="small tertiary" v-if="s.executable">
+            <span class="risk">{{ s.risk }} {{ riskName(s.risk) }}</span>{{ s.via }} · {{ s.downtime }} · {{ s.reversible ? '可以撤销' : '无法撤销' }}
+          </div>
+          <div class="small secondary" v-else>暂时不能自动执行：{{ s.blocked }}</div>
+          <div class="small" v-if="status(s)" :class="'st-' + status(s).cls">{{ status(s).text }}</div>
+          <div class="step-log" v-if="s.log && s.log.length"><div v-for="(l, j) in s.log" :key="j">{{ l }}</div></div>
+        </div>
+        <button v-if="s.status === 'done' && s.reversible" class="plain" @click="undo(i)" :disabled="busy || running"><ui-icon name="refresh"></ui-icon>撤销</button>
+      </div>
+      <div class="row" v-if="deltas.length">
+        <div class="grow">
+          <div class="small secondary" style="margin-bottom: 4px">执行前后对比</div>
+          <div class="delta" v-for="d in deltas" :key="d[0]"><span>{{ d[0] }}</span><span class="secondary">{{ d[1] }}</span><ui-icon name="chevron"></ui-icon><span>{{ d[2] }}</span></div>
+        </div>
+      </div>
+      <div class="row plan-foot">
+        <span class="grow small secondary" v-if="running"><span class="spinner inline"></span>正在执行，请不要关闭 Miao Panel……</span>
+        <span class="grow small secondary" v-else-if="!steps.some(s => s.executable)">这份清单里没有能自动执行的项目</span>
+        <span class="grow small secondary" v-else>执行前会先检查和备份；失败会自动恢复原状</span>
+        <button class="primary" :disabled="!chosen.length || running || busy" @click="confirming = true">执行选中的 {{ chosen.length }} 项</button>
+      </div>
+    </div>
+
+    <div class="sheet-mask" v-if="confirming" @click.self="confirming = false">
+      <div class="sheet" role="dialog" aria-label="确认执行">
+        <h2>确认执行</h2>
+        <p>将在 {{ serverName || '这台服务器' }} 上执行以下 {{ chosen.length }} 项修改：</p>
+        <div class="group">
+          <div class="row stack" v-for="s in chosenSteps" :key="s.summary">
+            <div>{{ s.summary }}</div>
+            <div class="small tertiary">{{ s.downtime }} · {{ s.reversible ? '可以撤销' : '无法撤销' }}</div>
+          </div>
+        </div>
+        <div class="hint">每一步执行前会先检查条件并备份；某一步失败会自动恢复原状，并停止后面的步骤。</div>
+        <div class="sheet-actions">
+          <button @click="confirming = false">取消</button>
+          <button class="primary" @click="run" :disabled="busy">确定执行</button>
+        </div>
+      </div>
+    </div>
+  </div>`,
+};
+
 const app = createApp({
   setup() {
     const tab = ref('servers');
@@ -82,7 +232,6 @@ const app = createApp({
     const current = ref(null);
     const busy = ref(false);
     const busyText = ref('');
-    const toast = reactive({ text: '', kind: 'ok' });
     const info = ref({});
     const ai = ref({ hasKey: false });
     const presets = ref([]);
@@ -97,6 +246,7 @@ const app = createApp({
     const draft = ref('');
     const chatBusy = ref(false);
     const msgBox = ref(null);
+    const op = reactive({ port: 0, host: '', apiKey: '', hasKey: false, info: '' });
     const suggestions = [
       '服务器现在的整体状况怎么样？',
       '内存占用是不是太高了？',
@@ -104,12 +254,6 @@ const app = createApp({
       '网站打不开，帮我排查一下',
     ];
 
-    let toastTimer = null;
-    function notify(text, kind = 'ok') {
-      toast.text = text; toast.kind = kind;
-      clearTimeout(toastTimer);
-      toastTimer = setTimeout(() => { toast.text = ''; }, kind === 'error' ? 8000 : 3500);
-    }
     async function guarded(text, fn) {
       busy.value = true; busyText.value = text;
       try { return await fn(); } catch (e) { notify(e.message, 'error'); } finally { busy.value = false; }
@@ -125,7 +269,26 @@ const app = createApp({
       tab.value = 'servers';
       if (selectedId.value !== id) current.value = null;
       selectedId.value = id;
-      try { current.value = await api('GET', `/api/servers/${id}/profile`); } catch (e) { notify(e.message, 'error'); }
+      try {
+        current.value = await api('GET', `/api/servers/${id}/profile`);
+        if (current.value.server.adapter === '1panel') {
+          Object.assign(op, await api('GET', `/api/servers/${id}/onepanel`), { apiKey: '', info: '' });
+        }
+      } catch (e) { notify(e.message, 'error'); }
+    }
+    async function saveOnePanel() {
+      await guarded('正在保存……', async () => {
+        const saved = await api('PUT', `/api/servers/${selectedId.value}/onepanel`, { port: op.port, host: op.host, apiKey: op.apiKey });
+        Object.assign(op, saved, { apiKey: '', info: '' });
+        notify('已保存');
+      });
+    }
+    async function testOnePanel() {
+      await guarded('正在连接 1Panel……', async () => {
+        const r = await api('POST', `/api/servers/${selectedId.value}/onepanel/test`);
+        op.info = '连接成功：' + r.info;
+        notify('1Panel 接口可以正常使用');
+      });
     }
     function go(id) {
       tab.value = id;
@@ -188,7 +351,7 @@ const app = createApp({
       try {
         const r = await api('POST', '/api/chat', { conversationId: conversationId.value, message: text });
         conversationId.value = r.conversationId;
-        messages.value.push({ role: 'assistant', text: r.reply.text, steps: r.reply.steps || [], usage: r.reply.usage, cost: r.cost, currency: r.currency });
+        messages.value.push({ role: 'assistant', text: r.reply.text, steps: r.reply.steps || [], usage: r.reply.usage, cost: r.cost, currency: r.currency, plans: r.plans || [] });
         loadSpend().catch(() => {});
       } catch (e) {
         messages.value.push({ role: 'error', text: e.message });
@@ -274,10 +437,11 @@ const app = createApp({
     const serverName = id => (servers.value.find(s => s.id === id) || { name: `服务器 ${id}` }).name;
     const parseSteps = s => { try { return JSON.parse(s); } catch { return []; } };
     const toolName = t => ({ list_servers: '查看服务器列表', get_server_profile: '读取服务器画像', refresh_server_profile: '重新识别服务器',
-      run_check: '执行只读检查', propose_plan: '保存修改建议' }[t] || t);
+      run_check: '执行只读检查', propose_plan: '生成修改清单' }[t] || t);
     const actorName = a => ({ user: '你', ai: 'AI', system: '系统' }[a] || a);
     const actionName = a => ({ 'server.add': '添加服务器', 'server.delete': '删除服务器', 'server.test': '测试连接', 'server.discover': '识别环境',
-      'server.hostkey.recorded': '记录服务器指纹', 'settings.ai': '修改 AI 设置', 'ai.chat': 'AI 对话', 'plan.propose': 'AI 提出建议' }[a] || a);
+      'server.hostkey.recorded': '记录服务器指纹', 'settings.ai': '修改 AI 设置', 'ai.chat': 'AI 对话', 'plan.propose': 'AI 生成清单',
+      'plan.execute': '执行清单', 'plan.step': '执行步骤', 'plan.undo': '撤销步骤', 'onepanel.settings': '修改 1Panel 接口设置' }[a] || a);
 
     onMounted(async () => {
       try {
@@ -292,12 +456,14 @@ const app = createApp({
       tab, go, servers, selectedId, current, p, busy, busyText, toast, info, ai, presets, aiForm, presetNote,
       spendText, plans, audit, showAdd, addForm, messages, draft, chatBusy, msgBox, suggestions,
       select, openAdd, addServer, testConn, discover, removeServer, askAbout, send, onEnter, newChat, applyPreset, saveAI, testAI,
+      op, saveOnePanel, testOnePanel,
       memPct, rootDisk, envSub, dockerText, money, mb, meterClass, levelClass, levelIcon, levelName, riskName, adapterName,
       fmtTime, serverName, parseSteps, toolName, actorName, actionName, md,
     };
   },
 });
 
+app.component('plan-card', PlanCard);
 app.component('ui-icon', {
   props: { name: { type: String, required: true } },
   setup(props) { return { d: computed(() => ICONS[props.name] || '') }; },

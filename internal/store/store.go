@@ -108,7 +108,35 @@ func open(dsn string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	if err := addColumn(db, "plans", "result", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
 	return &Store{db: db}, nil
+}
+
+// addColumn adds a column to databases created by older versions.
+func addColumn(db *sql.DB, table, column, decl string) error {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	rows.Close()
+	_, err = db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + column + ` ` + decl)
+	return err
 }
 
 // Close closes the database.
@@ -230,6 +258,7 @@ type Plan struct {
 	Reason    string `json:"reason"`
 	Steps     string `json:"steps"` // JSON array of core.Step
 	Status    string `json:"status"`
+	Result    string `json:"result"` // JSON: before/after comparison of the last run
 	CreatedAt string `json:"createdAt"`
 }
 
@@ -245,23 +274,45 @@ func (s *Store) AddPlan(p Plan) (Plan, error) {
 	return p, err
 }
 
+const planCols = `id, server_id, title, reason, steps, status, result, created_at`
+
+func scanPlan(row interface{ Scan(...any) error }) (Plan, error) {
+	var p Plan
+	err := row.Scan(&p.ID, &p.ServerID, &p.Title, &p.Reason, &p.Steps, &p.Status, &p.Result, &p.CreatedAt)
+	return p, err
+}
+
 // ListPlans returns plans, newest first.
 func (s *Store) ListPlans(limit int) ([]Plan, error) {
-	rows, err := s.db.Query(`SELECT id, server_id, title, reason, steps, status, created_at FROM plans
-		ORDER BY id DESC LIMIT ?`, limit)
+	rows, err := s.db.Query(`SELECT `+planCols+` FROM plans ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []Plan{}
 	for rows.Next() {
-		var p Plan
-		if err := rows.Scan(&p.ID, &p.ServerID, &p.Title, &p.Reason, &p.Steps, &p.Status, &p.CreatedAt); err != nil {
+		p, err := scanPlan(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+// GetPlan returns one plan.
+func (s *Store) GetPlan(id int64) (Plan, error) {
+	p, err := scanPlan(s.db.QueryRow(`SELECT `+planCols+` FROM plans WHERE id = ?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Plan{}, ErrNotFound
+	}
+	return p, err
+}
+
+// UpdatePlan saves a plan's steps, status and result.
+func (s *Store) UpdatePlan(p Plan) error {
+	_, err := s.db.Exec(`UPDATE plans SET steps = ?, status = ?, result = ? WHERE id = ?`, p.Steps, p.Status, p.Result, p.ID)
+	return err
 }
 
 // AuditEntry is one line of the operation history.

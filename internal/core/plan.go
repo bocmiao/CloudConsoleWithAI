@@ -21,6 +21,20 @@ type Step struct {
 	Summary    string         `json:"summary"`
 	Params     map[string]any `json:"params,omitempty"`
 	Risk       Risk           `json:"risk"`
+
+	// Filled in when the plan is saved.
+	Title      string `json:"title,omitempty"`
+	Executable bool   `json:"executable"`
+	Blocked    string `json:"blocked,omitempty"` // why it cannot run
+	Via        string `json:"via,omitempty"`     // 系统脚本 / 1Panel 接口
+	Downtime   string `json:"downtime,omitempty"`
+	Reversible bool   `json:"reversible"`
+
+	// Execution state.
+	Status     string            `json:"status,omitempty"` // queued, running, done, refused, rolled_back, failed, skipped, undone
+	Log        []string          `json:"log,omitempty"`
+	Undo       map[string]string `json:"undo,omitempty"`
+	FinishedAt string            `json:"finishedAt,omitempty"`
 }
 
 // capabilityRisk is the policy table for known capabilities. Anything else
@@ -61,5 +75,10 @@ func Capabilities() []string {
 	return out
 }
 
-// PlanProposed is the only status in M0: plans are recorded, not executed.
-const PlanProposed = "proposed"
+// Plan statuses.
+const (
+	PlanProposed = "proposed"
+	PlanRunning  = "running"
+	PlanDone     = "done"    // every selected step succeeded
+	PlanPartial  = "partial" // some steps did not
+)
