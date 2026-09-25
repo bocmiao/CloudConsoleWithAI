@@ -75,6 +75,8 @@ const ICONS = {
   terminal: 'M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM7 10l3 2.5L7 15M12.5 15H17',
   undo: 'M9 14L4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11',
   eye: 'M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
+  chart: 'M4 20V10M10 20V4M16 20v-7M22 20H2',
+  cloud: 'M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 8.6 4.5 4.5 0 0 1 17.5 18z',
 };
 
 // In Miao Panel's own window, links that would open a new window go to
@@ -353,6 +355,234 @@ const ExecLog = {
   </div>`,
 };
 
+// Numbers the way people read them in Chinese: 1,284 / 12.9万 / 3.4亿.
+function fmtCount(n) {
+  n = Number(n) || 0;
+  if (n < 10000) return Math.round(n).toLocaleString('zh-CN');
+  if (n < 1e8) return (n / 1e4).toFixed(n < 1e5 ? 1 : 0) + '万';
+  return (n / 1e8).toFixed(1) + '亿';
+}
+function fmtBytes(v) {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0; v = Number(v) || 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return (i ? v.toFixed(1) : Math.round(v)) + ' ' + units[i];
+}
+function fmtBits(v) {
+  const units = ['bps', 'Kbps', 'Mbps', 'Gbps'];
+  let i = 0; v = Number(v) || 0;
+  while (v >= 1000 && i < units.length - 1) { v /= 1000; i++; }
+  return (i ? v.toFixed(1) : Math.round(v)) + ' ' + units[i];
+}
+// A round axis maximum and step: 0 / 2,500 / 5,000 / 7,500 / 10,000.
+function niceScale(max, ticks = 4) {
+  if (!(max > 0)) return { max: 1, step: 0.25 };
+  const raw = max / ticks, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= raw);
+  return { max: step * ticks, step };
+}
+
+// One series over time: 2px line with a light wash, a crosshair that snaps
+// to the nearest point, and a tooltip listing every value at that time.
+const LineChart = {
+  props: {
+    points: { type: Array, required: true },   // [{t, v}]
+    extra: { type: Array, default: () => [] }, // same times, shown in the tooltip only
+    label: { type: String, default: '' },
+    extraLabel: { type: String, default: '' },
+    format: { type: Function, default: fmtCount },
+    extraFormat: { type: Function, default: fmtBytes },
+    span: { type: Number, default: 24 },       // hours shown, picks the time format
+  },
+  setup(props) {
+    const box = ref(null);
+    const width = ref(640);
+    const height = 240, m = { l: 52, r: 16, t: 12, b: 26 };
+    const hover = ref(-1);
+    let ro = null;
+    onMounted(() => {
+      ro = new ResizeObserver(es => { width.value = Math.max(280, Math.floor(es[0].contentRect.width)); });
+      ro.observe(box.value);
+    });
+    onUnmounted(() => ro && ro.disconnect());
+
+    const scale = computed(() => niceScale(Math.max(0, ...props.points.map(p => p.v))));
+    const x = i => m.l + (props.points.length < 2 ? 0 : i * (width.value - m.l - m.r) / (props.points.length - 1));
+    const y = v => m.t + (1 - v / scale.value.max) * (height - m.t - m.b);
+    const line = computed(() => props.points.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.v).toFixed(1)}`).join(''));
+    const area = computed(() => props.points.length ? `${line.value}L${x(props.points.length - 1).toFixed(1)},${y(0)}L${x(0).toFixed(1)},${y(0)}Z` : '');
+    const yTicks = computed(() => {
+      const out = [];
+      for (let v = 0; v <= scale.value.max + 1e-9; v += scale.value.step) out.push({ v, y: y(v) });
+      return out;
+    });
+    const timeText = t => {
+      const d = new Date(t * 1000);
+      const hm = d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+      return props.span <= 24 ? hm : `${d.getMonth() + 1}-${d.getDate()}${props.span <= 72 ? ' ' + hm : ''}`;
+    };
+    const xTicks = computed(() => {
+      const n = props.points.length;
+      if (!n) return [];
+      const want = Math.max(2, Math.min(6, Math.floor(width.value / 110)));
+      const out = [];
+      for (let k = 0; k < want; k++) {
+        const i = Math.round(k * (n - 1) / (want - 1));
+        out.push({ x: x(i), text: timeText(props.points[i].t), anchor: k === 0 ? 'start' : k === want - 1 ? 'end' : 'middle' });
+      }
+      return out;
+    });
+    function onMove(e) {
+      const r = box.value.getBoundingClientRect();
+      const px = e.clientX - r.left, n = props.points.length;
+      if (!n) return;
+      const step = (width.value - m.l - m.r) / Math.max(1, n - 1);
+      hover.value = Math.max(0, Math.min(n - 1, Math.round((px - m.l) / step)));
+    }
+    function onKey(e) {
+      const n = props.points.length;
+      if (!n) return;
+      if (e.key === 'ArrowRight') { hover.value = Math.min(n - 1, hover.value < 0 ? 0 : hover.value + 1); e.preventDefault(); }
+      if (e.key === 'ArrowLeft') { hover.value = Math.max(0, hover.value < 0 ? n - 1 : hover.value - 1); e.preventDefault(); }
+    }
+    const tip = computed(() => {
+      const i = hover.value;
+      if (i < 0 || i >= props.points.length) return null;
+      const px = x(i);
+      return {
+        x: px, y: y(props.points[i].v), time: timeText(props.points[i].t), value: props.format(props.points[i].v),
+        extra: props.extra[i] ? props.extraFormat(props.extra[i].v) : '', left: px > width.value * 0.6,
+      };
+    });
+    return { box, width, height, m, line, area, yTicks, xTicks, onMove, onKey, hover, tip, format: props.format, fmtCount };
+  },
+  template: `
+  <div class="lchart" ref="box" @pointermove="onMove" @pointerleave="hover = -1">
+    <svg :width="width" :height="height" role="img" :aria-label="label + '走势图'" tabindex="0" @keydown="onKey" @blur="hover = -1">
+      <g class="grid">
+        <line v-for="t in yTicks" :key="t.v" :x1="m.l" :x2="width - m.r" :y1="t.y" :y2="t.y"></line>
+      </g>
+      <g class="ticks">
+        <text v-for="t in yTicks" :key="'y' + t.v" :x="m.l - 8" :y="t.y + 4" text-anchor="end">{{ format(t.v) }}</text>
+        <text v-for="(t, i) in xTicks" :key="'x' + i" :x="t.x" :y="height - 6" :text-anchor="t.anchor">{{ t.text }}</text>
+      </g>
+      <path class="area" :d="area"></path>
+      <path class="line" :d="line"></path>
+      <template v-if="tip">
+        <line class="cross" :x1="tip.x" :x2="tip.x" :y1="m.t" :y2="height - m.b"></line>
+        <circle class="dot" :cx="tip.x" :cy="tip.y" r="4"></circle>
+      </template>
+    </svg>
+    <div class="ctip" v-if="tip" :style="{left: tip.x + 'px', transform: tip.left ? 'translateX(calc(-100% - 12px))' : 'translateX(12px)'}">
+      <div class="small secondary">{{ tip.time }}</div>
+      <div class="ctip-row"><span class="key"></span><b>{{ tip.value }}</b><span class="secondary">{{ label }}</span></div>
+      <div class="ctip-row" v-if="tip.extra"><span class="key none"></span><b>{{ tip.extra }}</b><span class="secondary">{{ extraLabel }}</span></div>
+    </div>
+  </div>`,
+};
+
+const EO_RANGES = [{ h: 24, text: '24 小时' }, { h: 168, text: '7 天' }, { h: 720, text: '30 天' }];
+const TOP_NAMES = { url: '热门路径', country: '国家/地区', status: '状态码', ip: '访问最多的 IP' };
+
+// 网站统计: EdgeOne analytics for one site or domain.
+const EoStats = {
+  props: { configured: Boolean },
+  emits: ['ask', 'settings'],
+  setup(props, { emit }) {
+    const sites = ref([]);
+    const domain = ref('');
+    const hours = ref(24);
+    const data = ref(null);
+    const loading = ref(false);
+    const error = ref('');
+    async function loadSites() {
+      if (!props.configured) return;
+      try {
+        sites.value = await api('GET', '/api/eo/sites');
+        if (!domain.value && sites.value.length) domain.value = sites.value[0];
+      } catch (e) { error.value = e.message; }
+    }
+    async function load() {
+      if (!domain.value) return;
+      loading.value = true; error.value = '';
+      try { data.value = await api('GET', `/api/eo/analytics?domain=${encodeURIComponent(domain.value)}&hours=${hours.value}`); }
+      catch (e) { error.value = e.message; }
+      finally { loading.value = false; }
+    }
+    watch([domain, hours], load);
+    watch(() => props.configured, v => { if (v) loadSites(); });
+    onMounted(loadSites);
+    const rangeText = computed(() => (EO_RANGES.find(r => r.h === hours.value) || {}).text || '');
+    function ask() {
+      emit('ask', `分析一下 ${domain.value} 最近${rangeText.value}的访问情况：访问量有没有异常变化，主要是谁在访问、访问了什么，有没有需要处理的问题？`);
+    }
+    const hit = computed(() => data.value && data.value.hitRatio >= 0 ? Math.round(data.value.hitRatio * 1000) / 10 : null);
+    const timeText = t => new Date(t * 1000).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    return { sites, domain, hours, data, loading, error, load, ask, hit, EO_RANGES, TOP_NAMES, fmtCount, fmtBytes, fmtBits, timeText };
+  },
+  template: `
+  <div>
+    <div class="group" v-if="!configured">
+      <div class="row"><ui-icon name="info" class="lg" style="color: var(--accent)"></ui-icon><div class="grow">网站统计来自腾讯云 EdgeOne，需要先填写腾讯云密钥。</div><button @click="$emit('settings')">去设置</button></div>
+    </div>
+    <template v-else>
+      <div class="filter-row">
+        <select v-model="domain" aria-label="站点或域名" :disabled="!sites.length">
+          <option v-for="s in sites" :key="s" :value="s">{{ s }}</option>
+        </select>
+        <span class="segmented">
+          <button v-for="r in EO_RANGES" :key="r.h" :class="{on: hours === r.h}" @click="hours = r.h">{{ r.text }}</button>
+        </span>
+        <button class="plain" @click="load" :disabled="loading || !domain"><ui-icon name="refresh"></ui-icon>刷新</button>
+        <span class="grow"></span>
+        <button class="primary" @click="ask" :disabled="!domain"><ui-icon name="sparkles"></ui-icon>让 AI 分析</button>
+      </div>
+      <div class="group" v-if="!sites.length && !error"><div class="row secondary">EdgeOne 里还没有站点。</div></div>
+      <div class="group" v-if="error"><div class="row st-crit"><ui-icon name="alert"></ui-icon>{{ error }}</div></div>
+      <div v-if="data" :class="{refetching: loading}">
+        <div class="tiles five">
+          <div class="tile"><div class="label">请求数</div><div class="value">{{ fmtCount(data.requests) }}</div><div class="sub">{{ data.domain }}</div></div>
+          <div class="tile"><div class="label">流量</div><div class="value">{{ fmtBytes(data.bytes) }}</div><div class="sub">EdgeOne 响应</div></div>
+          <div class="tile"><div class="label">峰值带宽</div><div class="value">{{ fmtBits(data.peakBps) }}</div><div class="sub">这段时间最高</div></div>
+          <div class="tile"><div class="label">缓存命中率</div><div class="value">{{ hit === null ? '—' : hit + '%' }}</div>
+            <div class="meter" v-if="hit !== null" role="meter" :aria-valuenow="hit" aria-valuemin="0" aria-valuemax="100" aria-label="缓存命中率"><div :style="{width: hit + '%'}"></div></div>
+            <div class="sub">按流量计算</div></div>
+          <div class="tile"><div class="label">平均响应</div><div class="value">{{ data.avgRespMs }} ms</div><div class="sub">EdgeOne 到访客</div></div>
+        </div>
+
+        <div class="group-title">请求数</div>
+        <div class="group chart-card">
+          <line-chart v-if="data.series && data.series.length" :points="data.series" :extra="data.flux || []" label="次请求" extra-label="流量" :span="hours"></line-chart>
+          <div class="row secondary" v-else>这段时间没有访问数据</div>
+          <details class="raw-box" v-if="data.series && data.series.length">
+            <summary><ui-icon name="chevron"></ui-icon>数据表</summary>
+            <table class="table">
+              <thead><tr><th>时间</th><th class="num">请求数</th><th class="num">流量</th></tr></thead>
+              <tbody><tr v-for="(p, i) in data.series" :key="p.t"><td class="num">{{ timeText(p.t) }}</td><td class="num">{{ fmtCount(p.v) }}</td><td class="num">{{ data.flux && data.flux[i] ? fmtBytes(data.flux[i].v) : '—' }}</td></tr></tbody>
+            </table>
+          </details>
+        </div>
+
+        <div class="top-grid">
+          <div v-for="(name, key) in TOP_NAMES" :key="key">
+            <div class="group-title">{{ name }}</div>
+            <div class="group">
+              <div class="row top-row" v-for="t in (data.tops && data.tops[key]) || []" :key="t.key">
+                <div class="grow">
+                  <div class="top-line"><span class="top-key" :title="t.key">{{ t.key }}</span><span class="num">{{ fmtCount(t.value) }}</span><span class="top-share">{{ (t.share * 100).toFixed(1) }}%</span></div>
+                  <div class="share-bar"><div :style="{width: Math.max(1, t.share * 100) + '%'}"></div></div>
+                </div>
+              </div>
+              <div class="row secondary" v-if="!data.tops || !(data.tops[key] || []).length">没有数据</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="group" v-else-if="loading"><div class="row secondary"><span class="spinner inline"></span>正在读取 EdgeOne 数据……</div></div>
+    </template>
+  </div>`,
+};
+
 const app = createApp({
   setup() {
     const tab = ref('servers');
@@ -381,6 +611,9 @@ const app = createApp({
     const msgBox = ref(null);
     const op = reactive({ port: 0, host: '', apiKey: '', hasKey: false, info: '' });
     const tc = reactive({ configured: false, hint: '', secretId: '', secretKey: '', info: '' });
+    const cloud = ref(null);          // Tencent Cloud instance behind the selected server
+    const cloudList = ref([]);        // instances offered when adding a server
+    const cloudPick = ref('');
     const suggestions = [
       '服务器现在的整体状况怎么样？',
       '内存占用是不是太高了？',
@@ -403,6 +636,10 @@ const app = createApp({
       tab.value = 'servers';
       if (selectedId.value !== id) current.value = null;
       selectedId.value = id;
+      cloud.value = null;
+      if (tc.configured) {
+        api('GET', `/api/servers/${id}/cloud`).then(r => { if (selectedId.value === id) cloud.value = r.instance || null; }).catch(() => {});
+      }
       try {
         current.value = await api('GET', `/api/servers/${id}/profile`);
         if (current.value.server.adapter === '1panel') {
@@ -456,7 +693,16 @@ const app = createApp({
     function openAdd() {
       Object.assign(addForm, { name: '', host: '', port: 22, username: 'root', authKind: 'password', password: '', keyPath: '', keyPassphrase: '' });
       showAdd.value = true;
+      cloudPick.value = '';
+      if (tc.configured) api('GET', '/api/tencent/servers').then(r => { cloudList.value = (r.servers || []).filter(s => s.publicIPs && s.publicIPs.length); }).catch(() => {});
     }
+    function pickCloud() {
+      const s = cloudList.value.find(x => x.id === cloudPick.value);
+      if (!s) return;
+      Object.assign(addForm, { name: s.name, host: s.publicIPs[0], username: /ubuntu/i.test(s.os) ? 'ubuntu' : 'root' });
+    }
+    function askAI(text) { draft.value = text; tab.value = 'chat'; newChat(); }
+    const daysTo = t => t ? Math.floor((new Date(t) - Date.now()) / 86400000) : null;
     async function addServer() {
       await guarded('正在添加并测试连接……', async () => {
         const sv = await api('POST', '/api/servers', { ...addForm });
@@ -631,7 +877,8 @@ const app = createApp({
     const serverName = id => id === 0 ? '腾讯云' : (servers.value.find(s => s.id === id) || { name: `服务器 ${id}` }).name;
     const parseSteps = s => { try { return JSON.parse(s); } catch { return []; } };
     const toolName = t => ({ list_servers: '查看服务器列表', get_server_profile: '读取服务器画像', refresh_server_profile: '重新识别服务器',
-      run_check: '执行只读检查', propose_plan: '生成修改清单', tencent_dns: '查询 DNSPod 解析', tencent_eo: '查询 EdgeOne' }[t] || t);
+      run_check: '执行只读检查', propose_plan: '生成修改清单', tencent_dns: '查询 DNSPod 解析', tencent_eo: '查询 EdgeOne',
+      tencent_servers: '查询腾讯云服务器', tencent_server_detail: '查看腾讯云服务器详情', tencent_eo_analytics: '分析网站访问数据' }[t] || t);
     const actorName = a => ({ user: '你', ai: 'AI', system: '系统' }[a] || a);
     const actionName = a => ({ 'server.add': '添加服务器', 'server.delete': '删除服务器', 'server.test': '测试连接', 'server.discover': '识别环境',
       'server.hostkey.recorded': '记录服务器指纹', 'settings.ai': '修改 AI 设置', 'ai.chat': 'AI 对话', 'plan.propose': 'AI 生成清单',
@@ -653,6 +900,7 @@ const app = createApp({
       select, openAdd, addServer, testConn, discover, removeServer, askAbout, send, onEnter, newChat, applyPreset, saveAI, testAI,
       convs, showConvs, conversationId, openConv, deleteConv, relTime,
       op, saveOnePanel, testOnePanel, tc, saveTencent, testTencent, clearTencent,
+      cloud, cloudList, cloudPick, pickCloud, askAI, daysTo, fmtBytes,
       memPct, rootDisk, envSub, dockerText, money, mb, meterClass, levelClass, levelIcon, levelName, riskName, adapterName,
       fmtTime, serverName, parseSteps, toolName, actorName, actionName, md,
     };
@@ -661,6 +909,8 @@ const app = createApp({
 
 app.component('plan-card', PlanCard);
 app.component('exec-log', ExecLog);
+app.component('line-chart', LineChart);
+app.component('eo-stats', EoStats);
 app.component('ui-icon', {
   props: { name: { type: String, required: true } },
   setup(props) { return { d: computed(() => ICONS[props.name] || '') }; },

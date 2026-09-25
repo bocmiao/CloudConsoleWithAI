@@ -38,6 +38,18 @@ const systemPrompt = `你是 Miao Panel（喵面板）里的服务器运维助�
 - 如果服务器上还没有这个网站（服务器画像的网站列表里没有这个域名），提醒用户先在面板里建站，暂时不能自动建站；
 - 把现有的 A 记录改成 CNAME 会让流量改走 EdgeOne，要在 summary 里说明。
 
+腾讯云服务器（轻量应用服务器、云服务器 CVM）：
+- tencent_servers 看所有实例（到期时间、流量包、对应的 Miao Panel 服务器），tencent_server_detail 看防火墙、快照和云监控；
+- 能执行：cloud.firewall.open / cloud.firewall.close（腾讯云防火墙或安全组）、cloud.snapshot.create（整盘快照）、cloud.server.reboot / stop / start。
+  清单的 server_id 填对应的 Miao Panel 服务器编号，没有就填 0；
+- 重启、关机或其他大改动前，建议先加一步 cloud.snapshot.create；到期不足 15 天、流量包用量超过 80% 要主动提醒用户。
+
+网站访问分析（EdgeOne）：用 tencent_eo_analytics。
+- 先用 overview 看整体数据和请求最多的时段；要解释变化（例如「流量为什么涨了」）时，在变化的时段和之前正常的时段分别用 top 查 url、ip、country、ua、referer、status，
+  对比找出增长来自哪里，判断是真实访客增长、搜索引擎或爬虫、热点内容，还是刷量/攻击；结论要引用具体的数字、时间和占比；
+- 可以执行：eo.cache.purge（清除缓存）、eo.cache.prefetch（预热）、eo.domain.status（启用/停用加速域名）、eo.origin.set（修改回源）。
+  封禁 IP、限流等安全策略暂时不能自动执行，需要时告诉用户在 EdgeOne 控制台「安全防护」里怎么设置。
+
 服务器可能装了 1Panel、宝塔，也可能是没装面板的纯 Linux（看服务器画像里的「适配器」）。1Panel 和宝塔管理的配置应该通过面板修改，不要建议直接改面板管理的文件。`
 
 func obj(props map[string]any, required ...string) map[string]any {
@@ -106,6 +118,42 @@ func (a *App) tools() map[string]ai.Tool {
 				"domain": map[string]any{"type": "string", "description": "站点或加速域名，例如 example.com 或 blog.example.com"},
 			}),
 		}, Run: a.toolTencentEO},
+		{Def: ai.ToolDef{
+			Name: "tencent_servers",
+			Description: "列出腾讯云账号下所有地域的轻量应用服务器和云服务器 CVM（只读）：实例 id、地域、状态、配置、公网 IP、到期时间和剩余天数、自动续费、" +
+				"轻量服务器本月流量包用量、CVM 安全组，以及对应的 Miao Panel 服务器编号。结果缓存 5 分钟，refresh=true 强制刷新。",
+			Schema: obj(map[string]any{"refresh": map[string]any{"type": "boolean"}}),
+		}, Run: a.toolTencentServers},
+		{Def: ai.ToolDef{
+			Name:        "tencent_server_detail",
+			Description: "查看一台腾讯云服务器的详情（只读）：防火墙/安全组入站规则、系统盘快照，以及云监控的 CPU、内存、公网带宽（平均、最高及时间、走势）。",
+			Schema: obj(map[string]any{
+				"instance": map[string]any{"type": "string", "description": "实例 id（lhins- 或 ins- 开头）"},
+				"region":   map[string]any{"type": "string", "description": "地域，例如 ap-guangzhou"},
+				"hours":    map[string]any{"type": "integer", "description": "监控看最近多少小时，默认 24，最多 720"},
+			}, "instance", "region"),
+		}, Run: a.toolTencentServerDetail},
+		{Def: ai.ToolDef{
+			Name: "tencent_eo_analytics",
+			Description: "EdgeOne 网站访问数据（只读）。view=overview：请求数、流量、峰值带宽、平均响应时间、缓存命中率、请求最多的时段和走势；" +
+				"view=top：按维度排行并给出占比，dimension 可选 url（路径）、ip（客户端 IP）、country、province、status（状态码）、referer（来源页）、" +
+				"ua、browser、os、device、type（资源类型）、domain。时间用 hours（最近多少小时，默认 24，最多 744），或者 start/end（中国时间，如 2026-09-25 14:00）。" +
+				"filters 可以缩小范围，例如 [{\"key\":\"statusCode\",\"operator\":\"equals\",\"value\":[\"404\"]}]，常用 key：country、statusCode、url、referer。",
+			Schema: obj(map[string]any{
+				"domain":    map[string]any{"type": "string", "description": "站点（example.com）或加速域名（blog.example.com）"},
+				"view":      map[string]any{"type": "string", "enum": []string{"overview", "top"}},
+				"dimension": map[string]any{"type": "string", "enum": []string{"url", "ip", "country", "province", "status", "referer", "ua", "browser", "os", "device", "type", "domain"}},
+				"metric":    map[string]any{"type": "string", "enum": []string{"request", "flux"}, "description": "排行按请求数（默认）还是流量"},
+				"hours":     map[string]any{"type": "integer"},
+				"start":     map[string]any{"type": "string"},
+				"end":       map[string]any{"type": "string"},
+				"limit":     map[string]any{"type": "integer", "description": "排行取前几名，默认 15"},
+				"filters": map[string]any{"type": "array", "items": obj(map[string]any{
+					"key": map[string]any{"type": "string"}, "operator": map[string]any{"type": "string"},
+					"value": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				}, "key", "operator", "value")},
+			}, "domain"),
+		}, Run: a.toolTencentEOAnalytics},
 		{Def: ai.ToolDef{
 			Name: "propose_plan",
 			Description: "提交修改清单。清单会显示在对话里，用户勾选后一键执行。风险等级由系统判定。" +

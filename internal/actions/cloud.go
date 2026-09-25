@@ -73,6 +73,22 @@ func applyCloud(ctx context.Context, env *Env, r Resolved, progress Progress) Ou
 			return applyEODomain(ctx, env, r.Values, out, report)
 		case "eo_https":
 			return applyEOHTTPS(ctx, env, r.Values, out, report)
+		case "firewall_open":
+			return applyFirewallOpen(ctx, env, r.Values, out, report)
+		case "firewall_close":
+			return applyFirewallClose(ctx, env, r.Values, out, report)
+		case "snapshot":
+			return applySnapshot(ctx, env, r.Values, out, report)
+		case "power_start", "power_stop", "power_reboot":
+			return applyPower(ctx, env, strings.TrimPrefix(r.Impl.Cloud, "power_"), r.Values, out, report)
+		case "eo_purge":
+			return applyPurge(ctx, env, r.Values, out, report)
+		case "eo_prefetch":
+			return applyPrefetch(ctx, env, r.Values, out, report)
+		case "eo_status":
+			return applyDomainStatus(ctx, env, r.Values, out, report)
+		case "eo_origin":
+			return applyOrigin(ctx, env, r.Values, out, report)
 		}
 		out.Status = StatusFailed
 		out.logf("未知的云操作 %s", r.Impl.Cloud)
@@ -99,6 +115,18 @@ func undoCloud(ctx context.Context, env *Env, r Resolved, undo map[string]string
 			err = undoDNSRecord(ctx, env.Cloud, undo)
 		case "eo_domain_add":
 			err = undoEODomain(ctx, env, undo)
+		case "firewall_open", "firewall_close":
+			err = undoFirewall(ctx, env.Cloud, undo)
+		case "power_start", "power_stop":
+			op := "StopInstances"
+			if r.Impl.Cloud == "power_stop" {
+				op = "StartInstances"
+			}
+			err = env.Cloud.Power(ctx, undo["region"], undo["instance"], op)
+		case "eo_status":
+			err = env.Cloud.SetAccelerationDomainStatus(ctx, undo["zone_id"], []string{undo["domain"]}, undo["status"])
+		case "eo_origin":
+			err = undoOrigin(ctx, env.Cloud, undo)
 		case "eo_https":
 			var ids []string
 			if undo["cert_ids"] != "" {

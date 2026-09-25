@@ -46,16 +46,44 @@ type Fake struct {
 	// DeniedService makes every call to that service fail with a
 	// permission error.
 	DeniedService string
+
+	// Servers: a Lighthouse instance and a CVM instance in ap-guangzhou.
+	Instances map[string]*Instance
+	Firewall  map[string][]tencent.FirewallRule // by instance or security group
+	Snaps     map[string]*tencent.Snapshot
+	Regions   []string // regions the fake saw requests for
 }
 
-// Start runs a fake with one DNSPod domain and one EdgeOne site (CNAME
-// access) for example.com.
-func Start(t *testing.T) *Fake {
+// Instance is a server held by the fake.
+type Instance struct {
+	ID, Name, State, IP, Group, DiskID string
+	pending                            string // state reached on the next look
+}
+
+// New returns a fake with one DNSPod domain and one EdgeOne site (CNAME
+// access) for example.com, a Lighthouse and a CVM instance; serve it with
+// httptest and set URL.
+func New() *Fake {
 	f := &Fake{
+		Instances: map[string]*Instance{
+			"lhins-abc12345": {ID: "lhins-abc12345", Name: "blog", State: "RUNNING", IP: "81.68.79.253", DiskID: "lhdisk-1"},
+			"ins-xyz98765":   {ID: "ins-xyz98765", Name: "shop", State: "RUNNING", IP: "43.1.2.3", Group: "sg-abc", DiskID: "disk-9"},
+		},
+		Firewall: map[string][]tencent.FirewallRule{
+			"lhins-abc12345": {{Protocol: "TCP", Port: "22", CidrBlock: "0.0.0.0/0", Action: "ACCEPT"}, {Protocol: "TCP", Port: "80", CidrBlock: "0.0.0.0/0", Action: "ACCEPT"}},
+			"sg-abc":         {{Protocol: "TCP", Port: "22", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Index: 0}},
+		},
+		Snaps:   map[string]*tencent.Snapshot{},
 		nextID:  100,
 		Records: map[string][]Record{"example.com": {{RecordID: 1, Name: "blog", Type: "A", Value: "1.2.3.4", Line: tencent.DefaultLine, TTL: 600, Status: "ENABLE"}}},
 		Zones:   []tencent.Zone{{ZoneID: "zone-abc", ZoneName: "example.com", Type: "partial", Status: "active", Area: "mainland"}},
 	}
+	return f
+}
+
+// Start runs a fake for a test.
+func Start(t *testing.T) *Fake {
+	f := New()
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
 	f.URL = srv.URL
@@ -264,7 +292,9 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		ok(w, nil)
 	default:
-		fail(w, "InvalidAction", fmt.Sprintf("fake does not implement %s %s", service, action))
+		if !f.serveMore(w, service, action, r.Header.Get("X-TC-Region"), in) {
+			fail(w, "InvalidAction", fmt.Sprintf("fake does not implement %s %s", service, action))
+		}
 	}
 }
 

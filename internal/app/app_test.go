@@ -636,3 +636,71 @@ func TestTencentCloudPlanWithoutServer(t *testing.T) {
 		t.Fatal("credentials not cleared")
 	}
 }
+
+func TestTencentServersAndAnalyticsTools(t *testing.T) {
+	a := newApp(t)
+	f := tencenttest.Start(t)
+	a.TencentEndpoint = f.Endpoint
+	ctx := withOrigin(context.Background(), OriginAI)
+	if _, err := a.SaveTencent(tencenttest.SecretID, tencenttest.SecretKey); err != nil {
+		t.Fatal(err)
+	}
+	blog, _ := a.Store.AddServer(store.Server{Name: "博客", Host: "81.68.79.253", Port: 22, Username: "root", AuthKind: "password"})
+
+	out, err := a.toolTencentServers(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"轻量应用服务器 blog id=lhins-abc12345 region=ap-guangzhou", "云服务器 CVM shop id=ins-xyz98765",
+		"本月流量包=已用900.0GB/1000.0GB（90%）", "还剩", "安全组=sg-abc", fmt.Sprintf("对应 Miao Panel 服务器 id=%d", blog.ID)} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("tencent_servers is missing %q:\n%s", want, out)
+		}
+	}
+	calls := len(f.Calls)
+	if _, err := a.toolTencentServers(ctx, nil); err != nil || len(f.Calls) != calls {
+		t.Fatalf("second listing should come from the cache (%d → %d calls)", calls, len(f.Calls))
+	}
+	if cs, err := a.ServerCloud(ctx, blog.ID); err != nil || cs == nil || cs.ID != "lhins-abc12345" {
+		t.Fatalf("server cloud = %+v, %v", cs, err)
+	}
+
+	out, err = a.toolTencentServerDetail(ctx, json.RawMessage(`{"instance":"lhins-abc12345","region":"ap-guangzhou","hours":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"防火墙规则", "TCP 22", "系统盘快照：没有", "CPU 使用率：平均", "公网出带宽", "走势"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("tencent_server_detail is missing %q:\n%s", want, out)
+		}
+	}
+
+	out, err = a.toolTencentEOAnalytics(ctx, json.RawMessage(`{"domain":"blog.example.com","hours":24}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"站点 example.com", "请求数", "缓存命中率 50.0%", "请求最多的时段", "走势"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("overview is missing %q:\n%s", want, out)
+		}
+	}
+	out, err = a.toolTencentEOAnalytics(ctx, json.RawMessage(`{"domain":"example.com","view":"top","dimension":"url","filters":[{"key":"statusCode","operator":"equals","value":["200"]}]}`))
+	if err != nil || !strings.Contains(out, "1. /wp-login.php  4200") || !strings.Contains(out, "%）") {
+		t.Fatalf("top: %q %v", out, err)
+	}
+	for _, bad := range []string{`{"domain":"example.com","view":"top","dimension":"password"}`,
+		`{"domain":"example.com","filters":[{"key":"a b","operator":"equals","value":["x"]}]}`,
+		`{"domain":"example.com","start":"yesterday","end":"today"}`} {
+		if _, err := a.toolTencentEOAnalytics(ctx, json.RawMessage(bad)); err == nil {
+			t.Errorf("accepted %s", bad)
+		}
+	}
+
+	r, err := a.EOAnalytics(context.Background(), "blog.example.com", 168)
+	if err != nil || r.Requests == 0 || r.Interval != "hour" || len(r.Series) == 0 || len(r.Tops["url"]) != 3 || r.Tops["url"][0].Share <= 0 {
+		t.Fatalf("EOAnalytics = %+v, %v", r, err)
+	}
+	if sites, err := a.EOSites(context.Background()); err != nil || len(sites) == 0 || sites[0] != "example.com" {
+		t.Fatalf("sites = %v, %v", sites, err)
+	}
+}

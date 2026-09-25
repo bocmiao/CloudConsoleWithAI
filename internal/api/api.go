@@ -60,6 +60,10 @@ func New(a *app.App, token string, port int, version string) *Server {
 	api("PUT /api/settings/tencent", s.putTencent)
 	api("DELETE /api/settings/tencent", s.deleteTencent)
 	api("POST /api/settings/tencent/test", s.testTencent)
+	api("GET /api/tencent/servers", s.tencentServers)
+	api("GET /api/servers/{id}/cloud", s.serverCloud)
+	api("GET /api/eo/sites", s.eoSites)
+	api("GET /api/eo/analytics", s.eoAnalytics)
 	api("POST /api/chat", s.chat)
 	api("GET /api/conversations", s.conversations)
 	api("GET /api/conversations/{id}", s.conversation)
@@ -261,6 +265,33 @@ func (s *Server) deleteTencent(_ http.ResponseWriter, _ *http.Request) (any, err
 func (s *Server) testTencent(_ http.ResponseWriter, r *http.Request) (any, error) {
 	info, err := s.app.TestTencent(r.Context())
 	return map[string]string{"info": info}, err
+}
+
+func (s *Server) tencentServers(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.TencentServers(r.Context(), r.URL.Query().Get("refresh") == "1")
+}
+
+func (s *Server) serverCloud(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	cs, err := s.app.ServerCloud(r.Context(), id)
+	if err != nil {
+		// Cloud details are extra information: an error must not break the
+		// server page.
+		return map[string]string{"error": err.Error()}, nil
+	}
+	return map[string]any{"instance": cs}, nil
+}
+
+func (s *Server) eoSites(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.EOSites(r.Context())
+}
+
+func (s *Server) eoAnalytics(_ http.ResponseWriter, r *http.Request) (any, error) {
+	hours, _ := strconv.Atoi(r.URL.Query().Get("hours"))
+	return s.app.EOAnalytics(r.Context(), r.URL.Query().Get("domain"), hours)
 }
 
 func (s *Server) chat(_ http.ResponseWriter, r *http.Request) (any, error) {

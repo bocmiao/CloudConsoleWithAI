@@ -18,6 +18,7 @@
 
     <div class="side-section">
       <div class="side-item" :class="{active: tab === 'chat'}" @click="go('chat')"><ui-icon name="sparkles"></ui-icon>AI 助手</div>
+      <div class="side-item" :class="{active: tab === 'stats'}" @click="go('stats')"><ui-icon name="chart"></ui-icon>网站统计</div>
       <div class="side-item" :class="{active: tab === 'plans'}" @click="go('plans')"><ui-icon name="bulb"></ui-icon>建议</div>
       <div class="side-item" :class="{active: tab === 'logs'}" @click="go('logs')"><ui-icon name="terminal"></ui-icon>日志</div>
     </div>
@@ -94,6 +95,23 @@
               <div class="grow">这台服务器还没识别过。点击「识别环境」，会登录服务器运行一个<b>只读</b>检查脚本（大约十几秒），看看上面装了什么、运行得怎么样。</div>
             </div>
           </div>
+
+          <template v-if="cloud">
+            <div class="group-title">腾讯云</div>
+            <div class="group">
+              <div class="row"><span class="k">实例</span><span class="v">{{ cloud.kind === 'lighthouse' ? '轻量应用服务器' : '云服务器 CVM' }} · {{ cloud.name }} · {{ cloud.id }}</span></div>
+              <div class="row"><span class="k">地域和配置</span><span class="v">{{ cloud.regionName }} · {{ cloud.cpu }} 核 {{ cloud.memoryGB }}GB · 系统盘 {{ cloud.diskGB }}GB · 带宽 {{ cloud.bandwidthMbps }}Mbps</span></div>
+              <div class="row" v-if="cloud.expiredTime"><span class="k">到期时间</span>
+                <span class="v" :class="{'st-warn': daysTo(cloud.expiredTime) < 15}">
+                  <ui-icon v-if="daysTo(cloud.expiredTime) < 15" name="warn" style="vertical-align: -3px"></ui-icon>
+                  {{ fmtTime(cloud.expiredTime) }}（{{ daysTo(cloud.expiredTime) < 0 ? '已过期' : '还剩 ' + daysTo(cloud.expiredTime) + ' 天' }}）· {{ cloud.renewFlag === 'NOTIFY_AND_AUTO_RENEW' ? '自动续费' : '没有开自动续费' }}</span></div>
+              <div class="row stack" v-if="cloud.trafficTotal">
+                <div style="display: flex"><span>本月流量包</span><span class="secondary" style="margin-left: auto">已用 {{ fmtBytes(cloud.trafficUsed) }} / {{ fmtBytes(cloud.trafficTotal) }}</span></div>
+                <div class="meter" :class="meterClass(Math.round(cloud.trafficUsed * 100 / cloud.trafficTotal))" role="meter" :aria-valuenow="Math.round(cloud.trafficUsed * 100 / cloud.trafficTotal)" aria-valuemin="0" aria-valuemax="100" aria-label="流量包用量" style="margin-bottom: 2px"><div :style="{width: Math.min(100, cloud.trafficUsed * 100 / cloud.trafficTotal) + '%'}"></div></div>
+              </div>
+            </div>
+          </template>
+
 
           <template v-if="p">
             <div class="tiles">
@@ -255,6 +273,14 @@
       </div>
     </template>
 
+    <!-- Website statistics -->
+    <template v-if="tab === 'stats'">
+      <header class="toolbar"><h1>网站统计</h1></header>
+      <div class="page">
+        <eo-stats :configured="tc.configured" @ask="askAI" @settings="go('settings')"></eo-stats>
+      </div>
+    </template>
+
     <!-- Plans -->
     <template v-if="tab === 'plans'">
       <header class="toolbar"><h1>建议</h1></header>
@@ -324,19 +350,19 @@
         <div class="group">
           <div class="row form"><span class="k">SecretId</span><span class="v"><input v-model="tc.secretId" :placeholder="tc.configured ? '已保存：' + tc.hint + '（留空表示不修改）' : '以 AKID 开头'" autocomplete="off" aria-label="SecretId"></span></div>
           <div class="row form"><span class="k">SecretKey</span><span class="v"><input type="password" v-model="tc.secretKey" :placeholder="tc.configured ? '已保存（留空表示不修改）' : '创建时只显示一次，请复制保存'" autocomplete="off" aria-label="SecretKey"></span></div>
-          <div class="row"><span class="grow small secondary">{{ tc.info || (tc.configured ? '已配置' : '还没有配置。配好后 AI 能查看和修改 DNSPod 解析、EdgeOne 加速域名和证书') }}</span>
+          <div class="row"><span class="grow small secondary">{{ tc.info || (tc.configured ? '已配置' : '还没有配置。配好后 AI 能查看和管理腾讯云服务器、DNSPod 解析和 EdgeOne，并分析网站访问数据') }}</span>
             <button v-if="tc.configured" class="plain destructive" @click="clearTencent" :disabled="busy">清除</button>
             <button @click="testTencent" :disabled="busy || !tc.configured">测试</button>
             <button class="primary" @click="saveTencent" :disabled="busy || !tc.secretId || !tc.secretKey">保存</button></div>
         </div>
         <details class="guide">
-          <summary><ui-icon name="chevron"></ui-icon>怎么创建只有 DNSPod 和 EdgeOne 权限的子账号？</summary>
+          <summary><ui-icon name="chevron"></ui-icon>怎么创建给 Miao Panel 用的子账号（只给需要的权限）？</summary>
           <ol>
             <li>打开腾讯云控制台的<a href="https://console.cloud.tencent.com/cam" target="_blank" rel="noopener">访问管理（CAM）</a>，进入「用户 → 用户列表 → 新建用户 → 快速创建」；</li>
             <li>用户名随便填，比如 miaopanel；访问方式只勾选「编程访问」，<b>不要</b>勾选控制台访问；</li>
-            <li>用户权限里搜索并勾选 <code>QcloudDNSPodFullAccess</code> 和 <code>QcloudTEOFullAccess</code>（只想让 AI 查看、不让它修改的话，改选名字里带 ReadOnly 的同名策略）；</li>
+            <li>用户权限里搜索并勾选：<code>QcloudDNSPodFullAccess</code>（解析）、<code>QcloudTEOFullAccess</code>（EdgeOne）、<code>QcloudLighthouseFullAccess</code>（轻量服务器）、<code>QcloudCVMFullAccess</code> 和 <code>QcloudVPCFullAccess</code>（云服务器和它的安全组）、<code>QcloudCBSFullAccess</code>（云服务器快照）、<code>QcloudMonitorReadOnlyAccess</code>（监控数据）。用不到的产品可以不勾；只想让 AI 查看、不让它修改的话，改选名字里带 ReadOnly 的同名策略；</li>
             <li>创建完成后复制 SecretId 和 SecretKey 粘贴到上面。SecretKey 只显示一次；</li>
-            <li>不要用主账号的密钥。子账号只能动解析和 EdgeOne，不能开服务器、不能花钱买东西，随时可以在访问管理里删掉。</li>
+            <li>不要用主账号的密钥。子账号只有你勾选的权限，不能购买新资源，随时可以在访问管理里删掉。</li>
           </ol>
         </details>
 
@@ -355,6 +381,12 @@
     <div class="sheet" role="dialog" aria-label="添加服务器">
       <h2>添加服务器</h2>
       <p>密码只保存在你的电脑上，不会上传，也不会发给 AI。</p>
+      <div class="group" v-if="cloudList.length">
+        <div class="row form"><span class="k">从腾讯云选择</span><span class="v"><select v-model="cloudPick" @change="pickCloud" aria-label="从腾讯云选择">
+          <option value="">手动填写</option>
+          <option v-for="c in cloudList" :key="c.id" :value="c.id">{{ c.kind === 'lighthouse' ? '轻量' : 'CVM' }} · {{ c.name }} · {{ c.publicIPs[0] }}{{ c.serverId ? '（已添加）' : '' }}</option>
+        </select></span></div>
+      </div>
       <div class="group">
         <div class="row form"><span class="k">名称</span><span class="v"><input v-model="addForm.name" placeholder="可不填，比如：博客服务器" aria-label="名称"></span></div>
         <div class="row form"><span class="k">IP 或域名</span><span class="v"><input v-model="addForm.host" placeholder="比如 1.2.3.4" aria-label="IP 或域名"></span></div>

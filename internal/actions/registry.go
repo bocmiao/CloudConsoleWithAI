@@ -18,7 +18,7 @@ import (
 type Param struct {
 	Name     string
 	Desc     string
-	Kind     string // int | enum | name | host | subdomain | text
+	Kind     string // int | enum | name | host | subdomain | text | instance | region | port | cidr
 	Min, Max int
 	Enum     []string
 	Default  string
@@ -59,6 +59,9 @@ type Capability struct {
 var (
 	nameRe      = regexp.MustCompile(`^[A-Za-z0-9@._-]{1,64}$`)
 	hostRe      = regexp.MustCompile(`^([A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
+	instanceRe  = regexp.MustCompile(`^(lhins|ins)-[a-z0-9]{6,20}$`)
+	regionRe    = regexp.MustCompile(`^[a-z]{2,3}(-[a-z0-9]+){1,3}$`)
+	portRe      = regexp.MustCompile(`^(ALL|[0-9]{1,5}(-[0-9]{1,5})?(,[0-9]{1,5}(-[0-9]{1,5})?)*)$`)
 	subdomainRe = regexp.MustCompile(`^(@|\*|(\*\.)?[A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9])?)*)$`)
 )
 
@@ -129,6 +132,105 @@ func init() {
 		},
 		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "eo_https", Downtime: "不影响访问，证书签发一般需要几分钟",
 			Undo: "把证书设置恢复成修改前的样子"}},
+	})
+	register(&Capability{
+		Name: "cloud.firewall.open", Title: "腾讯云防火墙放行端口", Risk: core.R1, Reversible: true,
+		Params: []Param{
+			{Name: "instance", Kind: "instance", Required: true, Desc: "腾讯云实例 ID（tencent_servers 返回的 id，lhins- 开头是轻量服务器，ins- 开头是云服务器 CVM）"},
+			{Name: "region", Kind: "region", Required: true, Desc: "实例所在地域，例如 ap-guangzhou（tencent_servers 返回的 region）"},
+			{Name: "port", Kind: "port", Required: true, Desc: "端口：80、80,443、8000-8100"},
+			{Name: "protocol", Kind: "enum", Enum: []string{"TCP", "UDP"}, Default: "TCP", Desc: "协议"},
+			{Name: "cidr", Kind: "cidr", Default: "0.0.0.0/0", Desc: "允许哪些来源访问：0.0.0.0/0 表示所有人，也可以只写一个 IP"},
+			{Name: "description", Kind: "text", Desc: "规则备注"},
+		},
+		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "firewall_open", Downtime: "不影响现有访问",
+			Undo: "删除这条放行规则"}},
+	})
+	register(&Capability{
+		Name: "cloud.firewall.close", Title: "腾讯云防火墙关闭端口", Risk: core.R2, Reversible: true,
+		Params: []Param{
+			{Name: "instance", Kind: "instance", Required: true, Desc: "腾讯云实例 ID（tencent_servers 返回的 id，lhins- 开头是轻量服务器，ins- 开头是云服务器 CVM）"},
+			{Name: "region", Kind: "region", Required: true, Desc: "实例所在地域，例如 ap-guangzhou（tencent_servers 返回的 region）"},
+			{Name: "port", Kind: "port", Required: true, Desc: "要关闭的端口（22、3389 远程登录端口不允许关闭）"},
+			{Name: "protocol", Kind: "enum", Enum: []string{"TCP", "UDP"}, Default: "TCP", Desc: "协议"},
+			{Name: "cidr", Kind: "cidr", Default: "0.0.0.0/0", Desc: "要删除的规则的来源，默认 0.0.0.0/0"},
+		},
+		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "firewall_close", Downtime: "用这个端口的访问会被拒绝",
+			Undo: "把删掉的放行规则加回去"}},
+	})
+	register(&Capability{
+		Name: "cloud.snapshot.create", Title: "创建服务器快照", Risk: core.R1,
+		NoUndo: "快照是新增的整盘备份，不需要回滚；不再需要时可以在腾讯云控制台删除（超出免费额度的快照会产生费用）",
+		Params: []Param{
+			{Name: "instance", Kind: "instance", Required: true, Desc: "腾讯云实例 ID（tencent_servers 返回的 id，lhins- 开头是轻量服务器，ins- 开头是云服务器 CVM）"},
+			{Name: "region", Kind: "region", Required: true, Desc: "实例所在地域，例如 ap-guangzhou（tencent_servers 返回的 region）"},
+			{Name: "name", Kind: "text", Desc: "快照名称，不填自动生成"},
+		},
+		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "snapshot", Downtime: "不影响运行；轻量服务器有免费快照额度，云服务器快照按容量收费"}},
+	})
+	register(&Capability{
+		Name: "cloud.server.reboot", Title: "重启腾讯云服务器", Risk: core.R3,
+		NoUndo: "重启没有修改任何配置，不需要回滚",
+		Params: []Param{{Name: "instance", Kind: "instance", Required: true, Desc: "腾讯云实例 ID（tencent_servers 返回的 id，lhins- 开头是轻量服务器，ins- 开头是云服务器 CVM）"},
+			{Name: "region", Kind: "region", Required: true, Desc: "实例所在地域，例如 ap-guangzhou（tencent_servers 返回的 region）"}},
+		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "power_reboot", Downtime: "整台服务器上的网站和服务中断一到几分钟"}},
+	})
+	register(&Capability{
+		Name: "cloud.server.stop", Title: "关闭腾讯云服务器", Risk: core.R3, Reversible: true,
+		Params: []Param{{Name: "instance", Kind: "instance", Required: true, Desc: "腾讯云实例 ID（tencent_servers 返回的 id，lhins- 开头是轻量服务器，ins- 开头是云服务器 CVM）"},
+			{Name: "region", Kind: "region", Required: true, Desc: "实例所在地域，例如 ap-guangzhou（tencent_servers 返回的 region）"}},
+		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "power_stop", Downtime: "整台服务器上的网站和服务全部停止，直到重新开机",
+			Undo: "重新开机"}},
+	})
+	register(&Capability{
+		Name: "cloud.server.start", Title: "启动腾讯云服务器", Risk: core.R2, Reversible: true,
+		Params: []Param{{Name: "instance", Kind: "instance", Required: true, Desc: "腾讯云实例 ID（tencent_servers 返回的 id，lhins- 开头是轻量服务器，ins- 开头是云服务器 CVM）"},
+			{Name: "region", Kind: "region", Required: true, Desc: "实例所在地域，例如 ap-guangzhou（tencent_servers 返回的 region）"}},
+		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "power_start", Downtime: "开机需要一两分钟",
+			Undo: "重新关机"}},
+	})
+	register(&Capability{
+		Name: "eo.cache.purge", Title: "清除 EdgeOne 缓存", Risk: core.R2,
+		NoUndo: "清除缓存只是让节点重新从源站拉取内容，不需要也无法回滚",
+		Params: []Param{
+			{Name: "domain", Kind: "host", Required: true, Desc: "站点或加速域名，例如 blog.example.com"},
+			{Name: "type", Kind: "enum", Enum: []string{"url", "prefix", "host", "all"}, Default: "url",
+				Desc: "url：指定网址；prefix：目录；host：整个域名；all：整个站点（会让源站压力突增，尽量少用）"},
+			{Name: "targets", Kind: "text", Desc: "要清除的完整网址或目录（https:// 开头），多个用逗号或换行分隔；host 类型填域名，不填就是 domain；all 不用填"},
+			{Name: "method", Kind: "enum", Enum: []string{"invalidate", "delete"}, Default: "invalidate",
+				Desc: "invalidate：只刷新有更新的内容（默认）；delete：全部删除"},
+		},
+		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "eo_purge", Downtime: "不中断访问，清除后的第一次访问会慢一点"}},
+	})
+	register(&Capability{
+		Name: "eo.cache.prefetch", Title: "预热 EdgeOne 缓存", Risk: core.R1,
+		NoUndo: "预热只是提前把内容缓存到节点，不需要回滚",
+		Params: []Param{
+			{Name: "domain", Kind: "host", Required: true, Desc: "站点或加速域名"},
+			{Name: "targets", Kind: "text", Required: true, Desc: "要预热的完整网址（https:// 开头），多个用逗号或换行分隔"},
+		},
+		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "eo_prefetch", Downtime: "不影响访问"}},
+	})
+	register(&Capability{
+		Name: "eo.domain.status", Title: "启用或停用 EdgeOne 加速域名", Risk: core.R2, Reversible: true,
+		Params: []Param{
+			{Name: "domain", Kind: "host", Required: true, Desc: "加速域名"},
+			{Name: "status", Kind: "enum", Enum: []string{"online", "offline"}, Required: true, Desc: "online：启用；offline：停用"},
+		},
+		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "eo_status", Downtime: "停用后这个域名经过 EdgeOne 的访问会失败",
+			Undo: "恢复原来的启用状态"}},
+	})
+	register(&Capability{
+		Name: "eo.origin.set", Title: "修改 EdgeOne 回源地址", Risk: core.R2, Reversible: true,
+		Params: []Param{
+			{Name: "domain", Kind: "host", Required: true, Desc: "加速域名"},
+			{Name: "origin", Kind: "host", Required: true, Desc: "新的源站：服务器公网 IP 或域名"},
+			{Name: "origin_protocol", Kind: "enum", Enum: []string{"HTTP", "HTTPS", "FOLLOW"}, Desc: "回源协议，不填保持原样"},
+			{Name: "http_port", Kind: "int", Min: 1, Max: 65535, Desc: "HTTP 回源端口，不填保持原样"},
+			{Name: "https_port", Kind: "int", Min: 1, Max: 65535, Desc: "HTTPS 回源端口，不填保持原样"},
+		},
+		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "eo_origin", Downtime: "新源站如果没准备好这个网站，访问会出错",
+			Undo: "改回原来的源站和端口"}},
 	})
 	register(&Capability{
 		Name: "container.restart", Title: "重启容器", Risk: core.R2,
@@ -380,6 +482,32 @@ func paramValue(p Param, raw any) (string, error) {
 			return "", fmt.Errorf("参数 %s 要是主机记录（例如 www、blog，主域名本身填 @），%q 不是", p.Name, s)
 		}
 		return strings.ToLower(s), nil
+	case "instance":
+		if !instanceRe.MatchString(s) {
+			return "", fmt.Errorf("参数 %s 要是腾讯云实例 ID（lhins- 或 ins- 开头），%q 不是", p.Name, s)
+		}
+		return s, nil
+	case "region":
+		if !regionRe.MatchString(s) {
+			return "", fmt.Errorf("参数 %s 要是地域，例如 ap-guangzhou，%q 不是", p.Name, s)
+		}
+		return s, nil
+	case "port":
+		s = strings.ToUpper(strings.ReplaceAll(s, " ", ""))
+		if !portRe.MatchString(s) {
+			return "", fmt.Errorf("参数 %s 要是端口，例如 80、80,443、8000-8100 或 ALL，%q 不是", p.Name, s)
+		}
+		for _, n := range regexp.MustCompile(`[0-9]+`).FindAllString(s, -1) {
+			if v, _ := strconv.Atoi(n); v < 1 || v > 65535 {
+				return "", fmt.Errorf("端口 %s 超出范围", n)
+			}
+		}
+		return s, nil
+	case "cidr":
+		if err := checkCIDR(s); err != nil {
+			return "", err
+		}
+		return s, nil
 	case "text":
 		if len(s) > 512 || strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
 			return "", fmt.Errorf("参数 %s 太长或含有控制字符", p.Name)

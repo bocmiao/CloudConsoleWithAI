@@ -59,7 +59,8 @@ func friendly(e *Error) string {
 	case strings.HasPrefix(e.Code, "AuthFailure.SignatureExpire"):
 		return "电脑的时间不准，腾讯云拒绝了请求，请把电脑时间校准后再试"
 	case strings.HasPrefix(e.Code, "AuthFailure.UnauthorizedOperation"), strings.HasPrefix(e.Code, "UnauthorizedOperation"):
-		name := map[string]string{"dnspod": "DNSPod", "teo": "EdgeOne"}[e.Service]
+		name := map[string]string{"dnspod": "DNSPod", "teo": "EdgeOne", "lighthouse": "轻量应用服务器", "cvm": "云服务器 CVM",
+			"vpc": "私有网络（安全组）", "cbs": "云硬盘（快照）", "monitor": "云监控"}[e.Service]
 		if name == "" {
 			name = e.Service
 		}
@@ -91,15 +92,24 @@ func Authorization(secretID, secretKey, service, host string, timestamp int64, b
 		", SignedHeaders=content-type;host, Signature=" + hex.EncodeToString(hmacSHA256(key, toSign))
 }
 
-// Call runs one API action. in is marshalled as the request body; the
-// "Response" object of the reply is decoded into out.
+// Call runs one API action of a global service. in is marshalled as the
+// request body; the "Response" object of the reply is decoded into out.
 func (c *Client) Call(ctx context.Context, service, version, action string, in, out any) error {
+	return c.CallRegion(ctx, service, version, action, "", in, out)
+}
+
+// CallRegion runs one API action in a region (e.g. ap-guangzhou).
+func (c *Client) CallRegion(ctx context.Context, service, version, action, region string, in, out any) error {
 	body, err := json.Marshal(in)
 	if err != nil {
 		return err
 	}
 	if c.Trace != nil {
-		c.Trace(service, action, body)
+		name := action
+		if region != "" {
+			name += "@" + region
+		}
+		c.Trace(service, name, body)
 	}
 	base := "https://" + service + ".tencentcloudapi.com"
 	if c.Endpoint != nil {
@@ -116,6 +126,9 @@ func (c *Client) Call(ctx context.Context, service, version, action string, in, 
 	req.Header.Set("X-TC-Version", version)
 	req.Header.Set("X-TC-Timestamp", strconv.FormatInt(ts, 10))
 	req.Header.Set("X-TC-Language", "zh-CN")
+	if region != "" {
+		req.Header.Set("X-TC-Region", region)
+	}
 	req.Header.Set("Authorization", Authorization(c.SecretID, c.SecretKey, service, host, ts, body))
 	resp, err := c.hc.Do(req)
 	if err != nil {
