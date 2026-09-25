@@ -87,7 +87,7 @@ func init() {
 		Params: []Param{
 			{Name: "app", Kind: "name", Required: true, Desc: "1Panel 应用名称（应用商店 → 已安装 里显示的名字，例如 halo、mysql）"},
 			{Name: "memory_mb", Kind: "int", Min: 0, Max: 262144, Required: true,
-				Desc: "内存上限（MB），0 表示取消限制。不能低于当前实际占用的 1.2 倍。注意 Java 应用（如 Halo）的 JVM 默认最大堆是上限的 1/4，上限太小会导致 Java 内存不足"},
+				Desc: "内存上限（MB），0 表示取消限制。不能低于当前实际占用的 1.2 倍。Java 应用（如 Halo）没有固定堆时，JVM 默认最大堆是上限的 1/4，所以要先用 java.heap.set 固定堆"},
 		},
 		Impls: map[string]Impl{
 			"1panel": {Via: "1Panel 接口", Panel: "app_limits", Downtime: "1Panel 会重建这个应用的容器，服务中断十几秒到一分钟",
@@ -98,6 +98,18 @@ func init() {
 				return fmt.Errorf("memory_mb 至少 64，或者填 0 表示取消限制")
 			}
 			return nil
+		},
+	})
+	register(&Capability{
+		Name: "java.heap.set", Title: "固定 Java 应用的最大堆", Risk: core.R2, Reversible: true,
+		Params: []Param{
+			{Name: "app", Kind: "name", Required: true, Desc: "1Panel 应用名称（例如 halo）"},
+			{Name: "max_heap_mb", Kind: "int", Min: 64, Max: 32768, Required: true,
+				Desc: "Java 最大堆（MB）。之后要设容器内存上限的话，堆一般取上限的 70%~75%，给非堆内存留余量"},
+		},
+		Impls: map[string]Impl{
+			"1panel": {Via: "1Panel 接口", Panel: "java_heap", Downtime: "1Panel 会重建这个应用的容器，服务中断十几秒到一分钟",
+				Undo: "通过 1Panel 把应用的 docker-compose 配置恢复成修改前的样子（会再重建一次容器）"},
 		},
 	})
 	register(&Capability{

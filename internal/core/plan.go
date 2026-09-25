@@ -43,6 +43,7 @@ type Step struct {
 var capabilityRisk = map[string]Risk{
 	"backup.create":     R1,
 	"container.restart": R2,
+	"java.heap.set":     R2,
 	"snapshot.create":   R1,
 	"firewall.open":     R1,
 	"swap.set":          R2,

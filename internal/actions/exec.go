@@ -370,6 +370,8 @@ func applyPanel(ctx context.Context, env *Env, r Resolved, progress Progress) Ou
 			return applyAppLimits(ctx, env, r.Values, out, report)
 		case "backup":
 			return applyBackup(ctx, env, r.Values, out, report)
+		case "java_heap":
+			return applyJavaHeap(ctx, env, r.Values, out, report)
 		}
 		out.Status = StatusFailed
 		out.logf("未知的面板操作 %s", r.Impl.Panel)
@@ -550,6 +552,12 @@ func undoPanel(ctx context.Context, env *Env, r Resolved, undo map[string]string
 			}
 		case "app_limits":
 			err = undoAppLimits(ctx, env.OnePanel, undo)
+		case "java_heap":
+			id, _ := strconv.ParseUint(undo["install_id"], 10, 64)
+			var cfg onepanel.ContainerConfig
+			if cfg, err = env.OnePanel.AppConfig(ctx, uint(id)); err == nil {
+				err = env.OnePanel.UpdateAppConfig(ctx, uint(id), cfg, undo["compose"])
+			}
 		default:
 			err = fmt.Errorf("未知的面板操作 %s", r.Impl.Panel)
 		}
@@ -666,7 +674,7 @@ func applyAppLimits(ctx context.Context, env *Env, v map[string]string, out *Out
 	report("正在修改 %s 的内存上限：%s → %s（1Panel 会重建容器）", app.Name, limitText(old.MemoryLimit, old.MemoryUnit), limitText(float64(mb), "M"))
 	restore := func(why string) Outcome {
 		report("%s，正在恢复原来的设置", why)
-		if rerr := c.UpdateAppConfig(ctx, app.ID, old); rerr != nil {
+		if rerr := c.UpdateAppConfig(ctx, app.ID, old, ""); rerr != nil {
 			out.Status = StatusFailed
 			out.logf("恢复也失败了：%v，请在 1Panel「应用商店 → 已安装 → %s → 参数」里检查", rerr, app.Name)
 			return *out
@@ -674,7 +682,7 @@ func applyAppLimits(ctx context.Context, env *Env, v map[string]string, out *Out
 		out.Status = StatusRolledBack
 		return *out
 	}
-	if err := c.UpdateAppConfig(ctx, app.ID, next); err != nil {
+	if err := c.UpdateAppConfig(ctx, app.ID, next, ""); err != nil {
 		return restore(fmt.Sprintf("修改失败：%v", err))
 	}
 	now, err := c.AppConfig(ctx, app.ID)
@@ -685,6 +693,8 @@ func applyAppLimits(ctx context.Context, env *Env, v map[string]string, out *Out
 		return restore("端口的开放方式被意外改变了")
 	case int(now.MemoryLimit) != mb && !(mb == 0 && now.MemoryLimit == 0):
 		return restore(fmt.Sprintf("修改后的上限是 %s，和预期不一致", limitText(now.MemoryLimit, now.MemoryUnit)))
+	case !stillRunning(ctx, env, old.ContainerName):
+		return restore("重建后容器没有正常运行（可能上限太紧，被反复杀掉）")
 	}
 	report("完成：%s 的内存上限已设为 %s，容器已重建", app.Name, limitText(float64(mb), "M"))
 	out.Status = StatusDone
@@ -702,7 +712,155 @@ func undoAppLimits(ctx context.Context, c *onepanel.Client, undo map[string]stri
 	if cfg.MemoryUnit == "" {
 		cfg.MemoryUnit = "M"
 	}
-	return c.UpdateAppConfig(ctx, uint(id), cfg)
+	return c.UpdateAppConfig(ctx, uint(id), cfg, "")
+}
+
+// dockerRun runs a docker command over SSH; ok is false when it could not run.
+func dockerRun(ctx context.Context, env *Env, args string) (string, bool) {
+	if env.SSH == nil {
+		return "", false
+	}
+	sudo := ""
+	if env.User != "root" {
+		sudo = "sudo -n "
+	}
+	res, err := env.SSH.Run(ctx, sudo+"docker "+args, "", 64<<10)
+	if err != nil || res.ExitCode != 0 {
+		return "", false
+	}
+	return res.Stdout, true
+}
+
+// stillRunning waits for a rebuilt container to come up and stay up for a
+// few more seconds. Without SSH access to docker it cannot tell, and says yes.
+func stillRunning(ctx context.Context, env *Env, container string) bool {
+	name := shq(strings.Split(container, ",")[0])
+	state := func() (string, bool) {
+		out, ok := dockerRun(ctx, env, "inspect -f '{{.State.Status}}' "+name)
+		return strings.TrimSpace(out), ok
+	}
+	if _, ok := dockerRun(ctx, env, "ps -q"); !ok {
+		return true // no docker access over SSH: cannot tell
+	}
+	for i := 0; i < 30; i++ {
+		if s, _ := state(); s == "running" {
+			for j := 0; j < 5; j++ { // a JVM short of memory dies a few seconds after starting
+				select {
+				case <-ctx.Done():
+					return false
+				case <-time.After(pollEvery(env)):
+				}
+			}
+			s, _ := state()
+			return s == "running"
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(pollEvery(env)):
+		}
+	}
+	return false
+}
+
+var (
+	heapFlagRe = regexp.MustCompile(`^-Xmx|^-XX:(Max|Min|Initial)RAMPercentage=|^-XX:MaxRAM=`)
+	cmdHeapRe  = regexp.MustCompile(`-Xmx[0-9]|-XX:MaxRAMPercentage=|-XX:MaxRAM=`)
+)
+
+// withMaxHeap replaces any heap size limit in JVM options with -Xmx<mb>m.
+func withMaxHeap(opts string, mb int) string {
+	var keep []string
+	for _, f := range strings.Fields(opts) {
+		if !heapFlagRe.MatchString(f) {
+			keep = append(keep, f)
+		}
+	}
+	return strings.Join(append(keep, fmt.Sprintf("-Xmx%dm", mb)), " ")
+}
+
+// applyJavaHeap fixes the maximum heap of a Java app installed by 1Panel
+// through JAVA_TOOL_OPTIONS, which every JVM reads, in its docker-compose file.
+func applyJavaHeap(ctx context.Context, env *Env, v map[string]string, out *Outcome, report func(string, ...any)) Outcome {
+	c := env.OnePanel
+	app, err := findApp(ctx, c, v["app"])
+	if err != nil {
+		out.Status = StatusRefused
+		out.logf("%v", err)
+		return *out
+	}
+	old, err := c.AppConfig(ctx, app.ID)
+	if err != nil || strings.TrimSpace(old.DockerCompose) == "" {
+		out.Status = StatusRefused
+		out.logf("读取 %s 的 docker-compose 配置失败：%v", app.Name, err)
+		return *out
+	}
+	// Options on the java command line win over JAVA_TOOL_OPTIONS.
+	if procs, ok := dockerRun(ctx, env, "top "+shq(strings.Split(old.ContainerName, ",")[0])+" -o pid,args"); ok {
+		var java []string
+		for _, line := range strings.Split(procs, "\n") {
+			if f := strings.Fields(line); len(f) > 1 && (f[1] == "java" || strings.HasSuffix(f[1], "/java")) {
+				java = append(java, line)
+			}
+		}
+		if len(java) == 0 {
+			out.Status = StatusRefused
+			out.logf("%s 的容器里没有正在运行的 Java 程序，不需要设置 Java 堆", app.Name)
+			return *out
+		}
+		for _, line := range java {
+			if m := cmdHeapRe.FindString(line); m != "" {
+				out.Status = StatusRefused
+				out.logf("%s 的启动命令里已经指定了堆大小（%s…），它比环境变量优先，需要在 1Panel 的应用参数里修改", app.Name, m)
+				return *out
+			}
+		}
+	}
+	mb, _ := strconv.Atoi(v["max_heap_mb"])
+	var before string
+	compose, err := setComposeEnv(old.DockerCompose, app.ServiceName, "JAVA_TOOL_OPTIONS", func(cur string) string {
+		before = cur
+		return withMaxHeap(cur, mb)
+	})
+	if err != nil {
+		out.Status = StatusRefused
+		out.logf("%v", err)
+		return *out
+	}
+	out.Undo["install_id"] = strconv.FormatUint(uint64(app.ID), 10)
+	out.Undo["app"] = app.Name
+	out.Undo["compose"] = old.DockerCompose
+	if before == "" {
+		before = "没有设置"
+	}
+	report("正在给 %s 固定 Java 最大堆为 %dMB（环境变量 JAVA_TOOL_OPTIONS，原来：%s），1Panel 会重建容器", app.Name, mb, before)
+	restore := func(why string) Outcome {
+		report("%s，正在恢复原来的配置", why)
+		if rerr := c.UpdateAppConfig(ctx, app.ID, old, old.DockerCompose); rerr != nil {
+			out.Status = StatusFailed
+			out.logf("恢复也失败了：%v，请在 1Panel「应用商店 → 已安装 → %s → 参数」里检查", rerr, app.Name)
+			return *out
+		}
+		out.Status = StatusRolledBack
+		return *out
+	}
+	if err := c.UpdateAppConfig(ctx, app.ID, old, compose); err != nil {
+		return restore(fmt.Sprintf("修改失败：%v", err))
+	}
+	now, err := c.AppConfig(ctx, app.ID)
+	switch {
+	case err != nil:
+		return restore(fmt.Sprintf("修改后读取设置失败：%v", err))
+	case now.AllowPort != old.AllowPort || now.SpecifyIP != old.SpecifyIP:
+		return restore("端口的开放方式被意外改变了")
+	case !strings.Contains(now.DockerCompose, fmt.Sprintf("-Xmx%dm", mb)):
+		return restore("修改后的配置里没有新的堆设置")
+	case !stillRunning(ctx, env, old.ContainerName):
+		return restore("重建后容器没有正常运行（可能堆设得太小）")
+	}
+	report("完成：%s 的 Java 最大堆已固定为 %dMB，容器已重建并正常运行", app.Name, mb)
+	out.Status = StatusDone
+	return *out
 }
 
 // backupTimeout bounds how long to wait for 1Panel to finish one backup.

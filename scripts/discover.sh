@@ -250,9 +250,12 @@ s_apps() {
   echo "-- java --"
   ps -eo pid,rss,args 2>/dev/null | awk '$3 ~ /(^|\/)java$/' | cap 10 | while read -r pid rss rest; do
     heap=$(echo "$rest" | grep -oE -- '-Xm[sx][0-9]+[kKmMgG]?|-XX:(Max|Initial)RAMPercentage=[0-9.]+' | tr '\n' ' ')
+    # The JVM also reads options from these variables (only heap flags are shown).
+    envheap=$(tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null | grep -E '^(JAVA_TOOL_OPTIONS|JDK_JAVA_OPTIONS)=' \
+      | grep -oE -- '-Xm[sx][0-9]+[kKmMgG]?|-XX:(Max|Initial)RAMPercentage=[0-9.]+' | tr '\n' ' ')
     main=$(echo "$rest" | grep -oE -- '-jar [^ ]+|org\.apache\.catalina\.startup\.Bootstrap' | head -n 1)
     unit=$(ps -o unit= -p "$pid" 2>/dev/null)
-    echo "java: pid=$pid rss_mb=$((rss / 1024)) heap_opts=[$heap] main=${main:-?} unit=${unit:-?}"
+    echo "java: pid=$pid rss_mb=$((rss / 1024)) heap_opts=[$heap] env_heap_opts=[$envheap] main=${main:-?} unit=${unit:-?}"
   done
   echo "-- node / python --"
   ps -eo pid,ppid,rss,comm,args 2>/dev/null \

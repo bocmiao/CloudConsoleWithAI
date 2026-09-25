@@ -221,12 +221,13 @@ func (c *Client) UpdateMySQLVariables(ctx context.Context, dbType, name string, 
 
 // InstalledApp is an app installed from the 1Panel app store.
 type InstalledApp struct {
-	ID        uint   `json:"id"`
-	Name      string `json:"name"`
-	AppKey    string `json:"appKey"`
-	Container string `json:"container"`
-	Status    string `json:"status"`
-	Version   string `json:"version"`
+	ID          uint   `json:"id"`
+	Name        string `json:"name"`
+	AppKey      string `json:"appKey"`
+	Container   string `json:"container"`
+	ServiceName string `json:"serviceName"` // the app's service in its docker-compose file
+	Status      string `json:"status"`
+	Version     string `json:"version"`
 }
 
 // InstalledApps lists the installed apps.
@@ -249,6 +250,7 @@ type ContainerConfig struct {
 	SpecifyIP     string  `json:"specifyIP"`
 	HostMode      bool    `json:"hostMode"`
 	RestartPolicy string  `json:"restartPolicy"`
+	DockerCompose string  `json:"dockerCompose"` // the app's docker-compose file
 }
 
 // AppConfig returns an installed app's container settings.
@@ -260,14 +262,19 @@ func (c *Client) AppConfig(ctx context.Context, installID uint) (ContainerConfig
 
 // UpdateAppConfig writes an installed app's container settings; 1Panel
 // then rebuilds its containers. Every other setting is sent back exactly
-// as AppConfig returned it, so that only the limits change.
-func (c *Client) UpdateAppConfig(ctx context.Context, installID uint, cfg ContainerConfig) error {
-	return c.do(ctx, http.MethodPost, "/apps/installed/params/update", map[string]any{
+// as AppConfig returned it, so that only the limits change. A non-empty
+// compose replaces the app's docker-compose file as well.
+func (c *Client) UpdateAppConfig(ctx context.Context, installID uint, cfg ContainerConfig, compose string) error {
+	body := map[string]any{
 		"installId": installID, "params": map[string]any{}, "advanced": true, "editCompose": false,
 		"cpuQuota": cfg.CPUQuota, "memoryLimit": cfg.MemoryLimit, "memoryUnit": cfg.MemoryUnit,
 		"containerName": cfg.ContainerName, "allowPort": cfg.AllowPort, "specifyIP": cfg.SpecifyIP,
 		"hostMode": cfg.HostMode, "restartPolicy": cfg.RestartPolicy,
-	}, nil)
+	}
+	if compose != "" {
+		body["editCompose"], body["dockerCompose"] = true, compose
+	}
+	return c.do(ctx, http.MethodPost, "/apps/installed/params/update", body, nil)
 }
 
 // Databases lists the databases 1Panel manages inside a MySQL/MariaDB app.

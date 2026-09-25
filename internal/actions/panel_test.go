@@ -24,6 +24,7 @@ type fakeApps struct {
 	unit      string
 	specifyIP string
 	breakIP   bool // simulate a panel that changes the port binding
+	compose   string
 	requests  []string
 	backups   map[string]int // taskID -> times looked up
 }
@@ -37,12 +38,13 @@ func (f *fakeApps) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	reply := func(data string) { _, _ = io.WriteString(w, `{"code":200,"message":"","data":`+data+`}`) }
 	switch r.URL.Path {
 	case "/api/v2/apps/installed/search":
-		reply(`{"total":2,"items":[{"id":7,"name":"halo","appKey":"halo","container":"1Panel-halo-abcd","status":"Running"},
+		reply(`{"total":2,"items":[{"id":7,"name":"halo","appKey":"halo","container":"1Panel-halo-abcd","serviceName":"halo","status":"Running"},
 			{"id":8,"name":"mysql","appKey":"mysql","container":"1Panel-mysql-efgh","status":"Running"}]}`)
 	case "/api/v2/apps/installed/params/7":
 		data, _ := json.Marshal(map[string]any{
 			"params": []any{}, "cpuQuota": 0, "memoryLimit": f.memory, "memoryUnit": f.unit,
 			"containerName": "1Panel-halo-abcd", "allowPort": true, "specifyIP": f.specifyIP, "restartPolicy": "always",
+			"dockerCompose": f.compose,
 		})
 		reply(string(data))
 	case "/api/v2/apps/installed/params/update":
@@ -52,6 +54,9 @@ func (f *fakeApps) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.memory, _ = body["memoryLimit"].(float64)
+		if body["editCompose"] == true {
+			f.compose, _ = body["dockerCompose"].(string)
+		}
 		f.unit, _ = body["memoryUnit"].(string)
 		if f.breakIP {
 			f.specifyIP = "127.0.0.1"
@@ -149,5 +154,44 @@ func TestBackupWaitsForEveryDatabase(t *testing.T) {
 	}
 	if r.Cap.Reversible {
 		t.Fatal("a backup has nothing to undo")
+	}
+}
+
+const haloCompose = `services:
+  halo:
+    image: halohub/halo:2.21
+    container_name: ${CONTAINER_NAME}
+    restart: always
+    environment:
+      - TZ=Asia/Shanghai
+    command:
+      - --spring.r2dbc.url=r2dbc:pool:mysql://mysql:3306/halo
+  # the database is another 1Panel app
+networks:
+  1panel-network:
+    external: true
+`
+
+func TestJavaHeapApplyAndUndo(t *testing.T) {
+	f := &fakeApps{unit: "M", compose: haloCompose, backups: map[string]int{}}
+	env := panelEnv(t, f)
+	ctx := context.Background()
+	r, err := Resolve("java.heap.set", map[string]any{"app": "halo", "max_heap_mb": 768}, "1panel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := Apply(ctx, env, r, nil)
+	if out.Status != StatusDone || !strings.Contains(f.compose, "JAVA_TOOL_OPTIONS=-Xmx768m") || !strings.Contains(f.compose, "TZ=Asia/Shanghai") {
+		t.Fatalf("apply: %+v\ncompose:\n%s", out, f.compose)
+	}
+	if !strings.Contains(strings.Join(out.Log, ""), "原来：没有设置") {
+		t.Fatalf("log = %v", out.Log)
+	}
+	undone := Undo(ctx, env, r, out.Undo)
+	if undone.Status != StatusUndone || f.compose != haloCompose {
+		t.Fatalf("undo: %+v\ncompose:\n%s", undone, f.compose)
+	}
+	if _, err := Resolve("java.heap.set", map[string]any{"app": "halo", "max_heap_mb": 768}, "linux"); err == nil {
+		t.Fatal("java heap should need 1Panel")
 	}
 }
