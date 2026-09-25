@@ -14,7 +14,7 @@
 ## 怎么用（Windows）
 
 1. 在仓库的 Actions 或 Releases 页面下载 `MiaoPanel-windows-amd64.exe`；
-2. 双击运行，会自动打开浏览器（地址是 `http://127.0.0.1:18765`，只有你自己的电脑能访问）；
+2. 双击运行，会打开 Miao Panel 自己的窗口（用的是 Windows 自带的 WebView2，和很多桌面软件一样；没有黑色命令行窗口，关掉窗口就是退出）。再次双击只会把已经打开的窗口切到前面；
 3. 按页面上的三步走：**设置 AI 模型**（推荐 DeepSeek V4.1 Flash，在 DeepSeek 开放平台创建 API Key）→ **添加服务器**（IP、用户名、密码）→ **识别环境**；
 4. 到「AI 助手」里用大白话说你想干什么，比如「服务器内存是不是太高了？帮我优化一下」；
 5. AI 检查完会给出一份**清单**，勾选想做的项目，点「执行」并确认，就会自动完成，并显示执行前后的对比；能撤销的项目可以一键撤销。
@@ -29,7 +29,9 @@
 
 **1Panel 用户**：在 1Panel「面板设置 → API 接口」开启 API，IP 白名单填 `127.0.0.1`，把密钥粘贴到 Miao Panel 的服务器页「1Panel 接口」里并点「测试」。这样 PHP、MySQL 的修改会走 1Panel 自己的接口，面板里看得到、不会被覆盖。
 
-密码和 API Key 保存在 Windows 凭据管理器里。关闭命令行窗口即退出。
+密码和 API Key 保存在 Windows 凭据管理器里。
+
+少数没有 WebView2 运行库的旧版 Windows 10 会提示安装，并临时改用浏览器打开。想用浏览器的话，可以带参数运行：`MiaoPanel.exe --browser`。macOS 和 Linux 版目前也是在浏览器里打开。
 
 ## 从源码构建
 
@@ -41,7 +43,9 @@ go build -o miaopanel ./cmd/miaopanel                           # 当前系统
 GOOS=windows GOARCH=amd64 go build -o MiaoPanel.exe ./cmd/miaopanel  # Windows exe
 ```
 
-运行参数：`--port`（默认 18765，被占用时自动换一个）、`--data`（数据目录，默认是用户配置目录下的 `MiaoPanel`）、`--no-browser`。
+运行参数：`--port`（默认 18765，被占用时自动换一个）、`--data`（数据目录，默认是用户配置目录下的 `MiaoPanel`）、`--browser`（Windows 上用浏览器代替独立窗口）、`--no-browser`（浏览器模式下不自动打开浏览器）。
+
+Windows 版要加 `-H=windowsgui` 编译成窗口程序（CI 已经这样做）；程序图标、版本信息和高 DPI 声明在 `cmd/miaopanel/rsrc_windows_*.syso` 里，由 `cmd/miaopanel/winres/` 用 [go-winres](https://github.com/tc-hib/go-winres) 生成：`cd cmd/miaopanel && go-winres make --in winres/winres.json --arch amd64,arm64`。
 
 ## 服务器环境识别脚本
 

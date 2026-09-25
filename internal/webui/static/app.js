@@ -77,6 +77,15 @@ const ICONS = {
   eye: 'M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
 };
 
+// In Miao Panel's own window, links that would open a new window go to
+// the system browser instead.
+document.addEventListener('click', e => {
+  const a = e.target.closest && e.target.closest('a[target="_blank"]');
+  if (!a || typeof window.miaoOpenExternal !== 'function') return;
+  e.preventDefault();
+  Promise.resolve(window.miaoOpenExternal(a.href)).catch(err => notify(String(err), 'error'));
+});
+
 // Toast shared by the app and its components.
 const toast = reactive({ text: '', kind: 'ok' });
 let toastTimer = null;

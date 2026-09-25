@@ -1,0 +1,37 @@
+{
+  "RT_GROUP_ICON": {
+    "#1": {
+      "0000": ["icon256.png", "icon128.png", "icon64.png", "icon48.png", "icon32.png", "icon24.png", "icon16.png"]
+    }
+  },
+  "RT_MANIFEST": {
+    "#1": {
+      "0409": {
+        "identity": {},
+        "description": "Miao Panel",
+        "minimum-os": "win10",
+        "execution-level": "as invoker",
+        "dpi-awareness": "per monitor v2",
+        "use-common-controls-v6": true,
+        "long-path-aware": true
+      }
+    }
+  },
+  "RT_VERSION": {
+    "#1": {
+      "0000": {
+        "fixed": { "file_version": "0.1.0.0", "product_version": "0.1.0.0" },
+        "info": {
+          "0409": {
+            "FileDescription": "Miao Panel",
+            "ProductName": "Miao Panel（喵面板）",
+            "OriginalFilename": "MiaoPanel.exe",
+            "LegalCopyright": "GPL-3.0",
+            "FileVersion": "0.1.0",
+            "ProductVersion": "0.1.0"
+          }
+        }
+      }
+    }
+  }
+}

@@ -51,7 +51,10 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then VERSION="${GITHUB_REF_NAME}"; else VERSION="dev-${GITHUB_SHA::7}"; fi
-          go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+          LDFLAGS="-s -w -X main.version=${VERSION}"
+          # A GUI program on Windows: its own window, no console.
+          if [ "${GOOS}" = "windows" ]; then LDFLAGS="${LDFLAGS} -H=windowsgui"; fi
+          go build -trimpath -ldflags "${LDFLAGS}" \
             -o "dist/MiaoPanel-${GOOS}-${GOARCH}${{ matrix.ext }}" ./cmd/miaopanel
       - uses: actions/upload-artifact@v4
         with:

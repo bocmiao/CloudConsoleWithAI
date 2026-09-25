@@ -1,5 +1,6 @@
 // Command miaopanel runs Miao Panel (喵面板) on the local machine: it
-// starts a web UI on 127.0.0.1 and opens it in the default browser.
+// serves the UI on 127.0.0.1 and shows it in its own window (Windows, via
+// WebView2) or in the default browser.
 package main
 
 import (
@@ -34,11 +35,17 @@ const preferredPort = 18765
 func main() {
 	port := flag.Int("port", preferredPort, "local port for the web UI (falls back to a random free port)")
 	dataDir := flag.String("data", "", "data directory (default: the user config dir)")
-	noBrowser := flag.Bool("no-browser", false, "do not open the browser automatically")
+	noBrowser := flag.Bool("no-browser", false, "in browser mode, do not open the browser automatically")
+	browser := flag.Bool("browser", false, "use the browser instead of Miao Panel's own window")
 	flag.Parse()
 	setupConsole()
 
-	if err := run(*port, *dataDir, !*noBrowser); err != nil {
+	window := hasWindow() && !*browser
+	if err := run(*port, *dataDir, !*noBrowser, window); err != nil {
+		if window {
+			alert("启动失败："+err.Error(), true)
+			os.Exit(1)
+		}
 		fmt.Fprintln(os.Stderr, "启动失败：", err)
 		if runtime.GOOS == "windows" {
 			fmt.Println("按回车键退出……")
@@ -48,11 +55,16 @@ func main() {
 	}
 }
 
-func run(port int, dataDir string, openBrowser bool) error {
+func run(port int, dataDir string, openBrowser, window bool) error {
 	dir, err := config.DataDir(dataDir)
 	if err != nil {
 		return err
 	}
+	first, release := singleInstance()
+	if !first {
+		return nil
+	}
+	defer release()
 	st, err := store.Open(dir)
 	if err != nil {
 		return fmt.Errorf("打开数据库: %w", err)
@@ -80,6 +92,41 @@ func run(port int, dataDir string, openBrowser bool) error {
 	}
 	url := api.LaunchURL(boundPort, token)
 
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Serve(ln) }()
+	shutdown := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Println(err)
+		}
+	}
+
+	// Without a window or a console, a message box is what keeps Miao
+	// Panel running while it is used in the browser.
+	inBrowser := func(note string) {
+		_ = openURL(url)
+		alert(note+"Miao Panel 正在浏览器中运行：\n"+url+"\n\n点「确定」会退出 Miao Panel。", false)
+		shutdown()
+	}
+	if window {
+		err := runWindow(url, dir)
+		switch {
+		case errors.Is(err, errNoWebView):
+			inBrowser("这台电脑缺少 Microsoft Edge WebView2 运行库，所以改用浏览器打开。" +
+				"安装 WebView2 之后就能用独立窗口：https://go.microsoft.com/fwlink/p/?LinkId=2124703\n\n")
+			return nil
+		case err != nil:
+			return err
+		}
+		shutdown()
+		return nil
+	}
+	if !hasConsole() {
+		inBrowser("")
+		return nil
+	}
+
 	fmt.Printf("Miao Panel（喵面板）%s 已启动\n\n", version)
 	fmt.Printf("  浏览器地址：%s\n", url)
 	fmt.Printf("  数据目录：  %s\n", dir)
@@ -96,8 +143,6 @@ func run(port int, dataDir string, openBrowser bool) error {
 		}
 	}
 
-	errCh := make(chan error, 1)
-	go func() { errCh <- srv.Serve(ln) }()
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)
 	select {
@@ -106,11 +151,7 @@ func run(port int, dataDir string, openBrowser bool) error {
 			return err
 		}
 	case <-sig:
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := srv.Shutdown(ctx); err != nil {
-			log.Println(err)
-		}
+		shutdown()
 	}
 	return nil
 }
