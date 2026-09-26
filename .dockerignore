@@ -2,3 +2,4 @@
 dist
 *.exe
 _devharness*
+docs/screenshots

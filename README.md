@@ -11,6 +11,22 @@
 
 完整设计见 [docs/DESIGN.md](docs/DESIGN.md)。
 
+## 截图
+
+> 截图里是演示数据，域名和 IP 都换成了示例地址。
+
+**AI 助手**：用大白话提问，AI 先查看服务器，再给出一份可以勾选执行的清单，每一项都标明风险和能不能撤销。
+
+![AI 助手：分析内存并给出优化清单](docs/screenshots/chat.png)
+
+| 网站统计：PV、UV、流量，异常自动提醒 | 安全：找出扫描、攻击和猜密码的 IP，一键封禁 |
+|---|---|
+| ![网站统计](docs/screenshots/stats.png) | ![安全](docs/screenshots/security.png) |
+| **EdgeOne 实时**：请求、流量、带宽、缓存命中率 | **证书**：汇总所有 HTTPS 证书，快到期和续签失败的排在前面 |
+| ![EdgeOne 实时](docs/screenshots/edgeone.png) | ![证书](docs/screenshots/certs.png) |
+| **文件**：浏览、编辑、上传、复制粘贴、压缩解压 | **深色模式**：跟随系统 |
+| ![文件](docs/screenshots/files.png) | ![深色模式](docs/screenshots/chat-dark.png) |
+
 ## 怎么用（Windows）
 
 1. 在仓库的 Actions 或 Releases 页面下载 `MiaoPanel-windows-amd64.exe`；
@@ -80,6 +96,10 @@ docker logs miaopanel   # 里面有创建管理员账号用的「初始化码」
 - 登录：密码（bcrypt 保存）＋可选的两步验证（身份验证器 App），输错多次自动锁定一段时间，能查看和退出登录的设备；
 - 第一个账号必须用服务器日志里的一次性初始化码创建，别人先打开页面也抢不走；忘记密码在服务器上运行 `miaopanel reset-password`；
 - 密钥保存在服务器的数据目录（只有运行 Miao Panel 的用户可读），不会发给 AI；用密钥登录服务器时直接粘贴私钥内容。
+
+| 登录页 | 设置 → 账号与安全：开启两步验证 |
+|---|---|
+| <img src="docs/screenshots/login.png" alt="Web 版登录页" width="420"> | <img src="docs/screenshots/account.png" alt="开启两步验证" width="520"> |
 
 ## 从源码构建
 
