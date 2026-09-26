@@ -276,20 +276,21 @@
     </template>
 
     <!-- Website statistics -->
-    <template v-if="tab === 'stats'">
+    <!-- Kept alive once opened, so switching back shows it at once. -->
+    <div class="tab-pane" v-if="seen.stats" v-show="tab === 'stats'">
       <header class="toolbar"><h1>网站统计</h1></header>
       <div class="page">
-        <eo-stats :configured="tc.configured" @ask="askAI" @settings="go('settings')"></eo-stats>
+        <eo-stats :configured="tc.configured" :active="tab === 'stats'" @ask="askAI" @settings="go('settings')"></eo-stats>
       </div>
-    </template>
+    </div>
 
     <!-- Certificates -->
-    <template v-if="tab === 'certs'">
+    <div class="tab-pane" v-if="seen.certs" v-show="tab === 'certs'">
       <header class="toolbar"><h1>证书</h1></header>
       <div class="page">
-        <cert-page :configured="tc.configured" @ask="askAI"></cert-page>
+        <cert-page :configured="tc.configured" :active="tab === 'certs'" @ask="askAI"></cert-page>
       </div>
-    </template>
+    </div>
 
     <!-- Plans -->
     <template v-if="tab === 'plans'">

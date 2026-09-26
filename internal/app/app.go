@@ -38,11 +38,12 @@ type App struct {
 	// reviews AI-written commands; tests set it.
 	Reviewer func(ctx context.Context, prompt string) (string, error)
 
-	mu    sync.Mutex
-	convs map[string]*conversation
-	locks serverLocks
-	cloud cloudCache
-	certs certCache
+	mu        sync.Mutex
+	convs     map[string]*conversation
+	locks     serverLocks
+	cloud     cloudCache
+	certs     certCache
+	eoReports eoReportCache
 }
 
 // New creates an App.

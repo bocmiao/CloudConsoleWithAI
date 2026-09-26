@@ -459,20 +459,51 @@ type EOTop struct {
 	Share float64 `json:"share"`
 }
 
-func (a *App) eoOverview(ctx context.Context, c *tencent.Client, q EOQuery) (EOReport, error) {
+// eoRange is a query's site, domain filter and time window, looked up once
+// and shared by the calls that make up a report.
+type eoRange struct {
+	zone       tencent.Zone
+	scope      []tencent.Filter
+	start, end time.Time
+	interval   string
+}
+
+func eoRangeFor(ctx context.Context, c *tencent.Client, q EOQuery) (eoRange, error) {
 	start, end, err := eoWindow(q.Hours, q.Start, q.End)
 	if err != nil {
-		return EOReport{}, userErr("%v", err)
+		return eoRange{}, userErr("%v", err)
 	}
 	z, scope, err := eoScope(ctx, c, q.Domain)
 	if err != nil {
-		return EOReport{}, err
+		return eoRange{}, err
 	}
-	filters := append(scope, q.Filters...)
-	interval := eoInterval(end.Sub(start))
-	r := EOReport{Zone: z.ZoneName, Domain: q.Domain, Start: tencent.TimeArg(start), End: tencent.TimeArg(end), Interval: interval, HitRatio: -1}
-	series, err := c.L7Timing(ctx, []string{z.ZoneID}, []string{"l7Flow_request", "l7Flow_outFlux", "l7Flow_outBandwidth", "l7Flow_avgResponseTime"},
-		start, end, interval, filters)
+	return eoRange{zone: z, scope: scope, start: start, end: end, interval: eoInterval(end.Sub(start))}, nil
+}
+
+// overviewIn reads the totals and the time series; the traffic and the two
+// cache numbers are fetched at the same time.
+func overviewIn(ctx context.Context, c *tencent.Client, rg eoRange, domain string, extra []tencent.Filter) (EOReport, error) {
+	zones := []string{rg.zone.ZoneID}
+	r := EOReport{Zone: rg.zone.ZoneName, Domain: domain, Start: tencent.TimeArg(rg.start), End: tencent.TimeArg(rg.end), Interval: rg.interval, HitRatio: -1}
+	var series, all, hit []tencent.Series
+	var err error
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		series, err = c.L7Timing(ctx, zones, []string{"l7Flow_request", "l7Flow_outFlux", "l7Flow_outBandwidth", "l7Flow_avgResponseTime"},
+			rg.start, rg.end, rg.interval, append(append([]tencent.Filter{}, rg.scope...), extra...))
+	}()
+	go func() {
+		defer wg.Done()
+		all, _ = c.L7CacheTiming(ctx, zones, []string{"l7Cache_outFlux"}, rg.start, rg.end, rg.interval, rg.scope)
+	}()
+	go func() {
+		defer wg.Done()
+		hitFilter := append(append([]tencent.Filter{}, rg.scope...), tencent.Filter{Key: "cacheType", Operator: "equals", Value: []string{"hit"}})
+		hit, _ = c.L7CacheTiming(ctx, zones, []string{"l7Cache_outFlux"}, rg.start, rg.end, rg.interval, hitFilter)
+	}()
+	wg.Wait()
 	if err != nil {
 		return r, err
 	}
@@ -489,24 +520,14 @@ func (a *App) eoOverview(ctx context.Context, c *tencent.Client, q EOQuery) (EOR
 		}
 	}
 	// Cache hit ratio: bytes served from cache over all bytes.
-	if all, err := c.L7CacheTiming(ctx, []string{z.ZoneID}, []string{"l7Cache_outFlux"}, start, end, interval, scope); err == nil && len(all) > 0 && all[0].Sum > 0 {
-		hitFilter := append(append([]tencent.Filter{}, scope...), tencent.Filter{Key: "cacheType", Operator: "equals", Value: []string{"hit"}})
-		if hit, err := c.L7CacheTiming(ctx, []string{z.ZoneID}, []string{"l7Cache_outFlux"}, start, end, interval, hitFilter); err == nil && len(hit) > 0 {
-			r.HitRatio = float64(hit[0].Sum) / float64(all[0].Sum)
-		}
+	if len(all) > 0 && all[0].Sum > 0 && len(hit) > 0 {
+		r.HitRatio = float64(hit[0].Sum) / float64(all[0].Sum)
 	}
 	return r, nil
 }
 
-func (a *App) eoTop(ctx context.Context, c *tencent.Client, q EOQuery, total int64) ([]EOTop, error) {
-	start, end, err := eoWindow(q.Hours, q.Start, q.End)
-	if err != nil {
-		return nil, userErr("%v", err)
-	}
-	z, scope, err := eoScope(ctx, c, q.Domain)
-	if err != nil {
-		return nil, err
-	}
+// topIn reads one ranking; shares are filled in against total.
+func topIn(ctx context.Context, c *tencent.Client, rg eoRange, q EOQuery, total int64) ([]EOTop, error) {
 	metric := "request"
 	if q.Metric == "flux" {
 		metric = "outFlux"
@@ -515,7 +536,8 @@ func (a *App) eoTop(ctx context.Context, c *tencent.Client, q EOQuery, total int
 	if limit <= 0 || limit > 100 {
 		limit = 15
 	}
-	items, err := c.L7Top(ctx, []string{z.ZoneID}, "l7Flow_"+metric+"_"+eoDimensions[q.Dimension], start, end, limit, append(scope, q.Filters...))
+	items, err := c.L7Top(ctx, []string{rg.zone.ZoneID}, "l7Flow_"+metric+"_"+eoDimensions[q.Dimension], rg.start, rg.end, limit,
+		append(append([]tencent.Filter{}, rg.scope...), q.Filters...))
 	if err != nil {
 		return nil, err
 	}
@@ -530,24 +552,89 @@ func (a *App) eoTop(ctx context.Context, c *tencent.Client, q EOQuery, total int
 	return out, nil
 }
 
-// EOAnalytics answers the 网站统计 page: an overview plus a few rankings.
-func (a *App) EOAnalytics(ctx context.Context, domain string, hours int) (EOReport, error) {
+func (a *App) eoOverview(ctx context.Context, c *tencent.Client, q EOQuery) (EOReport, error) {
+	rg, err := eoRangeFor(ctx, c, q)
+	if err != nil {
+		return EOReport{}, err
+	}
+	return overviewIn(ctx, c, rg, q.Domain, q.Filters)
+}
+
+func (a *App) eoTop(ctx context.Context, c *tencent.Client, q EOQuery, total int64) ([]EOTop, error) {
+	rg, err := eoRangeFor(ctx, c, q)
+	if err != nil {
+		return nil, err
+	}
+	return topIn(ctx, c, rg, q, total)
+}
+
+// eoReportTTL keeps a report briefly, so going back and forth on the
+// 网站统计 page is instant; the page refreshes itself every minute.
+const eoReportTTL = 20 * time.Second
+
+type eoReportCache struct {
+	mu sync.Mutex
+	m  map[string]eoCached
+}
+
+type eoCached struct {
+	at time.Time
+	r  EOReport
+}
+
+// EOAnalytics is the 网站统计 page's report: totals, the time series and
+// four rankings, all fetched at the same time.
+func (a *App) EOAnalytics(ctx context.Context, domain string, hours int, refresh bool) (EOReport, error) {
 	c := a.tencentClient()
 	if c == nil {
 		return EOReport{}, userErr("还没有配置腾讯云密钥（设置 → 腾讯云）")
 	}
+	key := fmt.Sprintf("%s|%d", strings.ToLower(domain), hours)
+	a.eoReports.mu.Lock()
+	cached, ok := a.eoReports.m[key]
+	a.eoReports.mu.Unlock()
+	if ok && !refresh && time.Since(cached.at) < eoReportTTL {
+		return cached.r, nil
+	}
+
 	q := EOQuery{Domain: domain, Hours: hours}
-	r, err := a.eoOverview(ctx, c, q)
+	rg, err := eoRangeFor(ctx, c, q)
+	if err != nil {
+		return EOReport{}, err
+	}
+	dims := []string{"url", "country", "status", "ip"}
+	tops := make([][]EOTop, len(dims))
+	var r EOReport
+	var wg sync.WaitGroup
+	wg.Add(1 + len(dims))
+	go func() { defer wg.Done(); r, err = overviewIn(ctx, c, rg, domain, nil) }()
+	for i, dim := range dims {
+		go func(i int, dim string) {
+			defer wg.Done()
+			tops[i], _ = topIn(ctx, c, rg, EOQuery{Dimension: dim, Limit: 10}, 0)
+		}(i, dim)
+	}
+	wg.Wait()
 	if err != nil {
 		return r, err
 	}
 	r.Tops = map[string][]EOTop{}
-	for _, dim := range []string{"url", "country", "status", "ip"} {
-		q.Dimension, q.Limit = dim, 10
-		if tops, err := a.eoTop(ctx, c, q, r.Requests); err == nil {
-			r.Tops[dim] = tops
+	for i, dim := range dims {
+		for j := range tops[i] {
+			if r.Requests > 0 {
+				tops[i][j].Share = float64(tops[i][j].Value) / float64(r.Requests)
+			}
+		}
+		if tops[i] != nil {
+			r.Tops[dim] = tops[i]
 		}
 	}
+	a.eoReports.mu.Lock()
+	if a.eoReports.m == nil {
+		a.eoReports.m = map[string]eoCached{}
+	}
+	a.eoReports.m[key] = eoCached{at: time.Now(), r: r}
+	a.eoReports.mu.Unlock()
 	return r, nil
 }
 

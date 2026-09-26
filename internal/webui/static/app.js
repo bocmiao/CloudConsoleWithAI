@@ -538,26 +538,34 @@ const LineChart = {
   </div>`,
 };
 
-const EO_RANGES = [{ h: 24, text: '24 小时' }, { h: 168, text: '7 天' }, { h: 720, text: '30 天' }];
+const EO_RANGES = [{ h: 1, text: '1 小时' }, { h: 24, text: '24 小时' }, { h: 168, text: '7 天' }, { h: 720, text: '30 天' }];
+// Reports already seen this session, by site and range, so going back to
+// a view shows it at once while a fresh copy loads in the background.
+const eoMemo = new Map();
+const EO_FRESH_MS = 20000;
+const clockText = t => new Date(t).toLocaleTimeString('zh-CN', { hour12: false });
 const TOP_NAMES = { url: '热门路径', country: '国家/地区', status: '状态码', ip: '访问最多的 IP' };
 
 // 网站统计: EdgeOne analytics for one site or domain.
 const LEVEL_ICON = { ok: 'check', warn: 'warn', crit: 'alert', info: 'info' };
 
 const CertPage = {
-  props: { configured: Boolean },
+  props: { configured: Boolean, active: Boolean },
   emits: ['ask', 'settings'],
   setup(props, { emit }) {
     const data = ref(null);
     const loading = ref(false);
     const error = ref('');
+    const loadedAt = ref(0);
+    // Keeps what it showed while it reloads, so coming back is instant.
     async function load(refresh) {
       loading.value = true; error.value = '';
-      try { data.value = await api('GET', '/api/certificates' + (refresh ? '?refresh=1' : '')); }
+      try { data.value = await api('GET', '/api/certificates' + (refresh ? '?refresh=1' : '')); loadedAt.value = Date.now(); }
       catch (e) { error.value = e.message; }
       finally { loading.value = false; }
     }
     onMounted(() => load(false));
+    watch(() => props.active, on => { if (on && !loading.value && Date.now() - loadedAt.value > 5 * 60 * 1000) load(false); });
     const entries = computed(() => (data.value && data.value.entries) || []);
     const live = computed(() => (data.value && data.value.live) || []);
     const counts = computed(() => {
@@ -579,7 +587,7 @@ const CertPage = {
       return null;
     }
     const ask = text => emit('ask', text);
-    return { data, loading, error, load, entries, live, counts, date, others, action, ask, icon: l => LEVEL_ICON[l] || 'info' };
+    return { data, loading, error, load, loadedAt, clockText, entries, live, counts, date, others, action, ask, icon: l => LEVEL_ICON[l] || 'info' };
   },
   template: `
   <div>
@@ -587,9 +595,11 @@ const CertPage = {
     <div class="filter-row">
       <button @click="load(true)" :disabled="loading"><ui-icon name="refresh"></ui-icon>刷新</button>
       <button @click="ask('我想给网站申请 HTTPS 证书并开启自动续签，域名是：')"><ui-icon name="plus"></ui-icon>申请证书</button>
+      <span class="small tertiary live-note" v-if="loadedAt"><span class="spinner inline" v-if="loading"></span>更新于 {{ clockText(loadedAt) }}</span>
+      <span class="grow"></span>
       <button class="primary" @click="ask('检查一下我所有网站的 HTTPS 证书：有没有快到期、已经过期、没有自动续签或者申请失败的？有问题帮我处理。')"><ui-icon name="sparkles"></ui-icon>让 AI 检查</button>
     </div>
-    <div class="notice" v-if="loading"><span class="spinner"></span>正在读取证书，并逐个访问网站确认（可能要十几秒）……</div>
+    <div class="notice" v-if="loading && !data"><span class="spinner"></span>正在读取证书，并逐个访问网站确认（可能要十几秒）……</div>
     <div class="notice" v-if="error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ error }}</div>
     <template v-if="data">
       <div class="tiles">
@@ -643,15 +653,18 @@ const CertPage = {
 };
 
 const EoStats = {
-  props: { configured: Boolean },
+  props: { configured: Boolean, active: Boolean },
   emits: ['ask', 'settings'],
   setup(props, { emit }) {
     const sites = ref([]);
     const domain = ref('');
     const hours = ref(24);
     const data = ref(null);
-    const loading = ref(false);
+    const loading = ref(false);    // nothing to show yet
+    const refreshing = ref(false); // updating what is shown, quietly
     const error = ref('');
+    const updatedAt = ref(0);
+    let seq = 0;
     async function loadSites() {
       if (!props.configured) return;
       try {
@@ -659,23 +672,43 @@ const EoStats = {
         if (!domain.value && sites.value.length) domain.value = sites.value[0];
       } catch (e) { error.value = e.message; }
     }
-    async function load() {
+    // load shows the remembered report for this view at once, then fetches
+    // a fresh one unless it is only seconds old; force skips every cache.
+    async function load(force) {
       if (!domain.value) return;
-      loading.value = true; error.value = '';
-      try { data.value = await api('GET', `/api/eo/analytics?domain=${encodeURIComponent(domain.value)}&hours=${hours.value}`); }
-      catch (e) { error.value = e.message; }
-      finally { loading.value = false; }
+      const key = domain.value + '|' + hours.value;
+      const memo = eoMemo.get(key);
+      data.value = memo ? memo.data : null;
+      updatedAt.value = memo ? memo.at : 0;
+      if (!force && memo && Date.now() - memo.at < EO_FRESH_MS) return;
+      const mine = ++seq;
+      (data.value ? refreshing : loading).value = true;
+      error.value = '';
+      try {
+        const r = await api('GET', `/api/eo/analytics?domain=${encodeURIComponent(domain.value)}&hours=${hours.value}${force ? '&refresh=1' : ''}`);
+        eoMemo.set(key, { data: r, at: Date.now() });
+        if (mine === seq) { data.value = r; updatedAt.value = Date.now(); }
+      } catch (e) { if (mine === seq) error.value = e.message; }
+      finally { if (mine === seq) { loading.value = false; refreshing.value = false; } }
     }
-    watch([domain, hours], load);
+    // While the page is open it keeps itself up to date.
+    const every = computed(() => hours.value <= 1 ? 30000 : 60000);
+    let timer = null;
+    function stop() { if (timer) { clearInterval(timer); timer = null; } }
+    function start() { stop(); timer = setInterval(() => { if (document.visibilityState === 'visible') load(false); }, every.value); }
+    watch([domain, hours], () => load(false));
+    watch(every, () => { if (props.active) start(); });
+    watch(() => props.active, on => { if (on) { load(false); start(); } else stop(); });
     watch(() => props.configured, v => { if (v) loadSites(); });
-    onMounted(loadSites);
+    onMounted(() => { loadSites(); if (props.active) start(); });
+    onUnmounted(stop);
     const rangeText = computed(() => (EO_RANGES.find(r => r.h === hours.value) || {}).text || '');
     function ask() {
       emit('ask', `分析一下 ${domain.value} 最近${rangeText.value}的访问情况：访问量有没有异常变化，主要是谁在访问、访问了什么，有没有需要处理的问题？`);
     }
     const hit = computed(() => data.value && data.value.hitRatio >= 0 ? Math.round(data.value.hitRatio * 1000) / 10 : null);
     const timeText = t => new Date(t * 1000).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-    return { sites, domain, hours, data, loading, error, load, ask, hit, EO_RANGES, TOP_NAMES, fmtCount, fmtBytes, fmtBits, timeText };
+    return { sites, domain, hours, data, loading, refreshing, error, updatedAt, every, load, ask, hit, EO_RANGES, TOP_NAMES, fmtCount, fmtBytes, fmtBits, timeText, clockText };
   },
   template: `
   <div>
@@ -690,13 +723,17 @@ const EoStats = {
         <span class="segmented">
           <button v-for="r in EO_RANGES" :key="r.h" :class="{on: hours === r.h}" @click="hours = r.h">{{ r.text }}</button>
         </span>
-        <button class="plain" @click="load" :disabled="loading || !domain"><ui-icon name="refresh"></ui-icon>刷新</button>
+        <button class="plain" @click="load(true)" :disabled="loading || refreshing || !domain"><ui-icon name="refresh"></ui-icon>刷新</button>
+        <span class="small tertiary live-note" v-if="updatedAt">
+          <span class="spinner inline" v-if="refreshing"></span>更新于 {{ clockText(updatedAt) }} · {{ every === 30000 ? '每 30 秒' : '每分钟' }}自动更新
+        </span>
         <span class="grow"></span>
         <button class="primary" @click="ask" :disabled="!domain"><ui-icon name="sparkles"></ui-icon>让 AI 分析</button>
       </div>
       <div class="group" v-if="!sites.length && !error"><div class="row secondary">EdgeOne 里还没有站点。</div></div>
       <div class="group" v-if="error"><div class="row st-crit"><ui-icon name="alert"></ui-icon>{{ error }}</div></div>
-      <div v-if="data" :class="{refetching: loading}">
+      <p class="small tertiary" v-if="hours === 1" style="margin: -8px 4px 14px">最近 1 小时按分钟统计。EdgeOne 的统计一般有几分钟延迟，最右边的几个点可能还在补齐。</p>
+      <div v-if="data">
         <div class="tiles five">
           <div class="tile"><div class="label">请求数</div><div class="value">{{ fmtCount(data.requests) }}</div><div class="sub">{{ data.domain }}</div></div>
           <div class="tile"><div class="label">流量</div><div class="value">{{ fmtBytes(data.bytes) }}</div><div class="sub">EdgeOne 响应</div></div>
@@ -847,8 +884,10 @@ const app = createApp({
       if (!confirm('确定要清除保存的腾讯云密钥吗？')) return;
       await guarded('正在清除……', async () => { setTencent(await api('DELETE', '/api/settings/tencent')); });
     }
+    const seen = reactive({}); // pages opened at least once stay mounted
     function go(id) {
       tab.value = id;
+      seen[id] = true;
       if (id === 'plans') api('GET', '/api/plans').then(v => { plans.value = v; }).catch(e => notify(e.message, 'error'));
       if (id === 'logs') loadAudit();
     }
@@ -1069,7 +1108,7 @@ const app = createApp({
       spendText, plans, audit, logView, logFocus, loadAudit, openLog, showAdd, addForm, messages, draft, chatBusy, msgBox, suggestions,
       select, openAdd, addServer, testConn, discover, removeServer, askAbout, send, onEnter, newChat, applyPreset, saveAI, testAI,
       convs, showConvs, conversationId, openConv, deleteConv, relTime,
-      op, saveOnePanel, testOnePanel, tc, saveTencent, testTencent, clearTencent, freeCmd, setFree,
+      op, saveOnePanel, testOnePanel, tc, saveTencent, testTencent, clearTencent, freeCmd, setFree, seen,
       cloud, cloudList, cloudPick, pickCloud, askAI, daysTo, fmtBytes,
       memPct, rootDisk, envSub, dockerText, money, mb, meterClass, levelClass, levelIcon, levelName, riskName, adapterName,
       fmtTime, serverName, parseSteps, toolName, actorName, actionName, md,

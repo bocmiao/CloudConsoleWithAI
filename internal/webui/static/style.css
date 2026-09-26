@@ -417,3 +417,7 @@ details.free-more[open] summary .icon { transform: rotate(90deg); }
 .cert-st { display: inline-flex; align-items: flex-start; gap: 5px; }
 .cert-st .icon { flex: none; margin-top: 2px; }
 .filter-row .primary .icon { color: var(--on-accent); }
+
+/* Pages kept alive between visits keep the main column's layout. */
+.tab-pane { display: contents; }
+.live-note { display: inline-flex; align-items: center; white-space: nowrap; }

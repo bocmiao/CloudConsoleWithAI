@@ -310,7 +310,7 @@ func (s *Server) eoSites(_ http.ResponseWriter, r *http.Request) (any, error) {
 
 func (s *Server) eoAnalytics(_ http.ResponseWriter, r *http.Request) (any, error) {
 	hours, _ := strconv.Atoi(r.URL.Query().Get("hours"))
-	return s.app.EOAnalytics(r.Context(), r.URL.Query().Get("domain"), hours)
+	return s.app.EOAnalytics(r.Context(), r.URL.Query().Get("domain"), hours, r.URL.Query().Get("refresh") == "1")
 }
 
 func (s *Server) chat(_ http.ResponseWriter, r *http.Request) (any, error) {

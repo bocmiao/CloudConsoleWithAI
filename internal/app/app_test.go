@@ -696,9 +696,19 @@ func TestTencentServersAndAnalyticsTools(t *testing.T) {
 		}
 	}
 
-	r, err := a.EOAnalytics(context.Background(), "blog.example.com", 168)
+	r, err := a.EOAnalytics(context.Background(), "blog.example.com", 168, false)
 	if err != nil || r.Requests == 0 || r.Interval != "hour" || len(r.Series) == 0 || len(r.Tops["url"]) != 3 || r.Tops["url"][0].Share <= 0 {
 		t.Fatalf("EOAnalytics = %+v, %v", r, err)
+	}
+	calls = len(f.Calls)
+	if again, err := a.EOAnalytics(context.Background(), "blog.example.com", 168, false); err != nil || len(f.Calls) != calls || again.Requests != r.Requests {
+		t.Fatalf("a second look within seconds should come from the cache (%d → %d calls)", calls, len(f.Calls))
+	}
+	if _, err := a.EOAnalytics(context.Background(), "blog.example.com", 168, true); err != nil || len(f.Calls) == calls {
+		t.Fatal("refresh should ask EdgeOne again")
+	}
+	if live, err := a.EOAnalytics(context.Background(), "blog.example.com", 1, false); err != nil || live.Interval != "min" {
+		t.Fatalf("last hour = %+v, %v", live, err)
 	}
 	if sites, err := a.EOSites(context.Background()); err != nil || len(sites) == 0 || sites[0] != "example.com" {
 		t.Fatalf("sites = %v, %v", sites, err)
