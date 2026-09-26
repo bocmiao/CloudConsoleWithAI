@@ -117,6 +117,7 @@ func run(port int, dataDir string, openBrowser, window bool) error {
 	srv := &http.Server{
 		Handler:           api.New(a, token, boundPort, version),
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
 	}
 	url := api.LaunchURL(boundPort, token)
 

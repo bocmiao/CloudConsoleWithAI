@@ -157,3 +157,26 @@ func TestDesktopHasNoAccounts(t *testing.T) {
 		t.Fatalf("desktop host check: %d", w.Code)
 	}
 }
+
+// Behind a proxy the address it saw wins over what the visitor sent.
+func TestClientIPBehindProxy(t *testing.T) {
+	s := &Server{}
+	for _, c := range []struct {
+		remote string
+		header map[string]string
+		want   string
+	}{
+		{"127.0.0.1:1", map[string]string{"X-Forwarded-For": "6.6.6.6, 203.0.113.9", "X-Real-IP": "1.2.3.4"}, "203.0.113.9"},
+		{"127.0.0.1:1", map[string]string{"X-Real-IP": "203.0.113.7"}, "203.0.113.7"},
+		{"198.51.100.1:1", map[string]string{"X-Forwarded-For": "6.6.6.6", "X-Real-IP": "1.2.3.4"}, "198.51.100.1"},
+	} {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.RemoteAddr = c.remote
+		for k, v := range c.header {
+			r.Header.Set(k, v)
+		}
+		if got := s.clientIP(r); got != c.want {
+			t.Errorf("%v %v: %s, want %s", c.remote, c.header, got, c.want)
+		}
+	}
+}

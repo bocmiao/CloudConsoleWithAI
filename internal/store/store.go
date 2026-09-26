@@ -405,6 +405,15 @@ func (s *Store) Audit(actor, action, target, detail string) error {
 	return err
 }
 
+// LoggedInFrom says whether the account logged in from this address
+// since then, by the log.
+func (s *Store) LoggedInFrom(name, ip string, since time.Time) (bool, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM audit_logs WHERE action = 'auth.login' AND target = ? AND detail = ? AND at >= ?`,
+		name, ip, since.UTC().Format(time.RFC3339)).Scan(&n)
+	return n > 0, err
+}
+
 // ListAudit returns the newest entries first.
 func (s *Store) ListAudit(limit int) ([]AuditEntry, error) {
 	rows, err := s.db.Query(`SELECT id, at, actor, action, target, detail FROM audit_logs ORDER BY id DESC LIMIT ?`, limit)

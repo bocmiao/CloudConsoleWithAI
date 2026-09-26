@@ -180,7 +180,7 @@ func TestTwoStep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.EnableTOTP(u.ID, "123456"); code(t, err) != "not_found" {
+	if err := s.EnableTOTP(u.ID, tok, "123456"); code(t, err) != "not_found" {
 		t.Fatalf("enable before begin: %v", err)
 	}
 	ts, err := s.BeginTOTP(u.ID)
@@ -189,11 +189,19 @@ func TestTwoStep(t *testing.T) {
 	}
 	key, _ := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(ts.Secret)
 	step := func() int64 { return c.t.Unix() / 30 }
-	if err := s.EnableTOTP(u.ID, "000000"); code(t, err) != "bad_code" && Code(key, step()) != "000000" {
+	if err := s.EnableTOTP(u.ID, tok, "000000"); code(t, err) != "bad_code" && Code(key, step()) != "000000" {
 		t.Fatalf("wrong code: %v", err)
 	}
-	if err := s.EnableTOTP(u.ID, Code(key, step())); err != nil {
+	other, _, _ := s.Login("2.2.2.2", "ua", "admin", "correct horse", "")
+	if err := s.EnableTOTP(u.ID, tok, Code(key, step())); err != nil {
 		t.Fatal(err)
+	}
+	if _, ok := s.Check(other, "2.2.2.2"); ok {
+		t.Fatal("other session survived turning two-step login on")
+	}
+	// A session alone cannot swap the key.
+	if _, err := s.BeginTOTP(u.ID); code(t, err) != "totp_on" {
+		t.Fatalf("new key while on: %v", err)
 	}
 	// Now the password alone is not enough.
 	if _, _, err := s.Login("1.1.1.1", "ua", "admin", "correct horse", ""); code(t, err) != "need_code" {
@@ -204,9 +212,14 @@ func TestTwoStep(t *testing.T) {
 	if _, _, err := s.Login("1.1.1.1", "ua", "admin", "correct horse", now); err != nil {
 		t.Fatalf("with code: %v", err)
 	}
-	// A code works once.
+	// A code works once, also after a restart.
 	if _, _, err := s.Login("1.1.1.1", "ua", "admin", "correct horse", now); code(t, err) != "bad_code" {
 		t.Fatalf("replayed code: %v", err)
+	}
+	restarted := New(s.Store, s.Secrets, s.Dir)
+	restarted.Cost, restarted.Now = s.Cost, c.now
+	if _, _, err := restarted.Login("1.1.1.1", "ua", "admin", "correct horse", now); code(t, err) != "bad_code" {
+		t.Fatalf("replayed code after a restart: %v", err)
 	}
 	// A phone a little slow is fine; a code from long ago is not.
 	c.add(30 * time.Second)
@@ -216,10 +229,10 @@ func TestTwoStep(t *testing.T) {
 	if _, _, err := s.Login("1.1.1.1", "ua", "admin", "correct horse", Code(key, step()+1)); err != nil {
 		t.Fatalf("code of the next step: %v", err)
 	}
-	if err := s.DisableTOTP(u.ID, "wrong"); code(t, err) != "bad_login" {
+	if err := s.DisableTOTP(u.ID, tok, "1.1.1.1", "wrong"); code(t, err) != "bad_login" {
 		t.Fatalf("disable with wrong password: %v", err)
 	}
-	if err := s.DisableTOTP(u.ID, "correct horse"); err != nil {
+	if err := s.DisableTOTP(u.ID, tok, "1.1.1.1", "correct horse"); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := s.Login("1.1.1.1", "ua", "admin", "correct horse", ""); err != nil {
@@ -227,11 +240,11 @@ func TestTwoStep(t *testing.T) {
 	}
 
 	// Changing the password logs out every other session.
-	other, _, _ := s.Login("2.2.2.2", "ua", "admin", "correct horse", "")
-	if err := s.ChangePassword(u.ID, tok, "wrong", "another good one"); code(t, err) != "bad_login" {
+	other, _, _ = s.Login("2.2.2.2", "ua", "admin", "correct horse", "")
+	if err := s.ChangePassword(u.ID, tok, "1.1.1.1", "wrong", "another good one"); code(t, err) != "bad_login" {
 		t.Fatalf("wrong old password: %v", err)
 	}
-	if err := s.ChangePassword(u.ID, tok, "correct horse", "another good one"); err != nil {
+	if err := s.ChangePassword(u.ID, tok, "1.1.1.1", "correct horse", "another good one"); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := s.Check(tok, "1.1.1.1"); !ok {
@@ -268,5 +281,60 @@ func TestNoNameProbing(t *testing.T) {
 	u, _ := s.Store.UserByName("admin")
 	if c, _ := bcrypt.Cost([]byte(u.Password)); c != cost {
 		t.Fatalf("real %d vs dummy %d", c, cost)
+	}
+}
+
+// Wrong passwords sent all at once still get only the address's tries.
+func TestLockoutAtOnce(t *testing.T) {
+	s, _ := newService(t)
+	setup, _ := s.SetupCode()
+	if _, _, err := s.Setup("1.1.1.1", "ua", setup, "admin", "correct horse"); err != nil {
+		t.Fatal(err)
+	}
+	const n = 60
+	results := make(chan string, n)
+	for i := 0; i < n; i++ {
+		go func() {
+			_, _, err := s.Login("6.6.6.6", "ua", "admin", "wrong password", "")
+			var e *Error
+			errors.As(err, &e)
+			results <- e.Code
+		}()
+	}
+	checked := 0
+	for i := 0; i < n; i++ {
+		switch <-results {
+		case "bad_login":
+			checked++
+		case "locked":
+		default:
+			t.Fatal("unexpected answer")
+		}
+	}
+	if checked > ipLimit {
+		t.Fatalf("%d passwords checked at once, limit %d", checked, ipLimit)
+	}
+}
+
+// The address the owner logged in from is remembered across restarts.
+func TestKnownAddressAfterRestart(t *testing.T) {
+	s, c := newService(t)
+	setup, _ := s.SetupCode()
+	if _, _, err := s.Setup("1.1.1.1", "ua", setup, "admin", "correct horse"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Login("2.2.2.2", "ua", "admin", "correct horse", ""); err != nil {
+		t.Fatal(err)
+	}
+	restarted := New(s.Store, s.Secrets, s.Dir)
+	restarted.Cost, restarted.Now = s.Cost, c.now
+	for i := 0; i < userLimit+2; i++ { // from many addresses, so only the account locks
+		_, _, _ = restarted.Login("10.0.0."+string(rune('a'+i)), "ua", "admin", "wrong password", "")
+	}
+	if _, _, err := restarted.Login("3.3.3.3", "ua", "admin", "correct horse", ""); code(t, err) != "locked" {
+		t.Fatalf("a new address should wait: %v", err)
+	}
+	if _, _, err := restarted.Login("2.2.2.2", "ua", "admin", "correct horse", ""); err != nil {
+		t.Fatalf("the owner's address is still spared after a restart: %v", err)
 	}
 }

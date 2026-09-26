@@ -175,7 +175,8 @@ func normCode(c string) string {
 
 // Setup makes the first account and logs it in.
 func (s *Service) Setup(ip, ua, code, name, password string) (string, store.User, error) {
-	if err := s.locked(ip, ""); err != nil {
+	done, err := s.attempt(ip, "")
+	if err != nil {
 		return "", store.User{}, err
 	}
 	need, err := s.NeedsSetup()
@@ -185,11 +186,16 @@ func (s *Service) Setup(ip, ua, code, name, password string) (string, store.User
 	if !need {
 		return "", store.User{}, refuse("setup_done", "管理员账号已经设置过了，请直接登录")
 	}
-	want, _ := s.SetupCode()
-	if want == "" || subtle.ConstantTimeCompare([]byte(normCode(code)), []byte(normCode(want))) != 1 {
-		s.fail(ip, "")
+	// Only the code already written out counts: making a new one here
+	// would accept a code nobody has seen.
+	want := ""
+	if b, err := os.ReadFile(filepath.Join(s.Dir, setupFile)); err == nil {
+		want = strings.TrimSpace(string(b))
+	}
+	if len(want) < 16 || subtle.ConstantTimeCompare([]byte(normCode(code)), []byte(normCode(want))) != 1 {
 		return "", store.User{}, refuse("bad_setup", "初始化码不对。它在服务器上 Miao Panel 的日志里，也在数据目录的 setup-code 文件里")
 	}
+	done() // the code was right; a weak password is not a guess
 	name = strings.TrimSpace(name)
 	if err := checkName(name); err != nil {
 		return "", store.User{}, err
@@ -217,7 +223,8 @@ func (s *Service) Setup(ip, ua, code, name, password string) (string, store.User
 // Without a code it answers need_code once the password is right.
 func (s *Service) Login(ip, ua, name, password, code string) (string, store.User, error) {
 	name = strings.TrimSpace(name)
-	if err := s.locked(ip, name); err != nil {
+	done, err := s.attempt(ip, name)
+	if err != nil {
 		return "", store.User{}, err
 	}
 	u, err := s.Store.UserByName(name)
@@ -226,27 +233,27 @@ func (s *Service) Login(ip, ua, name, password, code string) (string, store.User
 		hash = s.dummyHash()
 	}
 	if bcrypt.CompareHashAndPassword(hash, []byte(password)) != nil || err != nil {
-		s.fail(ip, name)
 		_ = s.Store.Audit(orDash(name), "auth.fail", orDash(name), ip)
 		return "", store.User{}, refuse("bad_login", "用户名或密码不对")
 	}
 	if u.TOTP {
 		if strings.TrimSpace(code) == "" {
+			done() // the password was right; the code comes next
 			return "", store.User{}, refuse("need_code", "请输入身份验证器 App 里的 6 位验证码")
 		}
 		key, err := s.totpKey(u.ID, "totp")
 		if err != nil || !s.checkCode(u.ID, key, code) {
-			s.fail(ip, name)
 			_ = s.Store.Audit(name, "auth.fail", name, ip+"（验证码不对）")
 			return "", store.User{}, refuse("bad_code", "验证码不对，请看 App 里最新的 6 位数字")
 		}
 	}
+	done()
 	s.mu.Lock()
 	delete(s.byIP, ip)
 	if s.goodIP == nil {
 		s.goodIP = map[string]time.Time{}
 	}
-	s.goodIP[ip] = s.Now()
+	s.goodIP[name+"|"+ip] = s.Now()
 	s.mu.Unlock()
 	_ = s.Store.Audit(name, "auth.login", name, ip)
 	tok, err := s.newSession(u.ID, ip, ua)
@@ -260,50 +267,88 @@ func orDash(s string) string {
 	return s
 }
 
-// locked refuses an address or account that guessed too often. An
-// address that logged in within the last 30 days is spared the account's
-// lock, so strangers guessing cannot keep the owner out.
-func (s *Service) locked(ip, name string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// attempt counts a try before the password is checked, in the same step
+// as checking the limit, so tries sent all at once cannot slip past it;
+// done takes the try back when it turns out right. An address the
+// account logged in from within the last 30 days (also before a restart:
+// the log remembers) is spared the account's lock, so strangers guessing
+// cannot keep the owner out. An empty ip or name is not counted.
+func (s *Service) attempt(ip, name string) (done func(), err error) {
+	if !nameRe.MatchString(name) {
+		name = "" // not an account: only the address is counted
+	}
 	now := s.Now()
-	check := []*tries{s.byIP[ip]}
-	if at, ok := s.goodIP[ip]; !ok || now.Sub(at) > MaxAge {
-		check = append(check, s.byUser[name])
-	}
-	for _, t := range check {
-		if t != nil && now.Before(t.until) {
-			mins := int(t.until.Sub(now).Minutes()) + 1
-			return refuse("locked", "尝试次数太多了，请 %d 分钟后再试", mins)
-		}
-	}
-	return nil
-}
-
-// fail counts a wrong try against the address and the account.
-func (s *Service) fail(ip, name string) {
+	known := name != "" && s.knownIP(name, ip, now)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.byIP == nil {
 		s.byIP, s.byUser = map[string]*tries{}, map[string]*tries{}
 	}
-	now := s.Now()
-	bump := func(m map[string]*tries, k string, limit int) {
-		t := m[k]
+	if len(s.byIP)+len(s.byUser) > 4096 {
+		for _, m := range []map[string]*tries{s.byIP, s.byUser} {
+			for k, t := range m {
+				if now.After(t.until) && now.Sub(t.first) > window {
+					delete(m, k)
+				}
+			}
+		}
+	}
+	type counted struct {
+		m     map[string]*tries
+		k     string
+		limit int
+	}
+	var list []counted
+	if ip != "" {
+		list = append(list, counted{s.byIP, ip, ipLimit})
+	}
+	if name != "" && !known {
+		list = append(list, counted{s.byUser, name, userLimit})
+	}
+	for _, c := range list {
+		if t := c.m[c.k]; t != nil && now.Before(t.until) {
+			return nil, refuse("locked", "尝试次数太多了，请 %d 分钟后再试", int(t.until.Sub(now).Minutes())+1)
+		}
+	}
+	var taken []*tries
+	for _, c := range list {
+		t := c.m[c.k]
 		if t == nil || now.Sub(t.first) > window {
 			t = &tries{first: now}
-			m[k] = t
+			c.m[c.k] = t
 		}
-		t.n++
-		if t.n >= limit {
+		if t.n >= c.limit {
 			t.until = now.Add(lockFor)
 			t.n, t.first = 0, now
+			return nil, refuse("locked", "尝试次数太多了，请 %d 分钟后再试", int(lockFor.Minutes()))
 		}
+		t.n++
+		taken = append(taken, t)
 	}
-	bump(s.byIP, ip, ipLimit)
-	if name != "" {
-		bump(s.byUser, name, userLimit)
+	return func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for _, t := range taken {
+			if t.n > 0 {
+				t.n--
+			}
+		}
+	}, nil
+}
+
+// knownIP says whether the account logged in from this address lately.
+func (s *Service) knownIP(name, ip string, now time.Time) bool {
+	if ip == "" {
+		return false
 	}
+	s.mu.Lock()
+	at, ok := s.goodIP[name+"|"+ip]
+	s.mu.Unlock()
+	if ok && now.Sub(at) <= MaxAge {
+		return true
+	}
+	seen, err := s.Store.LoggedInFrom(name, ip, now.Add(-MaxAge))
+	return err == nil && seen
 }
 
 // ---- Sessions ----
@@ -413,15 +458,30 @@ func (s *Service) Prune() error {
 
 // ---- Password ----
 
+// checkOwn checks the password of a logged-in account, counting wrong
+// ones like logins do, so a stolen session cannot guess it.
+func (s *Service) checkOwn(ip string, u store.User, password, msg string) error {
+	done, err := s.attempt(ip, u.Name)
+	if err != nil {
+		return err
+	}
+	if bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(password)) != nil {
+		_ = s.Store.Audit(u.Name, "auth.fail", u.Name, ip+"（"+msg+"）")
+		return refuse("bad_login", "%s", msg)
+	}
+	done()
+	return nil
+}
+
 // ChangePassword sets a new password after checking the old one, and logs
 // out every other session.
-func (s *Service) ChangePassword(uid int64, keep, old, pw string) error {
+func (s *Service) ChangePassword(uid int64, keep, ip, old, pw string) error {
 	u, err := s.Store.GetUser(uid)
 	if err != nil {
 		return err
 	}
-	if bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(old)) != nil {
-		return refuse("bad_login", "原密码不对")
+	if err := s.checkOwn(ip, u, old, "原密码不对"); err != nil {
+		return err
 	}
 	if err := checkPassword(u.Name, pw); err != nil {
 		return err
@@ -514,12 +574,20 @@ func (s *Service) checkCode(uid int64, key []byte, code string) bool {
 	if s.lastStep == nil {
 		s.lastStep = map[int64]int64{}
 	}
+	if _, ok := s.lastStep[uid]; !ok {
+		// Kept with the key, so a code seen just before a restart still
+		// works only once.
+		if v, err := s.Secrets.Get(totpName(uid, "step")); err == nil {
+			s.lastStep[uid], _ = strconv.ParseInt(v, 10, 64)
+		}
+	}
 	for _, step := range []int64{now - 1, now, now + 1} {
 		if step <= s.lastStep[uid] {
 			continue
 		}
 		if hmac.Equal([]byte(Code(key, step)), []byte(code)) {
 			s.lastStep[uid] = step
+			_ = s.Secrets.Set(totpName(uid, "step"), strconv.FormatInt(step, 10))
 			return true
 		}
 	}
@@ -540,6 +608,10 @@ func (s *Service) BeginTOTP(uid int64) (TOTPSetup, error) {
 	if err != nil {
 		return TOTPSetup{}, err
 	}
+	if u.TOTP {
+		// Changing the key needs the password: turn it off, then on again.
+		return TOTPSetup{}, refuse("totp_on", "两步验证已经开着。要换手机的话，先输入密码关闭，再重新开启")
+	}
 	key := make([]byte, 20)
 	if _, err := rand.Read(key); err != nil {
 		return TOTPSetup{}, err
@@ -559,8 +631,8 @@ func (s *Service) BeginTOTP(uid int64) (TOTPSetup, error) {
 }
 
 // EnableTOTP turns two-step login on once a code from the new key checks
-// out.
-func (s *Service) EnableTOTP(uid int64, code string) error {
+// out, and logs out every other session.
+func (s *Service) EnableTOTP(uid int64, keep, code string) error {
 	key, err := s.totpKey(uid, "totp-new")
 	if err != nil {
 		return refuse("not_found", "请先点「开启两步验证」，扫描新的二维码")
@@ -576,23 +648,24 @@ func (s *Service) EnableTOTP(uid int64, code string) error {
 		return err
 	}
 	u, _ := s.Store.GetUser(uid)
-	_ = s.Store.Audit(u.Name, "auth.totp", u.Name, "开启了两步验证")
-	return nil
+	_ = s.Store.Audit(u.Name, "auth.totp", u.Name, "开启了两步验证，其他登录已退出")
+	return s.Store.DeleteSessions(uid, sessionID(keep))
 }
 
-// DisableTOTP turns two-step login off after checking the password.
-func (s *Service) DisableTOTP(uid int64, password string) error {
+// DisableTOTP turns two-step login off after checking the password, and
+// logs out every other session.
+func (s *Service) DisableTOTP(uid int64, keep, ip, password string) error {
 	u, err := s.Store.GetUser(uid)
 	if err != nil {
 		return err
 	}
-	if bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(password)) != nil {
-		return refuse("bad_login", "密码不对")
+	if err := s.checkOwn(ip, u, password, "密码不对"); err != nil {
+		return err
 	}
 	if err := s.Store.SetTOTP(uid, false); err != nil {
 		return err
 	}
 	_ = s.Secrets.Delete(totpName(uid, "totp"))
-	_ = s.Store.Audit(u.Name, "auth.totp", u.Name, "关闭了两步验证")
-	return nil
+	_ = s.Store.Audit(u.Name, "auth.totp", u.Name, "关闭了两步验证，其他登录已退出")
+	return s.Store.DeleteSessions(uid, sessionID(keep))
 }

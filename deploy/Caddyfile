@@ -2,5 +2,6 @@
 panel.example.com {
 	reverse_proxy 127.0.0.1:18765 {
 		flush_interval -1  # AI 的回答、终端输出要实时显示
+		header_up X-Real-IP {remote_host}  # 登录失败按访客 IP 限制
 	}
 }

@@ -73,21 +73,24 @@ func proxied(r *http.Request) bool {
 }
 
 // clientIP is the visitor's address: the connection's, or what a reverse
-// proxy in front says (X-Real-IP, else the last X-Forwarded-For hop).
+// proxy in front says. The last X-Forwarded-For hop comes first: nginx
+// ($proxy_add_x_forwarded_for) and Caddy both put the address they saw
+// there, whatever the visitor sent, while X-Real-IP passes through a
+// proxy that does not set it.
 func (s *Server) clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
 	}
 	if proxied(r) {
-		if v := strings.TrimSpace(r.Header.Get("X-Real-IP")); net.ParseIP(v) != nil {
-			return v
-		}
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			parts := strings.Split(xff, ",")
+		if xff := r.Header.Values("X-Forwarded-For"); len(xff) > 0 {
+			parts := strings.Split(xff[len(xff)-1], ",")
 			if v := strings.TrimSpace(parts[len(parts)-1]); net.ParseIP(v) != nil {
 				return v
 			}
+		}
+		if v := strings.TrimSpace(r.Header.Get("X-Real-IP")); net.ParseIP(v) != nil {
+			return v
 		}
 	}
 	return host
@@ -209,7 +212,7 @@ func (s *Server) changePassword(_ http.ResponseWriter, r *http.Request) (any, er
 	if err := decode(r, &req); err != nil {
 		return nil, err
 	}
-	return map[string]bool{"ok": true}, s.auth.ChangePassword(u.ID, tok, req.Old, req.New)
+	return map[string]bool{"ok": true}, s.auth.ChangePassword(u.ID, tok, s.clientIP(r), req.Old, req.New)
 }
 
 func (s *Server) beginTOTP(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -221,7 +224,7 @@ func (s *Server) beginTOTP(_ http.ResponseWriter, r *http.Request) (any, error) 
 }
 
 func (s *Server) enableTOTP(_ http.ResponseWriter, r *http.Request) (any, error) {
-	u, _, err := s.me(r)
+	u, tok, err := s.me(r)
 	if err != nil {
 		return nil, err
 	}
@@ -229,11 +232,11 @@ func (s *Server) enableTOTP(_ http.ResponseWriter, r *http.Request) (any, error)
 	if err := decode(r, &req); err != nil {
 		return nil, err
 	}
-	return map[string]bool{"ok": true}, s.auth.EnableTOTP(u.ID, req.Code)
+	return map[string]bool{"ok": true}, s.auth.EnableTOTP(u.ID, tok, req.Code)
 }
 
 func (s *Server) disableTOTP(_ http.ResponseWriter, r *http.Request) (any, error) {
-	u, _, err := s.me(r)
+	u, tok, err := s.me(r)
 	if err != nil {
 		return nil, err
 	}
@@ -241,7 +244,7 @@ func (s *Server) disableTOTP(_ http.ResponseWriter, r *http.Request) (any, error
 	if err := decode(r, &req); err != nil {
 		return nil, err
 	}
-	return map[string]bool{"ok": true}, s.auth.DisableTOTP(u.ID, req.Password)
+	return map[string]bool{"ok": true}, s.auth.DisableTOTP(u.ID, tok, s.clientIP(r), req.Password)
 }
 
 func (s *Server) endSession(_ http.ResponseWriter, r *http.Request) (any, error) {

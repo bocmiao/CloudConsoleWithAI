@@ -66,7 +66,7 @@ func serveMain(args []string) error {
 	if err != nil {
 		return err
 	}
-	srv := &http.Server{Handler: api.NewServer(a, au, version), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Handler: api.NewServer(a, au, version), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
 	scheme := "http"
 	if *cert != "" {
 		scheme = "https"

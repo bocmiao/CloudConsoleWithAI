@@ -1049,11 +1049,15 @@ func (s *Server) downloadLink(_ http.ResponseWriter, r *http.Request) (any, erro
 
 func (s *Server) downloadFile(w http.ResponseWriter, r *http.Request) {
 	tok := r.PathValue("token")
+	if !s.loggedIn(r) {
+		http.Error(w, "下载链接已失效，请回到 Miao Panel 重新点下载。", http.StatusForbidden)
+		return
+	}
 	s.dlMu.Lock()
 	d, ok := s.dl[tok]
 	delete(s.dl, tok)
 	s.dlMu.Unlock()
-	if !s.loggedIn(r) || !ok || time.Now().After(d.expires) {
+	if !ok || time.Now().After(d.expires) {
 		http.Error(w, "下载链接已失效，请回到 Miao Panel 重新点下载。", http.StatusForbidden)
 		return
 	}
@@ -1069,6 +1073,11 @@ func (s *Server) downloadFile(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}, w)
 	if err != nil && !started {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		var ue *app.UserError
+		if errors.As(err, &ue) {
+			http.Error(w, ue.Msg, http.StatusBadRequest)
+		} else {
+			http.Error(w, "下载失败："+err.Error(), http.StatusBadGateway)
+		}
 	}
 }
