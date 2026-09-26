@@ -1,6 +1,7 @@
 // Package sshtest runs an in-process SSH server for tests. Exec requests
 // run with the local sh, so scripts can be tested end to end; shell
-// requests start the local ShellCommand.
+// requests start the local ShellCommand, and the sftp subsystem serves the
+// local files.
 package sshtest
 
 import (
@@ -15,6 +16,7 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -170,6 +172,18 @@ func (s *Server) handle(nc net.Conn) {
 						code = cmd.ProcessState.ExitCode()
 					}
 					_, _ = ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{uint32(code)}))
+					return
+				}
+				if req.Type == "subsystem" {
+					var sub struct{ Name string }
+					if err := ssh.Unmarshal(req.Payload, &sub); err != nil || sub.Name != "sftp" {
+						_ = req.Reply(false, nil)
+						continue
+					}
+					_ = req.Reply(true, nil)
+					if srv, err := sftp.NewServer(ch); err == nil {
+						_ = srv.Serve()
+					}
 					return
 				}
 				if req.Type != "exec" {

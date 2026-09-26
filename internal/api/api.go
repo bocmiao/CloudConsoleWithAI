@@ -9,12 +9,16 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,6 +38,15 @@ type Server struct {
 	port    int
 	version string
 	mux     *http.ServeMux
+
+	dlMu sync.Mutex
+	dl   map[string]download // one-time download links
+}
+
+type download struct {
+	server  int64
+	path    string
+	expires time.Time
 }
 
 // New builds the handler. port is the port the listener is bound to.
@@ -46,6 +59,17 @@ func New(a *app.App, token string, port int, version string) *Server {
 	api := func(pattern string, h func(w http.ResponseWriter, r *http.Request) (any, error)) {
 		s.mux.HandleFunc(pattern, s.guard(h))
 	}
+	// Bodies bigger than the usual 1 MB: an edited file, an upload.
+	big := func(pattern string, limit int64, h func(w http.ResponseWriter, r *http.Request) (any, error)) {
+		s.mux.HandleFunc(pattern, s.guardN(limit, h))
+	}
+	api("GET /api/servers/{id}/files", s.listFiles)
+	api("GET /api/servers/{id}/files/text", s.readFileText)
+	big("PUT /api/servers/{id}/files/text", 6<<20, s.writeFileText)
+	big("POST /api/servers/{id}/files/upload", 0, s.uploadFiles)
+	api("POST /api/servers/{id}/files/op", s.fileOp)
+	api("POST /api/servers/{id}/files/link", s.downloadLink)
+	s.mux.HandleFunc("GET /dl/{token}", s.downloadFile)
 	api("GET /api/info", s.info)
 	api("GET /api/servers", s.listServers)
 	api("POST /api/servers", s.addServer)
@@ -146,6 +170,7 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 
 type apiError struct {
 	Error string `json:"error"`
+	Code  string `json:"code,omitempty"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -155,13 +180,20 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func (s *Server) guard(h func(w http.ResponseWriter, r *http.Request) (any, error)) http.HandlerFunc {
+	return s.guardN(1<<20, h)
+}
+
+// guardN is guard with a body limit; 0 means none (uploads are streamed).
+func (s *Server) guardN(limit int64, h func(w http.ResponseWriter, r *http.Request) (any, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie(cookieName)
 		if err != nil || subtle.ConstantTimeCompare([]byte(c.Value), []byte(s.token)) != 1 || r.Header.Get("X-Miao") != "1" {
-			writeJSON(w, http.StatusUnauthorized, apiError{"登录已失效，请从 Miao Panel 窗口里重新打开页面。"})
+			writeJSON(w, http.StatusUnauthorized, apiError{Error: "登录已失效，请从 Miao Panel 窗口里重新打开页面。"})
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+		if limit > 0 {
+			r.Body = http.MaxBytesReader(w, r.Body, limit)
+		}
 		v, err := h(w, r)
 		if _, ok := v.(streamed); ok && err == nil {
 			return // the handler wrote the response itself
@@ -170,11 +202,11 @@ func (s *Server) guard(h func(w http.ResponseWriter, r *http.Request) (any, erro
 			var ue *app.UserError
 			switch {
 			case errors.As(err, &ue):
-				writeJSON(w, http.StatusBadRequest, apiError{ue.Msg})
+				writeJSON(w, http.StatusBadRequest, apiError{Error: ue.Msg, Code: ue.Code})
 			case errors.Is(err, context.DeadlineExceeded):
-				writeJSON(w, http.StatusGatewayTimeout, apiError{"操作超时了，请稍后再试。"})
+				writeJSON(w, http.StatusGatewayTimeout, apiError{Error: "操作超时了，请稍后再试。"})
 			default:
-				writeJSON(w, http.StatusInternalServerError, apiError{"出错了：" + err.Error()})
+				writeJSON(w, http.StatusInternalServerError, apiError{Error: "出错了：" + err.Error()})
 			}
 			return
 		}
@@ -736,4 +768,144 @@ func (s *Server) usage(_ http.ResponseWriter, _ *http.Request) (any, error) {
 // LaunchURL is the address that logs the browser in for this run.
 func LaunchURL(port int, token string) string {
 	return "http://127.0.0.1:" + strconv.Itoa(port) + "/auth?token=" + strings.TrimSpace(token)
+}
+
+// ---- Files ----
+
+func (s *Server) listFiles(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	return s.app.ListFiles(r.Context(), id, r.URL.Query().Get("path"))
+}
+
+func (s *Server) readFileText(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	return s.app.ReadFileText(r.Context(), id, r.URL.Query().Get("path"))
+}
+
+func (s *Server) writeFileText(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	var req struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+		Expect  string `json:"expect"`
+		Force   bool   `json:"force"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.WriteFileText(r.Context(), id, req.Path, req.Content, req.Expect, req.Force)
+}
+
+// uploadFiles streams multipart files into ?dir=, replacing existing ones
+// only with ?overwrite=1.
+func (s *Server) uploadFiles(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	mr, err := r.MultipartReader()
+	if err != nil {
+		return nil, &app.UserError{Msg: "上传格式不对"}
+	}
+	var out []app.FileEntry
+	for {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, &app.UserError{Msg: "上传中断了：" + err.Error()}
+		}
+		if part.FileName() == "" {
+			continue
+		}
+		e, err := s.app.UploadFile(r.Context(), id, r.URL.Query().Get("dir"), part.FileName(), part, r.URL.Query().Get("overwrite") == "1")
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+func (s *Server) fileOp(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	var req app.FileOp
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.FileChange(r.Context(), id, req)
+}
+
+// downloadLink makes a one-time address for a download: a plain link (a
+// download the browser saves) cannot carry the X-Miao header, so the
+// address itself proves the page asked for it. It works once, for two
+// minutes, and still needs the session cookie.
+func (s *Server) downloadLink(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	b := make([]byte, 18)
+	if _, err := rand.Read(b); err != nil {
+		return nil, err
+	}
+	tok := base64.RawURLEncoding.EncodeToString(b)
+	s.dlMu.Lock()
+	if s.dl == nil {
+		s.dl = map[string]download{}
+	}
+	for k, d := range s.dl {
+		if time.Now().After(d.expires) {
+			delete(s.dl, k)
+		}
+	}
+	s.dl[tok] = download{server: id, path: req.Path, expires: time.Now().Add(2 * time.Minute)}
+	s.dlMu.Unlock()
+	return map[string]string{"url": "/dl/" + tok}, nil
+}
+
+func (s *Server) downloadFile(w http.ResponseWriter, r *http.Request) {
+	c, err := r.Cookie(cookieName)
+	tok := r.PathValue("token")
+	s.dlMu.Lock()
+	d, ok := s.dl[tok]
+	delete(s.dl, tok)
+	s.dlMu.Unlock()
+	if err != nil || subtle.ConstantTimeCompare([]byte(c.Value), []byte(s.token)) != 1 || !ok || time.Now().After(d.expires) {
+		http.Error(w, "下载链接已失效，请回到 Miao Panel 重新点下载。", http.StatusForbidden)
+		return
+	}
+	started := false
+	err = s.app.DownloadFile(r.Context(), d.server, d.path, func(name string, size int64) {
+		started = true
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(name))
+		w.Header().Set("Cache-Control", "no-store")
+		if size >= 0 {
+			w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+		}
+		w.WriteHeader(http.StatusOK)
+	}, w)
+	if err != nil && !started {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	}
 }

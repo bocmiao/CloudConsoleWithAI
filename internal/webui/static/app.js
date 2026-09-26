@@ -9,7 +9,11 @@ async function api(method, path, body) {
   }
   const res = await fetch(path, opts);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `请求失败（${res.status}）`);
+  if (!res.ok) {
+    const err = new Error(data.error || `请求失败（${res.status}）`);
+    err.code = data.code || '';
+    throw err;
+  }
   return data;
 }
 
@@ -69,6 +73,17 @@ const ICONS = {
   info: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v6M12 7.5h.01',
   chevron: 'M9 6l6 6-6 6',
   'arrow-up': 'M12 19V5M6 11l6-6 6 6',
+  up: 'M12 19V5M6 11l6-6 6 6',
+  folder: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z',
+  file: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5',
+  link: 'M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1',
+  upload: 'M12 15V4M7 9l5-5 5 5M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3',
+  download: 'M12 4v11M7 10l5 5 5-5M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3',
+  copy: 'M9 9h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V10a1 1 0 0 1 1-1zM5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1',
+  cut: 'M6 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM20 4L8.1 15.9M14.5 14.5L20 20M8.1 8.1L12 12',
+  paste: 'M9 3h6v4H9zM9 5H6a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1h-3',
+  pencil: 'M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4',
+  archive: 'M3 4h18v4H3zM5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4',
   cpu: 'M7 7h10v10H7zM10 10h4v4h-4zM9 3v4M15 3v4M9 17v4M15 17v4M3 9h4M3 15h4M17 9h4M17 15h4',
   memory: 'M3 8h18v8H3zM7 16v3M12 16v3M17 16v3M7 11v2M12 11v2M17 11v2',
   disk: 'M3 13h18v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM3 13l3-8h12l3 8M7 16.5h.01',
@@ -2122,6 +2137,768 @@ const NoticePage = {
   </div>`,
 };
 
+// 文件: a server's files over SFTP, like a file manager on the desktop.
+const FILE_PLACES = {
+  common: [
+    { path: '', text: '主目录' }, { path: '/', text: '根目录 /' }, { path: '/etc', text: '/etc（系统配置）' },
+    { path: '/var/log', text: '/var/log（系统日志）' }, { path: '/tmp', text: '/tmp（临时文件）' },
+  ],
+  '1panel': [{ path: '/opt/1panel/www/sites', text: '1Panel 网站' }, { path: '/opt/1panel/apps', text: '1Panel 应用' }],
+  bt: [{ path: '/www/wwwroot', text: '宝塔网站' }, { path: '/www/wwwlogs', text: '宝塔网站日志' }, { path: '/www/server/panel/vhost/nginx', text: '宝塔 Nginx 配置' }],
+  linux: [{ path: '/var/www', text: '/var/www（网站）' }, { path: '/etc/nginx', text: 'Nginx 配置' }],
+};
+// What the server can unpack: IsArchive in files.go.
+const ARCHIVE_RE = /\.(zip|tar|tgz|tbz2|txz|tar\.zst|gz|bz2|xz|7z|rar)$/i;
+const FILE_EDIT_MAX = 5 << 20;
+const FILE_SHOW = 500; // rows drawn at first in a big folder
+const PERM_WHO = [{ text: '所有者', shift: 6 }, { text: '用户组', shift: 3 }, { text: '其他人', shift: 0 }];
+const PERM_BITS = [{ text: '读', bit: 4 }, { text: '写', bit: 2 }, { text: '执行', bit: 1 }];
+const baseName = p => String(p).replace(/\/+$/, '').split('/').pop() || '/';
+const joinPath = (dir, name) => (dir === '/' ? '' : dir) + '/' + name;
+const dirOf = p => p.replace(/\/[^/]*$/, '') || '/';
+// stemOf is the name without its extension: site.tar.gz → site.
+const stemOf = n => { const m = String(n).match(/^(.+?)(\.tar\.(gz|bz2|xz|zst)|\.[^.]+)$/); return m ? m[1] : n; };
+const namesText = l => l.length <= 3 ? l.join('、') : `${l.slice(0, 3).join('、')} 等 ${l.length} 项`;
+const archiveName = (name, format) => format === 'zip'
+  ? (/\.zip$/i.test(name) ? name : name + '.zip')
+  : (/\.(tar\.gz|tgz)$/i.test(name) ? name : name + '.tar.gz');
+function fileTime(t) {
+  const d = new Date(t);
+  if (isNaN(d)) return '';
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+// indentOf: what the Tab key types, following the file's own indentation.
+function indentOf(text) {
+  const head = text.slice(0, 20000);
+  if (/^\t/m.test(head)) return '\t';
+  const m = head.match(/^ +(?=\S)/gm);
+  if (!m) return '    ';
+  return Math.min(...m.map(s => s.length)) === 2 ? '  ' : '    ';
+}
+const nameCmp = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' }).compare;
+
+const FilePage = {
+  props: { servers: { type: Array, default: () => [] }, active: Boolean, request: Object },
+  setup(props) {
+    // Servers reached through the Tencent Cloud automation agent have no SSH.
+    const usable = computed(() => props.servers.filter(s => s.authKind !== 'tat'));
+    const saved = (() => { try { return JSON.parse(localStorage.getItem('miao.files') || '{}') || {}; } catch { return {}; } })();
+    const remember = () => { try { localStorage.setItem('miao.files', JSON.stringify(saved)); } catch { /* not kept */ } };
+    const sid = ref(0);
+    const list = ref(null); // {path, parent, home, user, entries}
+    const loading = ref(false), error = ref('');
+    const addr = ref(''), editingAddr = ref(false), addrEl = ref(null), pathEl = ref(null);
+    const q = ref('');
+    const sort = reactive({ key: 'name', desc: false });
+    const sel = ref([]); // selected paths
+    const limit = ref(FILE_SHOW);
+    let anchor = '';
+    const clip = reactive({ op: '', serverId: 0, from: '', paths: [] });
+    const busy = ref(false);
+    let seq = 0;
+
+    const server = computed(() => usable.value.find(s => s.id === sid.value));
+    const places = computed(() => [...FILE_PLACES.common, ...(FILE_PLACES[server.value && server.value.adapter] || [])]);
+    const url = (tail = '') => `/api/servers/${sid.value}/files${tail}`;
+
+    async function load(p, opts = {}) {
+      if (!sid.value) return;
+      const n = ++seq;
+      loading.value = true;
+      try {
+        const v = await api('GET', url(`?path=${encodeURIComponent(p || '')}`));
+        if (n !== seq) return;
+        const same = list.value && list.value.path === v.path;
+        list.value = v; error.value = ''; addr.value = v.path; editingAddr.value = false;
+        const here = new Set(v.entries.map(e => e.path));
+        sel.value = opts.select ? opts.select.filter(x => here.has(x)) : same && opts.keep ? sel.value.filter(x => here.has(x)) : [];
+        if (!same) { q.value = ''; limit.value = FILE_SHOW; }
+        nextTick(() => { if (pathEl.value) pathEl.value.scrollLeft = pathEl.value.scrollWidth; });
+        saved[sid.value] = v.path; remember();
+      } catch (e) {
+        if (n !== seq) return;
+        if (opts.fallback && p) { loading.value = false; return load('', {}); }
+        if (list.value) notify(e.message, 'error'); else error.value = e.message;
+      } finally { if (n === seq) loading.value = false; }
+    }
+    const refresh = () => list.value ? load(list.value.path, { keep: true }) : pickServer(sid.value);
+    let refreshTimer = null;
+    const refreshSoon = () => { clearTimeout(refreshTimer); refreshTimer = setTimeout(refresh, 300); };
+    function pickServer(id, path) {
+      sid.value = id; list.value = null; error.value = ''; sel.value = [];
+      if (!id) return;
+      saved.last = id; remember();
+      load(path != null ? path : saved[id] || '', { fallback: path == null });
+    }
+    watch(usable, l => { if (!l.some(s => s.id === sid.value)) pickServer(l.length ? l[0].id : 0); });
+    function onRequest(r) {
+      if (!r || !usable.value.some(s => s.id === r.serverId)) return;
+      if (r.serverId !== sid.value) pickServer(r.serverId, r.path);
+      else if (r.path) load(r.path);
+    }
+    watch(() => props.request, onRequest);
+    watch(() => props.active, on => { if (on && list.value && !loading.value) refresh(); });
+
+    // What the table shows: folders first, then by the chosen column.
+    const shown = computed(() => {
+      if (!list.value) return [];
+      const needle = q.value.trim().toLowerCase();
+      const out = list.value.entries.filter(e => !needle || e.name.toLowerCase().includes(needle));
+      const k = sort.key, d = sort.desc ? -1 : 1;
+      return out.sort((a, b) => (b.dir - a.dir)
+        || d * (k === 'size' ? a.size - b.size : k === 'modTime' ? byStr(a.modTime, b.modTime) : 0)
+        || d * nameCmp(a.name, b.name));
+    });
+    const visible = computed(() => shown.value.slice(0, limit.value));
+    watch(q, () => { const s = new Set(shown.value.map(e => e.path)); sel.value = sel.value.filter(p => s.has(p)); });
+    const ariaSort = k => sort.key === k ? (sort.desc ? 'descending' : 'ascending') : null;
+    function sortBy(k) {
+      if (sort.key === k) sort.desc = !sort.desc; else { sort.key = k; sort.desc = k !== 'name'; }
+    }
+    const selSet = computed(() => new Set(sel.value));
+    const selected = computed(() => list.value ? list.value.entries.filter(e => selSet.value.has(e.path)) : []);
+    const one = computed(() => selected.value.length === 1 ? selected.value[0] : null);
+    const selSize = computed(() => {
+      const files = selected.value.filter(e => !e.dir);
+      return files.length ? ' · ' + fmtBytes(files.reduce((s, e) => s + e.size, 0)) : '';
+    });
+    const allOn = computed(() => shown.value.length > 0 && shown.value.every(e => selSet.value.has(e.path)));
+    const toggleAll = () => { sel.value = allOn.value ? [] : shown.value.map(e => e.path); };
+    function toggle(e) {
+      const s = new Set(sel.value);
+      if (s.has(e.path)) s.delete(e.path); else s.add(e.path);
+      sel.value = [...s]; anchor = e.path;
+    }
+    function clickRow(e, ev) {
+      if (ev.shiftKey && anchor) {
+        const order = shown.value.map(x => x.path), a = order.indexOf(anchor), b = order.indexOf(e.path);
+        if (a >= 0 && b >= 0) {
+          const range = order.slice(Math.min(a, b), Math.max(a, b) + 1);
+          sel.value = ev.ctrlKey || ev.metaKey ? [...new Set([...sel.value, ...range])] : range;
+          return;
+        }
+      }
+      if (ev.ctrlKey || ev.metaKey) { toggle(e); return; }
+      sel.value = [e.path]; anchor = e.path;
+      // A tap on the name opens it on touch screens, where there is no double click.
+      if (ev.target.closest('.fname') && window.matchMedia('(pointer: coarse)').matches) openEntry(e);
+    }
+    const crumbs = computed(() => {
+      if (!list.value) return [];
+      const parts = list.value.path.split('/').filter(Boolean);
+      return [{ path: '/', text: '根目录' }, ...parts.map((x, i) => ({ path: '/' + parts.slice(0, i + 1).join('/'), text: x }))];
+    });
+    function editAddr() {
+      if (!list.value) return;
+      addr.value = list.value.path; editingAddr.value = true;
+      nextTick(() => { if (addrEl.value) { addrEl.value.focus(); addrEl.value.select(); } });
+    }
+    function goAddr() {
+      const p = addr.value.trim();
+      if (!p) { editingAddr.value = false; return; }
+      if (!p.startsWith('/')) { notify('路径要以 / 开头，比如 /etc/nginx', 'error'); return; }
+      load(p);
+    }
+    function goPlace(ev) { const p = ev.target.value; ev.target.value = '-'; load(p); }
+    const up = () => { if (list.value && list.value.parent) load(list.value.parent, { select: [list.value.path] }); };
+    const isArchive = e => !e.dir && ARCHIVE_RE.test(e.name);
+    const iconOf = e => e.dir ? 'folder' : isArchive(e) ? 'archive' : e.link ? 'link' : 'file';
+    const ownerText = e => e.group && e.group !== e.owner ? `${e.owner}:${e.group}` : e.owner;
+    const isCut = e => clip.op === 'move' && clip.serverId === sid.value && clip.paths.includes(e.path);
+
+    function openEntry(e) {
+      if (e.dir) { load(e.path); return; }
+      if (!'-l'.includes(e.mode[0])) { notify(`${e.name} 不是普通文件，不能打开`, 'error'); return; }
+      if (isArchive(e)) { askExtract(e); return; }
+      if (e.size > FILE_EDIT_MAX) {
+        if (confirm(`${e.name} 有 ${fmtBytes(e.size)}，太大了，不能在这里编辑。下载到电脑？`)) download(e);
+        return;
+      }
+      openEditor(e.path);
+    }
+    async function op(body) { return api('POST', url('/op'), body); }
+
+    // ---- Copy, cut, paste, delete ----
+    function toClip(kind) {
+      if (!selected.value.length) return;
+      Object.assign(clip, { op: kind, serverId: sid.value, from: list.value.path, paths: selected.value.map(e => e.path) });
+      notify(`已${kind === 'copy' ? '复制' : '剪切'} ${clip.paths.length} 项，打开要放的文件夹后点「粘贴」`);
+    }
+    const clipText = computed(() => clip.paths.length ? `${clip.op === 'copy' ? '复制' : '剪切'}了 ${namesText(clip.paths.map(baseName))}` : '');
+    const clearClip = () => Object.assign(clip, { op: '', serverId: 0, from: '', paths: [] });
+    async function paste(conflict = '') {
+      if (!clip.paths.length || !list.value || busy.value) return;
+      if (clip.serverId !== sid.value) { notify('剪贴板里是另一台服务器的文件，只能粘贴到同一台服务器', 'error'); return; }
+      const dir = list.value.path, kind = clip.op;
+      if (!conflict && clip.from === dir) {
+        if (kind === 'move') { notify('已经在这个文件夹里了'); return; }
+        conflict = 'rename'; // pasting a copy next to itself keeps both
+      }
+      busy.value = true; dlg.busy = true;
+      try {
+        const r = await op({ op: kind, paths: clip.paths, dir, conflict });
+        const select = clip.paths.map(p => joinPath(dir, baseName(p)));
+        if (kind === 'move') clearClip();
+        dlg.kind = '';
+        notify(r.done);
+        await load(dir, { select });
+      } catch (e) {
+        if (e.code === 'conflict' && !conflict) openDlg('paste', { text: e.message });
+        else if (dlg.kind) dlg.error = e.message;
+        else notify(e.message, 'error');
+      } finally { busy.value = false; dlg.busy = false; }
+    }
+    async function remove() {
+      const items = selected.value;
+      if (!items.length || busy.value) return;
+      const inside = items.some(e => e.dir) ? '文件夹里的所有内容也会一起删除，' : '';
+      if (!confirm(`删除 ${namesText(items.map(e => e.name))}？\n${inside}删除后不能恢复。`)) return;
+      busy.value = true;
+      try {
+        const r = await op({ op: 'delete', paths: items.map(e => e.path) });
+        notify(r.done);
+        clip.paths = clip.paths.filter(p => !items.some(e => e.path === p));
+        await load(list.value.path);
+      } catch (e) { notify(e.message, 'error'); } finally { busy.value = false; }
+    }
+    async function download(e) {
+      try {
+        const r = await api('POST', url('/link'), { path: e.path });
+        const a = document.createElement('a');
+        a.href = r.url; a.download = '';
+        document.body.appendChild(a); a.click(); a.remove();
+        notify(e.dir ? `正在把 ${e.name} 打包成 ${e.name}.tar.gz 下载` : `正在下载 ${e.name}`);
+      } catch (err) { notify(err.message, 'error'); }
+    }
+    function copyPath(p) {
+      if (navigator.clipboard) navigator.clipboard.writeText(p).then(() => notify('已复制路径：' + p), () => notify(p));
+    }
+
+    // ---- Dialogs: new, rename, compress, extract, permissions, name clashes ----
+    const dlg = reactive({ kind: '', name: '', text: '', paths: [], files: [], clash: [], format: 'tar.gz', dest: '', here: '', sub: '',
+      perm: '', owner: '', doPerm: false, doOwner: false, recursive: false, hasDir: false, busy: false, error: '' });
+    const dlgInput = ref(null);
+    const DLG = {
+      mkdir: { title: '新建文件夹', ok: '新建' }, touch: { title: '新建文件', ok: '新建' }, rename: { title: '重命名', ok: '改名' },
+      compress: { title: '压缩', ok: '压缩' }, extract: { title: '解压', ok: '解压' }, perm: { title: '权限和所有者', ok: '修改' },
+      paste: { title: '有同名的文件' }, upload: { title: '有同名的文件' },
+    };
+    function openDlg(kind, extra = {}) {
+      Object.assign(dlg, { kind, name: '', text: '', error: '', busy: false }, extra);
+      nextTick(() => {
+        const el = dlgInput.value;
+        if (!el) return;
+        el.focus();
+        if (kind === 'rename' && !extra.dir) el.setSelectionRange(0, stemOf(el.value).length); else el.select();
+      });
+    }
+    const dlgClose = () => { if (!dlg.busy) dlg.kind = ''; };
+    const askNew = kind => { if (list.value) openDlg(kind, { name: kind === 'mkdir' ? '新建文件夹' : '新建文件.txt' }); };
+    const askRename = () => { const e = one.value; if (e) openDlg('rename', { paths: [e.path], name: e.name, dir: e.dir }); };
+    function askCompress() {
+      const items = selected.value;
+      if (!items.length) return;
+      const folder = baseName(list.value.path);
+      const name = items.length === 1 ? (items[0].dir ? items[0].name : stemOf(items[0].name)) : folder === '/' ? 'archive' : folder;
+      openDlg('compress', { paths: items.map(e => e.path), text: namesText(items.map(e => e.name)), name, format: dlg.format || 'tar.gz' });
+    }
+    function askExtract(e) {
+      const here = list.value.path;
+      openDlg('extract', { paths: [e.path], text: e.name, here, sub: joinPath(here, stemOf(e.name)), dest: here });
+    }
+    function askPerm() {
+      const items = selected.value;
+      if (!items.length) return;
+      const same = f => items.every(e => f(e) === f(items[0])) ? f(items[0]) : '';
+      openDlg('perm', { paths: items.map(e => e.path), text: namesText(items.map(e => e.name)), perm: same(e => e.perm),
+        owner: same(e => `${e.owner}:${e.group}`), doPerm: false, doOwner: false, recursive: false, hasDir: items.some(e => e.dir) });
+    }
+    const permOn = (shift, bit) => ((parseInt(dlg.perm || '0', 8) || 0) >> shift & bit) !== 0;
+    function flipPerm(shift, bit) {
+      const v = (parseInt(dlg.perm || '0', 8) || 0) ^ (bit << shift);
+      dlg.perm = v.toString(8).padStart(3, '0'); dlg.doPerm = true;
+    }
+    async function dlgSubmit() {
+      const d = dlg, dir = list.value.path;
+      if (d.busy) return;
+      let body, select;
+      const name = d.name.trim();
+      switch (d.kind) {
+        case 'mkdir': case 'touch': body = { op: d.kind, dir, name }; select = [joinPath(dir, name)]; break;
+        case 'rename': body = { op: 'rename', paths: d.paths, name }; select = [joinPath(dir, name)]; break;
+        case 'compress': body = { op: 'compress', paths: d.paths, name, format: d.format }; select = [joinPath(dir, archiveName(name, d.format))]; break;
+        case 'extract': body = { op: 'extract', paths: d.paths, dir: d.dest.trim() }; select = [d.dest.trim()]; break;
+        case 'perm': return savePerm();
+        default: return;
+      }
+      if (d.kind !== 'extract' && !name) { d.error = '请填写名称'; return; }
+      d.busy = true; d.error = '';
+      try {
+        const r = await op(body);
+        d.busy = false; d.kind = '';
+        notify(r.done);
+        await load(dir, { select });
+        if (body.op === 'touch') openEditor(select[0]);
+      } catch (e) { d.error = e.message; } finally { d.busy = false; }
+    }
+    async function savePerm() {
+      const d = dlg;
+      if (!d.doPerm && !d.doOwner) { d.error = '勾选要修改的项'; return; }
+      if (d.doPerm && !/^[0-7]{3,4}$/.test(d.perm)) { d.error = '权限要写成 755 这样的三位数字'; return; }
+      if (d.doOwner && !d.owner.trim()) { d.error = '请填写所有者'; return; }
+      d.busy = true; d.error = '';
+      const done = [];
+      try {
+        if (d.doPerm) done.push((await op({ op: 'chmod', paths: d.paths, mode: d.perm, recursive: d.recursive })).done);
+        if (d.doOwner) done.push((await op({ op: 'chown', paths: d.paths, owner: d.owner.trim(), recursive: d.recursive })).done);
+        d.busy = false; d.kind = '';
+        notify(done.join('，'));
+      } catch (e) { d.error = (done.length ? done.join('，') + '；' : '') + e.message; } finally {
+        d.busy = false;
+        if (done.length) load(list.value.path, { keep: true });
+      }
+    }
+
+    // ---- Uploads: one file at a time, with progress ----
+    const uploads = ref([]); // {key, file, name, size, loaded, state: wait|up|done|error|cancelled, error, serverId, dir, overwrite, xhr}
+    const fileInput = ref(null);
+    const dragging = ref(false);
+    let dragDepth = 0, upN = 0, pumping = false;
+    const hasFiles = ev => ev.dataTransfer && [...ev.dataTransfer.types].includes('Files');
+    function onDragEnter(ev) { if (hasFiles(ev) && list.value) { dragDepth++; dragging.value = true; } }
+    function onDragLeave(ev) { if (hasFiles(ev)) { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) dragging.value = false; } }
+    function onDrop(ev) {
+      dragDepth = 0; dragging.value = false;
+      if (!hasFiles(ev) || !list.value) return;
+      const items = [...(ev.dataTransfer.items || [])];
+      if (items.some(it => it.webkitGetAsEntry && (it.webkitGetAsEntry() || {}).isDirectory)) {
+        notify('不能直接上传文件夹：先在电脑上压缩成 zip，上传后在这里解压', 'error');
+        return;
+      }
+      startUpload([...ev.dataTransfer.files]);
+    }
+    function onPicked(ev) { startUpload([...ev.target.files]); ev.target.value = ''; }
+    function startUpload(files) {
+      if (!files.length || !list.value) return;
+      const names = new Set(list.value.entries.map(e => e.name));
+      const clash = files.filter(f => names.has(f.name));
+      if (clash.length) { openDlg('upload', { files, clash: clash.map(f => f.name), text: namesText(clash.map(f => f.name)) }); return; }
+      queueUpload(files, false);
+    }
+    function uploadChoice(how) {
+      const files = how === 'skip' ? dlg.files.filter(f => !dlg.clash.includes(f.name)) : dlg.files;
+      dlg.kind = '';
+      queueUpload(files, how === 'overwrite');
+    }
+    function queueUpload(files, overwrite) {
+      for (const f of files) {
+        uploads.value.push({ key: ++upN, file: f, name: f.name, size: f.size, loaded: 0, state: 'wait', error: '', serverId: sid.value, dir: list.value.path, overwrite, xhr: null });
+      }
+      pump();
+    }
+    async function pump() {
+      if (pumping) return;
+      pumping = true;
+      for (let u; (u = uploads.value.find(x => x.state === 'wait'));) {
+        await sendOne(u);
+        if (list.value && sid.value === u.serverId && list.value.path === u.dir) refreshSoon();
+      }
+      pumping = false;
+    }
+    function sendOne(u) {
+      return new Promise(resolve => {
+        const x = new XMLHttpRequest();
+        u.xhr = x; u.state = 'up';
+        x.open('POST', `/api/servers/${u.serverId}/files/upload?dir=${encodeURIComponent(u.dir)}${u.overwrite ? '&overwrite=1' : ''}`);
+        x.setRequestHeader('X-Miao', '1');
+        x.upload.onprogress = e => { if (e.lengthComputable) u.loaded = e.loaded; };
+        x.onload = () => {
+          if (x.status === 200) { u.state = 'done'; u.loaded = u.size; } else {
+            let m = '';
+            try { m = JSON.parse(x.responseText).error; } catch { /* not JSON */ }
+            u.state = 'error'; u.error = m || `上传失败（${x.status}）`;
+          }
+          resolve();
+        };
+        x.onerror = () => { u.state = 'error'; u.error = '上传中断了'; resolve(); };
+        x.onabort = () => { u.state = 'cancelled'; resolve(); };
+        const fd = new FormData();
+        fd.append('file', u.file, u.name);
+        x.send(fd);
+      });
+    }
+    function cancelUpload(u) { if (u.state === 'wait') u.state = 'cancelled'; else if (u.state === 'up' && u.xhr) u.xhr.abort(); }
+    const clearUploads = () => { uploads.value = uploads.value.filter(u => u.state === 'wait' || u.state === 'up'); };
+    const upLeft = computed(() => uploads.value.filter(u => u.state === 'wait' || u.state === 'up').length);
+    const upPct = u => u.size ? Math.min(100, Math.round(u.loaded / u.size * 100)) : 100;
+    const upState = u => ({
+      wait: '等待中', done: '已上传', cancelled: '已取消', error: u.error,
+      up: u.loaded >= u.size ? '正在写入服务器……' : `${fmtBytes(u.loaded)} / ${fmtBytes(u.size)}`,
+    }[u.state]);
+
+    // ---- Editor ----
+    const ed = reactive({ open: false, serverId: 0, path: '', name: '', content: '', orig: '', modTime: '', size: 0, crlf: false, binary: false,
+      loading: false, saving: false, error: '', wrap: false, line: 1, col: 1 });
+    const edEl = ref(null);
+    let indent = '    ';
+    async function openEditor(p) {
+      Object.assign(ed, { open: true, serverId: sid.value, path: p, name: baseName(p), content: '', orig: '', modTime: '', size: 0, crlf: false,
+        binary: false, loading: true, saving: false, error: '', line: 1, col: 1 });
+      try {
+        const f = await api('GET', url(`/text?path=${encodeURIComponent(p)}`));
+        // The textarea turns CRLF into LF; saving puts it back.
+        const crlf = f.content.includes('\r\n'), text = crlf ? f.content.replace(/\r\n/g, '\n') : f.content;
+        Object.assign(ed, { content: text, orig: text, modTime: f.modTime, size: f.size, crlf, binary: f.binary });
+        indent = indentOf(text);
+        ed.loading = false;
+        nextTick(() => { if (edEl.value) { edEl.value.focus(); edEl.value.setSelectionRange(0, 0); edEl.value.scrollTop = 0; } });
+      } catch (e) { ed.error = e.message; } finally { ed.loading = false; }
+    }
+    const dirty = computed(() => ed.open && !ed.binary && !ed.loading && !ed.error && ed.content !== ed.orig);
+    async function save(force = false) {
+      if (!dirty.value && !force) return;
+      if (ed.saving) return;
+      ed.saving = true;
+      const sent = ed.content;
+      try {
+        const f = await api('PUT', `/api/servers/${ed.serverId}/files/text`,
+          { path: ed.path, content: ed.crlf ? sent.replace(/\n/g, '\r\n') : sent, expect: ed.modTime, force });
+        Object.assign(ed, { orig: sent, modTime: f.modTime, size: f.size });
+        notify('已保存 ' + ed.name);
+        if (list.value && sid.value === ed.serverId && dirOf(ed.path) === list.value.path) refreshSoon();
+      } catch (e) {
+        if (e.code === 'conflict' && !force) {
+          ed.saving = false;
+          if (confirm(e.message + '\n\n仍然保存，用你的内容覆盖？')) await save(true);
+          return;
+        }
+        notify(e.message, 'error');
+      } finally { ed.saving = false; }
+    }
+    function closeEditor() {
+      if (dirty.value && !confirm(`${ed.name} 的修改还没保存，确定关闭？`)) return;
+      ed.open = false;
+    }
+    function caret() {
+      const el = edEl.value;
+      if (!el) return;
+      const before = el.value.slice(0, el.selectionStart);
+      const nl = before.lastIndexOf('\n');
+      ed.line = (before.match(/\n/g) || []).length + 1; ed.col = before.length - nl;
+    }
+    function onEdKey(ev) {
+      if (ev.isComposing || ev.keyCode === 229) return; // typing Chinese: the key belongs to the input method
+      const k = ev.key.toLowerCase();
+      if ((ev.ctrlKey || ev.metaKey) && k === 's') { ev.preventDefault(); save(); return; }
+      if (k === 'escape') { ev.preventDefault(); closeEditor(); return; }
+      if (k === 'tab' && !ev.shiftKey && !ev.ctrlKey && !ev.altKey && !ev.metaKey) {
+        ev.preventDefault();
+        // insertText keeps the browser's undo history.
+        if (!document.execCommand || !document.execCommand('insertText', false, indent)) {
+          const el = ev.target;
+          el.setRangeText(indent, el.selectionStart, el.selectionEnd, 'end');
+          ed.content = el.value;
+        }
+      }
+    }
+
+    // ---- Right-click menu ----
+    const menu = reactive({ open: false, x: 0, y: 0, blank: false });
+    const menuEl = ref(null);
+    function onContext(ev, e) {
+      if (!list.value) return;
+      ev.preventDefault();
+      if (e && !selSet.value.has(e.path)) { sel.value = [e.path]; anchor = e.path; }
+      if (!e) sel.value = [];
+      Object.assign(menu, { open: true, x: ev.clientX, y: ev.clientY, blank: !e });
+      nextTick(() => {
+        const el = menuEl.value;
+        if (!el) return;
+        const r = el.getBoundingClientRect();
+        menu.x = Math.max(8, Math.min(menu.x, window.innerWidth - r.width - 8));
+        menu.y = Math.max(8, Math.min(menu.y, window.innerHeight - r.height - 8));
+      });
+    }
+    function act(fn, ...args) { menu.open = false; fn(...args); }
+
+    // ---- Keyboard ----
+    function onKey(ev) {
+      if (!props.active || ed.open || dlg.kind || !list.value) return;
+      if (ev.key === 'Escape' && menu.open) { menu.open = false; return; }
+      const t = ev.target;
+      if (t && (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.isContentEditable)) return;
+      if (document.querySelector('.sheet-mask')) return; // another window is open
+      const k = ev.key, mod = ev.ctrlKey || ev.metaKey, lk = k.toLowerCase();
+      const textPicked = () => String(window.getSelection() || '') !== '';
+      if (mod && lk === 'a') { ev.preventDefault(); sel.value = shown.value.map(e => e.path); }
+      else if (mod && lk === 'c' && selected.value.length && !textPicked()) toClip('copy');
+      else if (mod && lk === 'x' && selected.value.length) toClip('move');
+      else if (mod && lk === 'v' && clip.paths.length) { ev.preventDefault(); paste(); }
+      else if (k === 'Delete' && selected.value.length) remove();
+      else if (k === 'F2' && one.value) { ev.preventDefault(); askRename(); }
+      else if (k === 'F5' || (mod && lk === 'r')) { ev.preventDefault(); refresh(); }
+      else if (k === 'Enter' && one.value) openEntry(one.value);
+      else if (k === 'Backspace' || (ev.altKey && k === 'ArrowUp')) { ev.preventDefault(); up(); }
+      else if (k === 'Escape') sel.value = [];
+      else if ((k === 'ArrowDown' || k === 'ArrowUp') && !mod && shown.value.length) {
+        ev.preventDefault();
+        const order = visible.value.map(e => e.path), cur = order.indexOf(anchor);
+        const next = order[Math.max(0, Math.min(order.length - 1, cur < 0 ? 0 : cur + (k === 'ArrowDown' ? 1 : -1)))];
+        sel.value = [next]; anchor = next;
+        nextTick(() => { const row = document.querySelector('.fm-table tr.on'); if (row) row.scrollIntoView({ block: 'nearest' }); });
+      }
+    }
+    const closeMenu = () => { menu.open = false; };
+    const warnLeave = ev => { if (dirty.value || upLeft.value) { ev.preventDefault(); ev.returnValue = ''; } };
+    onMounted(() => {
+      window.addEventListener('keydown', onKey);
+      window.addEventListener('click', closeMenu);
+      window.addEventListener('blur', closeMenu);
+      window.addEventListener('beforeunload', warnLeave);
+      const r = props.request;
+      if (r && usable.value.some(s => s.id === r.serverId)) pickServer(r.serverId, r.path);
+      else pickServer(usable.value.some(s => s.id === saved.last) ? saved.last : (usable.value[0] || {}).id || 0);
+    });
+    onUnmounted(() => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('click', closeMenu);
+      window.removeEventListener('blur', closeMenu);
+      window.removeEventListener('beforeunload', warnLeave);
+    });
+
+    return {
+      usable, sid, server, list, loading, error, addr, editingAddr, addrEl, pathEl, q, sort, sel, selSet, selected, one, selSize, allOn, limit,
+      shown, visible, places, crumbs, clip, clipText, busy, dlg, DLG, dlgInput, uploads, fileInput, dragging, ed, edEl, dirty, menu, menuEl,
+      PERM_WHO, PERM_BITS, FILE_SHOW, fmtBytes, baseName, archiveName, ariaSort, fileTime, iconOf, ownerText, isCut, isArchive, upPct, upState, upLeft,
+      pickServer, load, refresh, up, sortBy, toggle, toggleAll, clickRow, editAddr, goAddr, goPlace, openEntry, toClip, clearClip, paste, remove,
+      download, copyPath, openDlg, dlgClose, askNew, askRename, askCompress, askExtract, askPerm, permOn, flipPerm, dlgSubmit, uploadChoice,
+      onDragEnter, onDragLeave, onDrop, onPicked, cancelUpload, clearUploads, save, closeEditor, caret, onEdKey, onContext, act,
+    };
+  },
+  template: `
+  <div class="fm" @dragenter="onDragEnter" @dragleave="onDragLeave" @dragover.prevent @drop.prevent="onDrop">
+    <div class="term-empty" v-if="!usable.length">
+      <ui-icon name="folder" class="lg"></ui-icon>
+      <p v-if="servers.length">文件管理要用 SSH 连接。现在的服务器都是用腾讯云自动化助手连接的，可以改用 SSH（密码或密钥）重新添加。</p>
+      <p v-else>先在左边添加服务器。</p>
+    </div>
+    <template v-else>
+    <div class="fm-bar">
+      <select v-if="usable.length > 1" class="fm-srv" :value="sid" @change="pickServer(+$event.target.value)" aria-label="服务器">
+        <option v-for="s in usable" :key="s.id" :value="s.id">{{ s.name }}</option>
+      </select>
+      <span class="fm-server" v-else-if="server"><ui-icon name="server"></ui-icon>{{ server.name }}</span>
+      <button class="plain icon-only fm-upbtn" title="上一级（Backspace）" aria-label="上一级" :disabled="!list || !list.parent" @click="up"><ui-icon name="up"></ui-icon></button>
+      <div class="fm-path" ref="pathEl" :class="{editing: editingAddr}" @click.self="editAddr">
+        <input v-if="editingAddr" ref="addrEl" v-model="addr" @keydown.enter="!$event.isComposing && goAddr()" @keydown.esc="!$event.isComposing && (editingAddr = false)" @blur="editingAddr = false"
+          aria-label="路径" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="输入路径，比如 /etc/nginx">
+        <template v-else>
+          <template v-for="(c, i) in crumbs" :key="c.path"><span class="sep" v-if="i"><ui-icon name="chevron"></ui-icon></span><button class="crumb" :class="{last: i === crumbs.length - 1}" :title="c.path" @click="load(c.path)">{{ c.text }}</button></template>
+        </template>
+      </div>
+      <button class="plain icon-only fm-editbtn" title="输入路径" aria-label="输入路径" @click="editAddr" :disabled="!list"><ui-icon name="pencil"></ui-icon></button>
+      <select class="fm-places" @change="goPlace" aria-label="常用位置"><option value="-" selected disabled>常用位置</option><option v-for="p in places" :key="p.path" :value="p.path">{{ p.text }}</option></select>
+      <input class="fm-search" type="search" v-model="q" placeholder="筛选当前文件夹" aria-label="筛选当前文件夹" autocomplete="off" spellcheck="false" @keydown.esc="q = ''">
+      <button class="plain icon-only fm-refresh" title="刷新（F5）" aria-label="刷新" @click="refresh" :disabled="loading"><ui-icon name="refresh"></ui-icon></button>
+      <span class="fm-break"></span>
+    </div>
+    <div class="fm-actions">
+      <button @click="fileInput.click()" :disabled="!list" title="上传文件（也可以把文件拖进来）"><ui-icon name="upload"></ui-icon><span class="lbl">上传</span></button>
+      <input type="file" multiple ref="fileInput" class="sr-only" tabindex="-1" aria-hidden="true" @change="onPicked">
+      <button @click="askNew('mkdir')" :disabled="!list" title="新建文件夹"><ui-icon name="folder"></ui-icon><span class="lbl">新建文件夹</span></button>
+      <button @click="askNew('touch')" :disabled="!list" title="新建文件"><ui-icon name="file"></ui-icon><span class="lbl">新建文件</span></button>
+      <span class="fm-divider"></span>
+      <!-- Always shown, only enabled or not, so selecting never moves the list. -->
+      <button class="plain" @click="toClip('copy')" :disabled="!selected.length" title="复制（Ctrl+C）"><ui-icon name="copy"></ui-icon><span class="lbl">复制</span></button>
+      <button class="plain" @click="toClip('move')" :disabled="!selected.length" title="剪切（Ctrl+X）"><ui-icon name="cut"></ui-icon><span class="lbl">剪切</span></button>
+      <button class="plain" @click="paste()" :disabled="!clip.paths.length || busy || !list" :title="clip.paths.length ? clipText + '，粘贴到这里（Ctrl+V）' : '先复制或剪切文件'"><ui-icon name="paste"></ui-icon><span class="lbl">粘贴</span><span class="fm-count" v-if="clip.paths.length">{{ clip.paths.length }}</span></button>
+      <button class="plain" @click="askRename" :disabled="!one" title="重命名（F2）"><ui-icon name="pencil"></ui-icon><span class="lbl">重命名</span></button>
+      <button class="plain" @click="download(one)" :disabled="!one" :title="one && one.dir ? '文件夹会打包成 .tar.gz 下载' : '下载到电脑'"><ui-icon name="download"></ui-icon><span class="lbl">下载</span></button>
+      <button class="plain" @click="askCompress" :disabled="!selected.length" title="压缩成 tar.gz 或 zip"><ui-icon name="archive"></ui-icon><span class="lbl">压缩</span></button>
+      <button class="plain" @click="askExtract(one)" :disabled="!one || !isArchive(one)" title="解压压缩包"><ui-icon name="archive"></ui-icon><span class="lbl">解压</span></button>
+      <button class="plain" @click="askPerm" :disabled="!selected.length" title="权限和所有者"><ui-icon name="lock"></ui-icon><span class="lbl">权限</span></button>
+      <button class="plain destructive" @click="remove" :disabled="!selected.length || busy" title="删除（Delete）"><ui-icon name="trash"></ui-icon><span class="lbl">删除</span></button>
+    </div>
+    <div class="fm-listwrap">
+      <div class="fm-list" :class="{loading}" @contextmenu.self="onContext($event, null)">
+        <div class="fm-msg" v-if="!list && error">
+          <ui-icon name="alert" class="lg st-crit"></ui-icon><p>{{ error }}</p><button @click="refresh"><ui-icon name="refresh"></ui-icon>重试</button>
+        </div>
+        <div class="fm-msg tertiary" v-else-if="!list">正在连接服务器……</div>
+        <template v-else>
+        <table class="fm-table" @contextmenu.self="onContext($event, null)">
+          <thead><tr>
+            <th class="ck"><input type="checkbox" :checked="allOn" :indeterminate="sel.length > 0 && !allOn" @change="toggleAll" aria-label="全选"></th>
+            <th :aria-sort="ariaSort('name')"><button class="th-sort" :class="{on: sort.key === 'name', desc: sort.key === 'name' && sort.desc}" @click="sortBy('name')">名称<ui-icon name="arrow-up"></ui-icon></button></th>
+            <th class="num" :aria-sort="ariaSort('size')"><button class="th-sort" :class="{on: sort.key === 'size', desc: sort.key === 'size' && sort.desc}" @click="sortBy('size')">大小<ui-icon name="arrow-up"></ui-icon></button></th>
+            <th class="hide-sm" :aria-sort="ariaSort('modTime')"><button class="th-sort" :class="{on: sort.key === 'modTime', desc: sort.key === 'modTime' && sort.desc}" @click="sortBy('modTime')">修改时间<ui-icon name="arrow-up"></ui-icon></button></th>
+            <th class="hide-sm">权限</th>
+            <th class="hide-sm">所有者</th>
+          </tr></thead>
+          <tbody>
+            <tr v-for="e in visible" :key="e.path" :class="{on: selSet.has(e.path), cut: isCut(e)}" :aria-selected="selSet.has(e.path)"
+              @click="clickRow(e, $event)" @dblclick="openEntry(e)" @contextmenu="onContext($event, e)">
+              <td class="ck" @click.stop @dblclick.stop><input type="checkbox" :checked="selSet.has(e.path)" @change="toggle(e)" :aria-label="'选择 ' + e.name"></td>
+              <td class="name"><div class="fm-name"><ui-icon :name="iconOf(e)" :class="{dir: e.dir}"></ui-icon><span class="fname" :title="e.name">{{ e.name }}</span><span class="lnk" v-if="e.link" :title="e.link">→ {{ e.link }}</span></div></td>
+              <td class="num">{{ e.dir ? '' : fmtBytes(e.size) }}</td>
+              <td class="hide-sm">{{ fileTime(e.modTime) }}</td>
+              <td class="hide-sm mono" :title="e.mode">{{ e.perm }}</td>
+              <td class="hide-sm">{{ ownerText(e) }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="fm-more" v-if="shown.length > visible.length"><button @click="limit = shown.length">还有 {{ shown.length - visible.length }} 项，全部显示</button></div>
+        <div class="fm-msg tertiary" v-if="!shown.length" @contextmenu="onContext($event, null)">
+          <template v-if="q">没有名字里带「{{ q }}」的文件</template>
+          <template v-else>这个文件夹是空的<br><span class="small">可以把电脑上的文件拖到这里上传</span></template>
+        </div>
+        </template>
+      </div>
+      <div class="fm-drop" v-if="dragging && list"><ui-icon name="upload" class="lg"></ui-icon>松开鼠标，上传到 {{ list.path }}</div>
+    </div>
+    <div class="fm-foot small tertiary">
+      <span v-if="list">{{ list.entries.length }} 项<template v-if="selected.length"> · 已选 {{ selected.length }} 项{{ selSize }}</template></span>
+      <span v-if="clip.paths.length" class="fm-clip">· 剪贴板：{{ clipText }}<button class="link" @click="clearClip">清空</button></span>
+      <span class="grow"></span>
+      <span v-if="list">以 {{ list.user }} 身份登录 · 改动会记在「日志」里</span>
+    </div>
+
+    <div class="fm-uploads" v-if="uploads.length" role="status">
+      <div class="fm-up-head"><b>上传</b><span class="small tertiary">{{ upLeft ? '还剩 ' + upLeft + ' 个' : '已完成' }}</span><span class="grow"></span>
+        <button class="plain" v-if="uploads.length > upLeft" @click="clearUploads">清除已完成</button></div>
+      <div class="fm-up" v-for="u in uploads" :key="u.key">
+        <div class="line"><ui-icon :name="u.state === 'done' ? 'check' : u.state === 'error' ? 'alert' : 'file'" :class="{'st-ok': u.state === 'done', 'st-crit': u.state === 'error'}"></ui-icon>
+          <span class="grow ellipsis" :title="u.dir + '/' + u.name">{{ u.name }}</span>
+          <button class="plain icon-only" v-if="u.state === 'wait' || u.state === 'up'" title="取消" aria-label="取消上传" @click="cancelUpload(u)"><ui-icon name="close"></ui-icon></button></div>
+        <div class="bar" v-if="u.state === 'up' || u.state === 'wait'"><i :style="{width: upPct(u) + '%'}"></i></div>
+        <div class="small" :class="u.state === 'error' ? 'st-crit' : 'tertiary'">{{ upState(u) }}</div>
+      </div>
+    </div>
+    </template>
+
+    <div class="fm-menu" v-if="menu.open" ref="menuEl" :style="{left: menu.x + 'px', top: menu.y + 'px'}" role="menu" @click.stop @contextmenu.prevent>
+      <template v-if="menu.blank || !selected.length">
+        <button role="menuitem" @click="act(askNew, 'mkdir')"><ui-icon name="folder"></ui-icon>新建文件夹</button>
+        <button role="menuitem" @click="act(askNew, 'touch')"><ui-icon name="file"></ui-icon>新建文件</button>
+        <button role="menuitem" @click="act(() => fileInput.click())"><ui-icon name="upload"></ui-icon>上传文件</button>
+        <button role="menuitem" v-if="clip.paths.length" @click="act(paste)"><ui-icon name="paste"></ui-icon>粘贴 {{ clip.paths.length }} 项</button>
+        <hr>
+        <button role="menuitem" @click="act(refresh)"><ui-icon name="refresh"></ui-icon>刷新</button>
+        <button role="menuitem" @click="act(copyPath, list.path)"><ui-icon name="copy"></ui-icon>复制当前路径</button>
+      </template>
+      <template v-else>
+        <button role="menuitem" v-if="one" @click="act(openEntry, one)"><ui-icon :name="one.dir ? 'folder' : isArchive(one) ? 'archive' : 'pencil'"></ui-icon>{{ one.dir ? '打开' : isArchive(one) ? '解压' : '编辑' }}</button>
+        <button role="menuitem" v-if="one" @click="act(download, one)"><ui-icon name="download"></ui-icon>下载</button>
+        <hr v-if="one">
+        <button role="menuitem" @click="act(toClip, 'copy')"><ui-icon name="copy"></ui-icon>复制</button>
+        <button role="menuitem" @click="act(toClip, 'move')"><ui-icon name="cut"></ui-icon>剪切</button>
+        <button role="menuitem" v-if="clip.paths.length" @click="act(paste)"><ui-icon name="paste"></ui-icon>粘贴到这里</button>
+        <hr>
+        <button role="menuitem" v-if="one" @click="act(askRename)"><ui-icon name="pencil"></ui-icon>重命名</button>
+        <button role="menuitem" @click="act(askCompress)"><ui-icon name="archive"></ui-icon>压缩</button>
+        <button role="menuitem" @click="act(askPerm)"><ui-icon name="lock"></ui-icon>权限和所有者</button>
+        <button role="menuitem" v-if="one" @click="act(copyPath, one.path)"><ui-icon name="copy"></ui-icon>复制路径</button>
+        <hr>
+        <button role="menuitem" class="destructive" @click="act(remove)"><ui-icon name="trash"></ui-icon>删除</button>
+      </template>
+    </div>
+
+    <div class="sheet-mask" v-if="dlg.kind" @click.self="dlgClose">
+      <div class="sheet fm-dlg" role="dialog" :aria-label="DLG[dlg.kind].title">
+        <h2>{{ DLG[dlg.kind].title }}</h2>
+        <template v-if="dlg.kind === 'mkdir' || dlg.kind === 'touch' || dlg.kind === 'rename'">
+          <p>{{ dlg.kind === 'rename' ? '位置：' : '新建在 ' }}{{ list.path }}</p>
+          <div class="group"><div class="row form"><span class="k">名称</span><span class="v">
+            <input ref="dlgInput" v-model="dlg.name" @keydown.enter="!$event.isComposing && dlgSubmit()" aria-label="名称" spellcheck="false" autocomplete="off" autocapitalize="off"></span></div></div>
+        </template>
+        <template v-else-if="dlg.kind === 'compress'">
+          <p>{{ dlg.text }}</p>
+          <div class="group">
+            <div class="row form"><span class="k">压缩包名称</span><span class="v"><input ref="dlgInput" v-model="dlg.name" @keydown.enter="!$event.isComposing && dlgSubmit()" aria-label="压缩包名称" spellcheck="false" autocomplete="off"></span></div>
+            <div class="row form"><span class="k">格式</span><span class="v"><span class="segmented">
+              <button :class="{on: dlg.format === 'tar.gz'}" @click="dlg.format = 'tar.gz'">tar.gz</button>
+              <button :class="{on: dlg.format === 'zip'}" @click="dlg.format = 'zip'">zip</button></span></span></div>
+          </div>
+          <div class="hint">会生成 {{ list.path === '/' ? '' : list.path }}/{{ archiveName(dlg.name.trim() || '…', dlg.format) }}。tar.gz 在 Linux 上最通用；zip 在 Windows 上双击就能打开，服务器上要装有 zip 命令。</div>
+        </template>
+        <template v-else-if="dlg.kind === 'extract'">
+          <p>{{ dlg.text }}</p>
+          <div class="group">
+            <div class="row form"><span class="k">解压到</span><span class="v"><span class="segmented">
+              <button :class="{on: dlg.dest === dlg.here}" @click="dlg.dest = dlg.here">当前文件夹</button>
+              <button :class="{on: dlg.dest === dlg.sub}" @click="dlg.dest = dlg.sub">新文件夹「{{ baseName(dlg.sub) }}」</button></span></span></div>
+            <div class="row form"><span class="k">位置</span><span class="v"><input ref="dlgInput" v-model="dlg.dest" @keydown.enter="!$event.isComposing && dlgSubmit()" aria-label="解压到" spellcheck="false" autocomplete="off"></span></div>
+          </div>
+          <div class="hint">里面的文件和这个位置已有的同名文件会被覆盖。</div>
+        </template>
+        <template v-else-if="dlg.kind === 'perm'">
+          <p>{{ dlg.text }}</p>
+          <div class="group">
+            <div class="row"><label class="fm-check"><input type="checkbox" v-model="dlg.doPerm">修改权限</label><span class="grow"></span>
+              <input class="fm-perm-input mono" v-model="dlg.perm" @input="dlg.doPerm = true" maxlength="4" inputmode="numeric" placeholder="755" aria-label="权限数字"></div>
+            <div class="row"><div class="perm-grid" :class="{off: !dlg.doPerm}">
+              <span></span><span v-for="b in PERM_BITS" :key="b.bit" class="small tertiary">{{ b.text }}</span>
+              <template v-for="w in PERM_WHO" :key="w.shift"><span>{{ w.text }}</span>
+                <input v-for="b in PERM_BITS" :key="b.bit" type="checkbox" :checked="permOn(w.shift, b.bit)" @change="flipPerm(w.shift, b.bit)" :aria-label="w.text + b.text"></template>
+            </div></div>
+            <div class="row"><label class="fm-check"><input type="checkbox" v-model="dlg.doOwner">修改所有者</label><span class="grow"></span>
+              <input class="fm-owner-input" v-model="dlg.owner" @input="dlg.doOwner = true" placeholder="www:www" aria-label="所有者" spellcheck="false" autocomplete="off"></div>
+            <div class="row" v-if="dlg.hasDir"><label class="fm-check"><input type="checkbox" v-model="dlg.recursive">包括文件夹里的所有文件和子文件夹</label></div>
+          </div>
+          <div class="hint">网站文件一般是 644、文件夹 755，配置里有密码的文件用 600。所有者写成「用户:用户组」，要和运行网站的用户一致（宝塔一般是 www，1Panel 一般是 1000）。</div>
+        </template>
+        <template v-else-if="dlg.kind === 'paste'">
+          <p>{{ dlg.text }}。</p>
+          <div class="hint">「覆盖」会先删掉目标位置的同名文件或文件夹；「都保留」会给新的一份改名，比如 index (2).html。</div>
+        </template>
+        <template v-else-if="dlg.kind === 'upload'">
+          <p>{{ list.path }} 里已经有 {{ dlg.text }}。</p>
+        </template>
+        <div class="fm-dlg-err st-crit small" v-if="dlg.error" role="alert">{{ dlg.error }}</div>
+        <div class="sheet-actions">
+          <button @click="dlgClose" :disabled="dlg.busy">取消</button>
+          <template v-if="dlg.kind === 'paste'">
+            <button @click="paste('skip')" :disabled="dlg.busy">跳过同名的</button>
+            <button @click="paste('rename')" :disabled="dlg.busy">都保留</button>
+            <button class="primary danger" @click="paste('overwrite')" :disabled="dlg.busy">覆盖</button>
+          </template>
+          <template v-else-if="dlg.kind === 'upload'">
+            <button @click="uploadChoice('skip')" v-if="dlg.files.length > dlg.clash.length">跳过同名的</button>
+            <button class="primary danger" @click="uploadChoice('overwrite')">覆盖</button>
+          </template>
+          <button v-else class="primary" @click="dlgSubmit" :disabled="dlg.busy">{{ dlg.busy ? '正在处理……' : DLG[dlg.kind].ok }}</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="sheet-mask fm-ed-mask" v-if="ed.open">
+      <div class="fm-editor" role="dialog" :aria-label="'编辑 ' + ed.name">
+        <div class="fm-ed-head">
+          <ui-icon name="file" class="lg"></ui-icon>
+          <div class="grow"><div class="fm-ed-title"><b>{{ ed.name }}</b><span class="tag dirty" v-if="dirty">未保存</span></div><div class="small tertiary ellipsis" :title="ed.path">{{ ed.path }}</div></div>
+          <label class="fm-check small" v-if="!ed.binary && !ed.error"><input type="checkbox" v-model="ed.wrap">自动换行</label>
+          <button class="plain" @click="download({ path: ed.path, name: ed.name, dir: false })" :disabled="ed.loading"><ui-icon name="download"></ui-icon>下载</button>
+          <button class="primary" @click="save()" :disabled="!dirty || ed.saving" title="保存（Ctrl+S）">{{ ed.saving ? '正在保存……' : '保存' }}</button>
+          <button class="plain icon-only" @click="closeEditor" title="关闭（Esc）" aria-label="关闭"><ui-icon name="close"></ui-icon></button>
+        </div>
+        <div class="fm-ed-body">
+          <div class="fm-msg tertiary" v-if="ed.loading">正在打开……</div>
+          <div class="fm-msg" v-else-if="ed.error"><ui-icon name="alert" class="lg st-crit"></ui-icon><p>{{ ed.error }}</p></div>
+          <div class="fm-msg" v-else-if="ed.binary"><ui-icon name="info" class="lg"></ui-icon><p>这不是文本文件（可能是图片、压缩包或程序），不能在这里编辑，可以下载到电脑上打开。</p>
+            <button @click="download({ path: ed.path, name: ed.name, dir: false })"><ui-icon name="download"></ui-icon>下载到电脑</button></div>
+          <textarea v-else ref="edEl" v-model="ed.content" :wrap="ed.wrap ? 'soft' : 'off'" spellcheck="false" autocomplete="off" autocapitalize="off"
+            @keydown="onEdKey" @keyup="caret" @click="caret" aria-label="文件内容"></textarea>
+        </div>
+        <div class="fm-ed-foot small tertiary" v-if="!ed.loading && !ed.error && !ed.binary">
+          <span>第 {{ ed.line }} 行，第 {{ ed.col }} 列</span><span>{{ fmtBytes(ed.size) }}</span><span>UTF-8 · {{ ed.crlf ? 'CRLF（Windows 换行）' : 'LF' }}</span>
+          <span class="grow"></span><span>Ctrl+S 保存 · Esc 关闭</span>
+        </div>
+      </div>
+    </div>
+  </div>`,
+};
+
 const app = createApp({
   setup() {
     const tab = ref('servers');
@@ -2232,6 +3009,8 @@ const app = createApp({
     const seen = reactive({}); // pages opened at least once stay mounted
     const termRequest = ref(null);
     function openTerminal(serverId) { termRequest.value = { serverId, at: Date.now() }; go('terminal'); }
+    const filesRequest = ref(null);
+    function openFiles(serverId, path) { filesRequest.value = { serverId, path, at: Date.now() }; go('files'); }
     // 网站统计 shows the access logs or EdgeOne; remembered per viewer.
     const statsView = ref((() => { try { return localStorage.getItem('miao.statsView') || 'logs'; } catch { return 'logs'; } })());
     const statsSeen = reactive({ [statsView.value]: true });
@@ -2587,7 +3366,7 @@ const app = createApp({
       spendText, plans, audit, logView, logFocus, loadAudit, openLog, showAdd, addForm, messages, draft, chatBusy, msgBox, suggestions,
       select, openAdd, addServer, testConn, discover, removeServer, askAbout, send, onEnter, newChat, applyPreset, saveAI, testAI,
       convs, showConvs, conversationId, openConv, deleteConv, relTime,
-      op, saveOnePanel, testOnePanel, tc, saveTencent, testTencent, clearTencent, freeCmd, setFree, seen, statsView, statsSeen, termRequest, openTerminal, unread,
+      op, saveOnePanel, testOnePanel, tc, saveTencent, testTencent, clearTencent, freeCmd, setFree, seen, statsView, statsSeen, termRequest, openTerminal, filesRequest, openFiles, unread,
       cloud, cloudList, cloudPick, pickCloud, askAI, daysTo, fmtBytes,
       memPct, rootDisk, envSub, dockerText, money, mb, meterClass, levelClass, levelIcon, levelName, riskName, adapterName,
       fmtTime, serverName, parseSteps, toolName, toolDetail, actorName, actionName, md, live, liveStatus, thinkTail, stopAnswer,
@@ -2604,6 +3383,7 @@ app.component('visit-stats', VisitStats);
 app.component('rank-list', RankList);
 app.component('terminal-page', TerminalPage);
 app.component('cert-page', CertPage);
+app.component('file-page', FilePage);
 app.component('ui-icon', {
   props: { name: { type: String, required: true } },
   setup(props) { return { d: computed(() => ICONS[props.name] || '') }; },

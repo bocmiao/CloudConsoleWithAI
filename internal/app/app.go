@@ -52,6 +52,7 @@ type App struct {
 	visits    snapshots[VisitsView]
 	ipf       ipFacts
 	terms     terminals
+	fpool     filePool
 	eoReports eoReportCache
 }
 
@@ -63,7 +64,12 @@ func New(st *store.Store, sec secrets.Store) *App {
 }
 
 // UserError is an error whose message is meant for the user as-is.
-type UserError struct{ Msg string }
+type UserError struct {
+	Msg string
+	// Code lets the page react to some errors, e.g. "conflict" when a
+	// file changed or a name is taken, so it can offer to overwrite.
+	Code string `json:"code,omitempty"`
+}
 
 func (e *UserError) Error() string { return e.Msg }
 

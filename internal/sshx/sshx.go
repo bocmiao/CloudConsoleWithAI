@@ -7,12 +7,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -125,6 +127,38 @@ func authMethods(t Target) ([]ssh.AuthMethod, error) {
 
 // Close closes the connection.
 func (c *Client) Close() error { return c.conn.Close() }
+
+// SFTP opens a file transfer session on the connection.
+func (c *Client) SFTP() (*sftp.Client, error) { return sftp.NewClient(c.conn) }
+
+// Stream runs cmd and copies its standard output to w as it comes, e.g. a
+// directory packed with tar. Standard error is kept for the message when
+// the command fails.
+func (c *Client) Stream(ctx context.Context, cmd string, w io.Writer) error {
+	sess, err := c.conn.NewSession()
+	if err != nil {
+		return err
+	}
+	defer sess.Close()
+	stderr := &limitedBuffer{max: 4096}
+	sess.Stdout, sess.Stderr = w, stderr
+	if err := sess.Start(cmd); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- sess.Wait() }()
+	select {
+	case <-ctx.Done():
+		_ = sess.Signal(ssh.SIGKILL)
+		_ = sess.Close()
+		return ctx.Err()
+	case err = <-done:
+	}
+	if err != nil && stderr.buf.Len() > 0 {
+		return fmt.Errorf("%v: %s", err, strings.TrimSpace(stderr.buf.String()))
+	}
+	return err
+}
 
 // Dial opens a TCP connection from the server's side, e.g. to a panel that
 // only listens on the server's loopback.

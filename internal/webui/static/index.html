@@ -21,6 +21,7 @@
       <div class="side-item" :class="{active: tab === 'stats'}" @click="go('stats')"><ui-icon name="chart"></ui-icon>网站统计</div>
       <div class="side-item" :class="{active: tab === 'certs'}" @click="go('certs')"><ui-icon name="lock"></ui-icon>证书</div>
       <div class="side-item" :class="{active: tab === 'terminal'}" @click="go('terminal')"><ui-icon name="prompt"></ui-icon>终端</div>
+      <div class="side-item" :class="{active: tab === 'files'}" @click="go('files')"><ui-icon name="folder"></ui-icon>文件</div>
       <div class="side-item" :class="{active: tab === 'plans'}" @click="go('plans')"><ui-icon name="bulb"></ui-icon>建议</div>
       <div class="side-item" :class="{active: tab === 'logs'}" @click="go('logs')"><ui-icon name="terminal"></ui-icon>日志</div>
       <div class="side-item" :class="{active: tab === 'notices'}" @click="go('notices')"><ui-icon name="bell"></ui-icon>通知<span class="badge crit side-badge" v-if="unread">{{ unread > 99 ? '99+' : unread }}</span></div>
@@ -54,6 +55,7 @@
         <div class="actions" v-if="current">
           <button @click="testConn" :disabled="busy"><ui-icon name="plug"></ui-icon>测试连接</button>
           <button @click="openTerminal(current.server.id)"><ui-icon name="prompt"></ui-icon>终端</button>
+          <button @click="openFiles(current.server.id)" v-if="current.server.authKind !== 'tat'"><ui-icon name="folder"></ui-icon>文件</button>
           <button @click="askAbout" :disabled="!current.profile"><ui-icon name="bubble"></ui-icon>问 AI</button>
           <button class="primary" @click="discover" :disabled="busy"><ui-icon name="refresh"></ui-icon>{{ current.profile ? '重新识别' : '识别环境' }}</button>
           <button class="plain destructive icon-only" title="删除服务器" aria-label="删除服务器" @click="removeServer" :disabled="busy"><ui-icon name="trash"></ui-icon></button>
@@ -336,6 +338,12 @@
     <div class="tab-pane" v-if="seen.terminal" v-show="tab === 'terminal'">
       <header class="toolbar"><h1>终端</h1></header>
       <terminal-page :servers="servers" :active="tab === 'terminal'" :request="termRequest"></terminal-page>
+    </div>
+
+    <!-- Files: kept alive once opened, so uploads and the open folder survive page switches. -->
+    <div class="tab-pane" v-if="seen.files" v-show="tab === 'files'">
+      <header class="toolbar"><h1>文件</h1></header>
+      <file-page :servers="servers" :active="tab === 'files'" :request="filesRequest"></file-page>
     </div>
 
     <!-- Plans -->
