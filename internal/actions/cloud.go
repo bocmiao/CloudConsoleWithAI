@@ -99,6 +99,8 @@ func applyCloud(ctx context.Context, env *Env, r Resolved, progress Progress) Ou
 			return applyRateLimitRemove(ctx, env, r.Values, out, report)
 		case "eo_cc":
 			return applyCC(ctx, env, r.Values, out, report)
+		case "eo_clientip":
+			return applyClientIP(ctx, env, r.Values, out, report)
 		}
 		out.Status = StatusFailed
 		out.logf("未知的云操作 %s", r.Impl.Cloud)
@@ -145,6 +147,8 @@ func undoCloud(ctx context.Context, env *Env, r Resolved, undo map[string]string
 			err = undoRateLimit(ctx, env.Cloud, undo)
 		case "eo_cc":
 			err = undoCC(ctx, env.Cloud, undo)
+		case "eo_clientip":
+			err = env.Cloud.SetClientIPHeader(ctx, undo["zone_id"], undo["switch"] == "on", undo["header"])
 		case "eo_https":
 			var ids []string
 			if undo["cert_ids"] != "" {

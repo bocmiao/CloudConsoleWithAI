@@ -94,6 +94,7 @@ func New(a *app.App, token string, port int, version string) *Server {
 	api("GET /api/visits", s.getVisits)
 	api("GET /api/visits/blocked", s.blockedIPs)
 	api("POST /api/visits/block", s.blockIPs)
+	api("POST /api/servers/{id}/realip", s.proposeRealIP)
 	api("POST /api/visits/unblock", s.unblockIPs)
 	api("POST /api/visits/judge", s.judgeIPs)
 	api("POST /api/servers/{id}/terminal", s.openTerminal)
@@ -410,6 +411,14 @@ func (s *Server) blockIPs(_ http.ResponseWriter, r *http.Request) (any, error) {
 		return nil, err
 	}
 	return s.app.ProposeBlock(r.Context(), req.Source, req.IPs)
+}
+
+func (s *Server) proposeRealIP(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	return s.app.ProposeRealIP(r.Context(), id)
 }
 
 func (s *Server) unblockIPs(_ http.ResponseWriter, r *http.Request) (any, error) {

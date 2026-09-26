@@ -77,8 +77,10 @@ type SiteInfo struct {
 	Unparsed  int64  `json:"unparsed"`
 	Files     []File `json:"files,omitempty"`
 	// Warning says why the numbers may be off, e.g. visitor IPs that are
-	// really EdgeOne's nodes.
+	// really EdgeOne's nodes; Fix names what Miao Panel can do about it
+	// ("realip": have the server record the visitors' real IPs).
 	Warning string `json:"warning,omitempty"`
+	Fix     string `json:"fix,omitempty"`
 }
 
 // SiteRange is a site over one range.

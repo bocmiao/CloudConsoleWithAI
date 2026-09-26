@@ -63,6 +63,35 @@ func (f *Fake) serveEO(w http.ResponseWriter, service, action string, in map[str
 			info = append(info, map[string]any{"IP": ip, "IsEdgeOneIP": yes})
 		}
 		ok(w, map[string]any{"IPRegionInfo": info})
+	case "teo DescribeL7AccSetting":
+		z := zone(str("ZoneId"))
+		if z == nil {
+			fail(w, "ResourceNotFound", "no such zone")
+			return true
+		}
+		h := f.ClientIPHeaders[z.ZoneID]
+		if h == nil {
+			h = map[string]any{"Switch": "off"}
+		}
+		ok(w, map[string]any{"ZoneSetting": map[string]any{"ZoneName": z.ZoneName, "ZoneConfig": map[string]any{"ClientIPHeader": h}}})
+	case "teo ModifyL7AccSetting":
+		z := zone(str("ZoneId"))
+		zc, _ := in["ZoneConfig"].(map[string]any)
+		h, _ := zc["ClientIPHeader"].(map[string]any)
+		switch {
+		case z == nil:
+			fail(w, "ResourceNotFound", "no such zone")
+		case h == nil:
+			fail(w, "InvalidParameter", "fake only changes ClientIPHeader")
+		case h["Switch"] == "on" && (h["HeaderName"] == nil || h["HeaderName"] == "" || strings.EqualFold(fmt.Sprint(h["HeaderName"]), "X-Forwarded-For")):
+			fail(w, "InvalidParameter.ClientIPHeaderName", "bad header name")
+		default:
+			if f.ClientIPHeaders == nil {
+				f.ClientIPHeaders = map[string]map[string]any{}
+			}
+			f.ClientIPHeaders[z.ZoneID] = h
+			ok(w, map[string]any{})
+		}
 	case "teo DescribeSecurityPolicy":
 		if str("Entity") != "ZoneDefaultPolicy" {
 			fail(w, "InvalidParameter", "fake only has site policies")

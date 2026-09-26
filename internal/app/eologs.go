@@ -129,7 +129,7 @@ func (a *App) gatherEdgeOneVisits(ctx context.Context) (VisitsView, error) {
 	if len(pkgs) == 0 {
 		rep.Problem = "EdgeOne 还没有离线日志：新接入的站点要等访问产生后一小时左右才有；也可能这个账号没有 EdgeOne 站点，或者密钥没有 EdgeOne 的读取权限"
 	}
-	a.enrichVisits(ctx, &rep)
+	a.enrichVisits(ctx, &rep, 0)
 	return VisitsView{Report: rep, Source: "edgeone", Title: "EdgeOne 日志", CheckedAt: now.UTC().Format(time.RFC3339)}, nil
 }
 

@@ -213,6 +213,36 @@ func (c *Client) EdgeOneIPs(ctx context.Context, ips []string) (map[string]bool,
 	return res, nil
 }
 
+// ClientIPHeader reads a site's setting that makes EdgeOne pass the
+// visitor's IP to the origin in a request header, and that header's name.
+func (c *Client) ClientIPHeader(ctx context.Context, zoneID string) (on bool, name string, err error) {
+	var out struct {
+		ZoneSetting struct {
+			ZoneConfig struct {
+				ClientIPHeader struct {
+					Switch     string `json:"Switch"`
+					HeaderName string `json:"HeaderName"`
+				} `json:"ClientIPHeader"`
+			} `json:"ZoneConfig"`
+		} `json:"ZoneSetting"`
+	}
+	if err := c.Call(ctx, "teo", teoVersion, "DescribeL7AccSetting", map[string]any{"ZoneId": zoneID}, &out); err != nil {
+		return false, "", err
+	}
+	h := out.ZoneSetting.ZoneConfig.ClientIPHeader
+	return h.Switch == "on", h.HeaderName, nil
+}
+
+// SetClientIPHeader turns that setting on with a header name, or off. It
+// applies to every domain of the site; other settings stay as they are.
+func (c *Client) SetClientIPHeader(ctx context.Context, zoneID string, on bool, name string) error {
+	h := map[string]any{"Switch": "off"}
+	if on {
+		h = map[string]any{"Switch": "on", "HeaderName": name}
+	}
+	return c.Call(ctx, "teo", teoVersion, "ModifyL7AccSetting", map[string]any{"ZoneId": zoneID, "ZoneConfig": map[string]any{"ClientIPHeader": h}}, nil)
+}
+
 // L7Log is one EdgeOne offline log package: an hour of a domain's access
 // log, gzipped JSON lines.
 type L7Log struct {

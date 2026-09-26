@@ -133,13 +133,13 @@ func (a *App) gatherServerVisits(ctx context.Context, id int64) (VisitsView, err
 		summary = fmt.Sprintf("%d 个网站，30 天 PV %d，UV %d，IP %d，请求 %d", len(rep.SiteNames()), t.PV, t.UV, t.IP, t.Requests)
 	}
 	a.finishExec(&ex, actions.StatusDone, summary)
-	a.enrichVisits(ctx, &rep)
+	a.enrichVisits(ctx, &rep, sv.ID)
 	return VisitsView{Report: rep, Source: fmt.Sprintf("server:%d", sv.ID), Title: "服务器 " + sv.Name + " 的日志", ServerID: sv.ID, CheckedAt: now()}, nil
 }
 
 // enrichVisits adds places, what is known about the IPs, risk ratings and
 // warnings about the numbers.
-func (a *App) enrichVisits(ctx context.Context, rep *visits.Report) {
+func (a *App) enrichVisits(ctx context.Context, rep *visits.Report, serverID int64) {
 	rep.Locate()
 	facts := a.facts(ctx, rep)
 	rep.Assess(facts)
@@ -147,6 +147,7 @@ func (a *App) enrichVisits(ctx context.Context, rep *visits.Report) {
 	if month == nil || rep.Source != "server" {
 		return
 	}
+	since := a.realIPSince(serverID)
 	for i := range rep.Sites {
 		s := &rep.Sites[i]
 		sr := month.Sites[s.Name]
@@ -161,8 +162,11 @@ func (a *App) enrichVisits(ctx context.Context, rep *visits.Report) {
 			}
 		}
 		switch {
+		case total > 0 && viaEdge*2 >= total && since != "":
+			s.Warning = "已经让服务器记录真实访客 IP（" + sinceText(since) + " 起）。在这之前的日志里还是 EdgeOne 节点的地址，所以最近一段时间的 UV、IP 和地区还不准，会随着新日志慢慢变准"
 		case total > 0 && viaEdge*2 >= total:
-			s.Warning = "访客 IP 大多是 EdgeOne 的节点：服务器日志没有记下真实访客 IP，这个网站的 UV、IP、地区和风险 IP 都不准。请看「EdgeOne 日志」，或者让服务器日志记下真实 IP"
+			s.Warning = "访客 IP 大多是 EdgeOne 的节点：服务器日志没有记下真实访客 IP，这个网站的 UV、IP、地区和风险 IP 都不准。请看「EdgeOne 日志」，或者让服务器记录真实访客 IP"
+			s.Fix = "realip"
 		case s.Lines > 0 && s.Forwarded == 0:
 			s.Warning = "日志里没有 X-Forwarded-For：如果网站经过 CDN 或反向代理，这里的访客 IP 可能是代理的地址"
 		}

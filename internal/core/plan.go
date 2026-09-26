@@ -96,6 +96,8 @@ var capabilityRisk = map[string]Risk{
 	"eo.ratelimit.set":      R2,
 	"eo.ratelimit.remove":   R2,
 	"eo.cc.set":             R2,
+	"eo.clientip.header":    R1,
+	"nginx.realip":          R2,
 	"site.create":           R2,
 	"cert.issue":            R2,
 	"cert.renew":            R1,

@@ -76,6 +76,7 @@ func (a *App) proposePlan(ctx context.Context, actor string, serverID int64, tit
 			a.vetFree(ctx, sv, steps, i)
 		}
 	}
+	a.fillRealIP(steps)
 	steps = prepareSteps(steps, sv.Adapter)
 	data, err := json.Marshal(steps)
 	if err != nil {

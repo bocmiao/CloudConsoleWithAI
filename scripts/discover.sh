@@ -101,7 +101,7 @@ s_panel() {
     [ -f "$f" ] && echo "$f"; done | sed -E "s#^$OP_DIR/apps/##; s#/docker-compose.yml\$##" | cap 30 | tr '\n' ' ')"
   # 网站：v2 为 $OP_DIR/www/conf.d，v1 在 OpenResty 应用目录下
   echo "1panel_websites: $(ls "$OP_DIR"/www/conf.d "$OP_DIR"/apps/openresty/*/conf/conf.d 2>/dev/null \
-    | grep '\.conf$' | sed 's/\.conf$//' | sort -u | cap 30 | tr '\n' ' ')"
+    | grep '\.conf$' | sed 's/\.conf$//' | grep -v '^00-miaopanel-realip$' | sort -u | cap 30 | tr '\n' ' ')"
   echo "1panel_php_runtimes: $(ls "$OP_DIR"/runtime/php 2>/dev/null | tr '\n' ' ')"
 }
 

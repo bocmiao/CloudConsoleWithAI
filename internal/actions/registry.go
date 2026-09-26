@@ -325,6 +325,22 @@ func init() {
 			Undo: "恢复原来的 CC 防护设置"}},
 	})
 	register(&Capability{
+		Name: "eo.clientip.header", Title: "EdgeOne 回源带上访客 IP", Risk: core.R1, Reversible: true,
+		Params: []Param{
+			{Name: "domain", Kind: "host", Required: true, Desc: "EdgeOne 站点的域名，例如 example.com；对站点下所有加速域名生效"},
+			{Name: "header", Kind: "name", Hidden: true},
+		},
+		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "eo_clientip", Downtime: "不影响访问；回源请求多带一个请求头，几分钟内生效",
+			Undo: "把「回源携带客户端 IP 头部」恢复成修改前的设置"}},
+	})
+	register(&Capability{
+		Name: "nginx.realip", Title: "Nginx 记录真实访客 IP", Risk: core.R2, Reversible: true,
+		Params: []Param{{Name: "header", Kind: "name", Hidden: true}},
+		Impls: map[string]Impl{"*": {Via: "系统脚本", Script: "nginx_realip.sh", Args: []string{"header"},
+			Downtime: "Nginx 平滑重新加载，不中断访问",
+			Undo:     "删除新加的配置文件并重新加载 Nginx，访客地址恢复成原来的样子"}},
+	})
+	register(&Capability{
 		Name: "free_command", Title: "AI 自由命令", Risk: core.R2, Reversible: true,
 		Params: []Param{
 			{Name: "goal", Kind: "text", Required: true, Desc: "用大白话说这一步要做什么、为什么，例如「给 Nginx 开启 gzip 压缩，减少网页传输大小」"},

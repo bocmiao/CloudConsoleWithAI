@@ -788,7 +788,24 @@ const VisitStats = {
       catch (e) { notify(e.message, 'error'); }
       finally { planning.value = false; }
     }
-    function planDone() { loadBlocked(); picked.value = new Set(); }
+    function planDone(p) {
+      loadBlocked(); picked.value = new Set();
+      // Once the server records real IPs, the warning about EdgeOne's nodes changes.
+      if (p && (p.stepList || []).some(s => s.capability === 'nginx.realip')) load(true);
+    }
+    // realIP proposes the checklist that makes the server log real visitor IPs.
+    async function realIP() {
+      const id = (data.value || {}).serverId;
+      if (!id) return;
+      planning.value = true;
+      try { plan.value = await api('POST', `/api/servers/${id}/realip`); }
+      catch (e) { notify(e.message, 'error'); }
+      finally { planning.value = false; }
+    }
+    const planServerName = computed(() => {
+      const id = plan.value && plan.value.serverId;
+      return id ? (props.servers.find(s => s.id === id) || { name: `服务器 ${id}` }).name : '腾讯云';
+    });
     function openIP(ip) {
       const p = ((range.value && range.value.ips) || []).find(x => x.ip === ip);
       if (p) drawer.value = p;
@@ -802,7 +819,7 @@ const VisitStats = {
       if (!d) return out;
       if (d.problem) out.push({ level: 'info', text: d.problem });
       for (const s of d.sites || []) {
-        if (s.warning && (site.value === '*' || s.name === site.value)) out.push({ level: 'warn', text: (site.value === '*' ? s.name + '：' : '') + s.warning });
+        if (s.warning && (site.value === '*' || s.name === site.value)) out.push({ level: 'warn', text: (site.value === '*' ? s.name + '：' : '') + s.warning, fix: s.fix });
       }
       for (const l of top('leak')) out.push({ level: 'crit', text: `敏感文件被成功下载：${l.value.replace(/^200 /, '')}（${l.count} 次）。里面的密钥或代码可能已经泄露，请删除或禁止访问这个文件，并更换其中的密码和密钥。`, ask: `我的网站 ${l.value.replace(/^200 /, '')} 返回了 200，可能泄露了敏感信息，帮我看看怎么处理` });
       const c = counts.value;
@@ -877,7 +894,7 @@ const VisitStats = {
     }
     return { sources, source, days, site, section, series, data, loading, error, load, siteNames, range, cur, total, top, siteInfo, siteRows,
       ips, risky, ipRows, counts, judgement, verdictOf, blockable, blockedSet, picked, togglePick, pickSuggested, judge, judging, showAll,
-      block, unblock, plan, planning, planDone, blocked, drawer, openIP, alerts, trend, dayRows, hourRows, delta, yesterday, pct, SERIES, sourceTitle,
+      block, unblock, plan, planning, planDone, realIP, planServerName, blocked, drawer, openIP, alerts, trend, dayRows, hourRows, delta, yesterday, pct, SERIES, sourceTitle,
       askAI, askIP, shortUA, deadLinks, askDead, auto, autoEdit, autoBusy, autoForm, editAuto, saveAuto, turnOffAuto, runAuto, autoRule, autoUntil, untilText, VISIT_RANGES, VISIT_SECTIONS, RISK, VERDICT, fmtCount, fmtBytes, whenText };
   },
   template: `
@@ -919,6 +936,7 @@ const VisitStats = {
               <span class="grow">{{ a.text }}</span>
               <button class="link small" v-if="a.go" @click="section = a.go">查看</button>
               <button class="link small" v-if="a.ask" @click="$emit('ask', a.ask)">让 AI 处理</button>
+              <button class="link small" v-if="a.fix === 'realip'" @click="realIP" :disabled="planning">让服务器记录真实 IP</button>
             </div>
           </div>
           <div class="kpi-group">
@@ -1036,7 +1054,8 @@ const VisitStats = {
             <label class="check small"><input type="checkbox" v-model="showAll"> 显示全部记录的 IP（{{ ips.length }}）</label>
           </div>
           <div class="alerts" v-if="alerts.some(a => a.level === 'warn' && source !== 'edgeone')">
-            <div class="alert al-warn" v-for="(a, i) in alerts.filter(a => a.level === 'warn' && !a.go)" :key="i"><ui-icon name="warn"></ui-icon><span class="grow">{{ a.text }}</span></div>
+            <div class="alert al-warn" v-for="(a, i) in alerts.filter(a => a.level === 'warn' && !a.go)" :key="i"><ui-icon name="warn"></ui-icon><span class="grow">{{ a.text }}</span>
+              <button class="link small" v-if="a.fix === 'realip'" @click="realIP" :disabled="planning">让服务器记录真实 IP</button></div>
           </div>
           <div class="alert al-info judge-box" v-if="judgement">
             <ui-icon name="sparkles"></ui-icon>
@@ -1164,7 +1183,7 @@ const VisitStats = {
         <div class="sheet plan-sheet" role="dialog" aria-label="确认清单">
           <h2>{{ plan.title }}</h2>
           <p>勾选后点「执行」，确认后才会生效；执行后可以在这里或「建议」页撤销。</p>
-          <plan-card :plan="plan" server-name="腾讯云" @done="planDone"></plan-card>
+          <plan-card :plan="plan" :server-name="planServerName" @done="planDone"></plan-card>
           <div class="sheet-actions"><button @click="plan = null">关闭</button></div>
         </div>
       </div>

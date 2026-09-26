@@ -58,6 +58,8 @@ type Fake struct {
 	// EdgeOne: site-level security policies by zone, and plans.
 	Policies map[string]map[string]any
 	Plans    []tencent.Plan
+	// ClientIPHeaders are the sites' "client IP header" settings by zone.
+	ClientIPHeaders map[string]map[string]any
 	// EdgeOneNodes are the IPs DescribeIPRegion calls EdgeOne's own.
 	EdgeOneNodes map[string]bool
 	// L7Logs are offline log packages by zone: each a name and its JSON
