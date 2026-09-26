@@ -91,6 +91,16 @@ func (s *Server) routes() {
 	big("POST /api/servers/{id}/files/upload", 0, s.uploadFiles)
 	api("POST /api/servers/{id}/files/op", s.fileOp)
 	api("POST /api/servers/{id}/files/link", s.downloadLink)
+	api("GET /api/cos/buckets", s.cosBuckets)
+	api("GET /api/cos/bucket", s.cosBucket)
+	api("GET /api/cos/usage", s.cosUsage)
+	api("GET /api/cos/objects", s.cosObjects)
+	big("PUT /api/cos/object", 0, s.cosUpload)
+	api("POST /api/cos/folder", s.cosFolder)
+	api("POST /api/cos/delete", s.cosDelete)
+	api("POST /api/cos/rename", s.cosRename)
+	api("POST /api/cos/link", s.cosLink)
+	api("POST /api/cos/plan", s.cosPlan)
 	s.mux.HandleFunc("GET /dl/{token}", s.downloadFile)
 	api("GET /api/info", s.info)
 	api("GET /api/servers", s.listServers)
@@ -462,6 +472,88 @@ func (s *Server) proposeRealIP(_ http.ResponseWriter, r *http.Request) (any, err
 		return nil, err
 	}
 	return s.app.ProposeRealIP(r.Context(), id)
+}
+
+type cosTarget struct {
+	Bucket string   `json:"bucket"`
+	Region string   `json:"region"`
+	Key    string   `json:"key"`
+	Keys   []string `json:"keys"`
+	From   string   `json:"from"`
+	To     string   `json:"to"`
+	// Link: how long it works, in seconds; download makes the browser save it.
+	Expires  int  `json:"expires"`
+	Download bool `json:"download"`
+}
+
+func (s *Server) cosBuckets(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.COSBuckets(r.Context())
+}
+
+func (s *Server) cosBucket(_ http.ResponseWriter, r *http.Request) (any, error) {
+	q := r.URL.Query()
+	return s.app.COSBucketDetail(r.Context(), q.Get("bucket"), q.Get("region"))
+}
+
+func (s *Server) cosUsage(_ http.ResponseWriter, r *http.Request) (any, error) {
+	q := r.URL.Query()
+	return s.app.COSUsage(r.Context(), q.Get("bucket"), q.Get("region"))
+}
+
+func (s *Server) cosObjects(_ http.ResponseWriter, r *http.Request) (any, error) {
+	q := r.URL.Query()
+	return s.app.COSObjects(r.Context(), q.Get("bucket"), q.Get("region"), q.Get("prefix"), q.Get("marker"))
+}
+
+// cosUpload streams one file, the request body, into the bucket.
+func (s *Server) cosUpload(_ http.ResponseWriter, r *http.Request) (any, error) {
+	q := r.URL.Query()
+	if r.ContentLength < 0 {
+		return nil, &app.UserError{Msg: "上传要带文件大小"}
+	}
+	return s.app.COSUpload(r.Context(), q.Get("bucket"), q.Get("region"), q.Get("key"), r.Body, r.ContentLength,
+		r.Header.Get("Content-Type"), q.Get("overwrite") == "1")
+}
+
+func (s *Server) cosFolder(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req cosTarget
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return map[string]bool{"ok": true}, s.app.COSMkdir(r.Context(), req.Bucket, req.Region, req.Key)
+}
+
+func (s *Server) cosDelete(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req cosTarget
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	n, err := s.app.COSDelete(r.Context(), req.Bucket, req.Region, req.Keys)
+	return map[string]int{"deleted": n}, err
+}
+
+func (s *Server) cosRename(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req cosTarget
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return map[string]bool{"ok": true}, s.app.COSRename(r.Context(), req.Bucket, req.Region, req.From, req.To)
+}
+
+func (s *Server) cosLink(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req cosTarget
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.COSLink(req.Bucket, req.Region, req.Key, time.Duration(req.Expires)*time.Second, req.Download)
+}
+
+func (s *Server) cosPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req app.COSRequest
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.ProposeCOS(r.Context(), req)
 }
 
 func (s *Server) dnsDomains(_ http.ResponseWriter, r *http.Request) (any, error) {

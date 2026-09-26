@@ -147,7 +147,18 @@ func (f *Fake) serveMore(w http.ResponseWriter, service, action, region string, 
 			sn.State, sn.Percent = "NORMAL", 100 // finished by the next look
 		}
 		ok(w, map[string]any{"TotalCount": len(out), "SnapshotSet": out})
+	case "cam GetUserAppId":
+		ok(w, map[string]any{"AppId": 1250000000, "Uin": "100000000001", "OwnerUin": "100000000001"})
 	case "monitor DescribeBaseMetrics":
+		if str("Namespace") == "QCE/COS" {
+			dims := []map[string]any{{"Dimensions": []string{"appid", "bucket"}}}
+			ok(w, map[string]any{"MetricSet": []map[string]any{
+				{"MetricName": "StdStorage", "MetricCName": "标准存储-存储空间", "Unit": "MB", "Period": []int{300, 3600, 86400}, "Dimensions": dims},
+				{"MetricName": "InternetTraffic", "MetricCName": "外网下行流量", "Unit": "B", "Period": []int{60, 300, 3600, 86400}, "Dimensions": dims},
+				{"MetricName": "StdReadRequests", "MetricCName": "标准存储读请求", "Unit": "次", "Period": []int{60, 300}, "Dimensions": dims},
+			}})
+			return true
+		}
 		ok(w, map[string]any{"MetricSet": []map[string]any{
 			{"MetricName": "CpuUsage", "MetricCName": "CPU利用率", "Unit": "%", "Period": []int{60, 300}},
 			{"MetricName": "MemUsage", "MetricCName": "内存利用率", "Unit": "%", "Period": []int{60, 300}},
@@ -155,6 +166,34 @@ func (f *Fake) serveMore(w http.ResponseWriter, service, action, region string, 
 			{"MetricName": "DiskUsage", "Unit": "%", "Period": []int{60}},
 		}})
 	case "monitor GetMonitorData":
+		if str("Namespace") == "QCE/COS" {
+			bucket := ""
+			if insts, _ := in["Instances"].([]any); len(insts) > 0 {
+				dims, _ := insts[0].(map[string]any)["Dimensions"].([]any)
+				for _, d := range dims {
+					if m, _ := d.(map[string]any); m["Name"] == "bucket" {
+						bucket, _ = m["Value"].(string)
+					}
+				}
+			}
+			u, found := f.COSUsage[bucket]
+			if !found {
+				ok(w, map[string]any{"MetricName": str("MetricName"), "DataPoints": []map[string]any{{"Timestamps": []float64{}, "Values": []float64{}}}})
+				return true
+			}
+			now := time.Now().Truncate(time.Hour).Unix()
+			var ts, vs []float64
+			if str("MetricName") == "StdStorage" {
+				ts, vs = []float64{float64(now - 86400)}, []float64{u.StorageMB}
+			} else {
+				for i, v := range u.TrafficPerHour {
+					ts = append(ts, float64(now-int64(len(u.TrafficPerHour)-i)*3600))
+					vs = append(vs, v)
+				}
+			}
+			ok(w, map[string]any{"MetricName": str("MetricName"), "DataPoints": []map[string]any{{"Timestamps": ts, "Values": vs}}})
+			return true
+		}
 		now := time.Now().Unix()
 		var ts, vs []float64
 		for i := 0; i < 12; i++ {
@@ -224,4 +263,11 @@ func without(list, remove []tencent.FirewallRule) []tencent.FirewallRule {
 		}
 	}
 	return out
+}
+
+// COSUsage is what Cloud Monitor reports for a bucket: its standard
+// storage and its internet traffic per hour, oldest first.
+type COSUsage struct {
+	StorageMB      float64
+	TrafficPerHour []float64
 }

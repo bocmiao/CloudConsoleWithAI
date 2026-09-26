@@ -66,6 +66,9 @@ func applyCloud(ctx context.Context, env *Env, r Resolved, progress Progress) Ou
 		}
 	}
 	return traceCloud(env, func() Outcome {
+		if strings.HasPrefix(r.Impl.Cloud, "cos_") {
+			return applyCOS(ctx, env, r.Impl.Cloud, r.Values, out, report)
+		}
 		switch r.Impl.Cloud {
 		case "dns_record_set":
 			return applyDNSRecord(ctx, env, r.Values, out, report)
@@ -131,6 +134,8 @@ func undoCloud(ctx context.Context, env *Env, r Resolved, undo map[string]string
 	return traceCloud(env, func() Outcome {
 		var err error
 		switch r.Impl.Cloud {
+		case "cos_create", "cos_acl", "cos_referer", "cos_cors", "cos_lifecycle", "cos_versioning", "cos_encryption", "cos_website", "cos_policy":
+			err = undoCOS(ctx, env, r.Impl.Cloud, undo)
 		case "dns_record_set", "dns_record_add", "dns_record_modify", "dns_record_delete":
 			err = undoDNSRecord(ctx, env.Cloud, undo)
 		case "dns_record_status":

@@ -4,6 +4,7 @@
 package actions
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"regexp"
@@ -769,6 +770,16 @@ func paramValue(p Param, raw any) (string, error) {
 	case "lines":
 		if len(s) > 4096 || strings.ContainsAny(s, "\x00\r") {
 			return "", fmt.Errorf("参数 %s 不对", p.Name)
+		}
+		return s, nil
+	case "bucket":
+		if len(s) > 60 || !bucketRe.MatchString(s) {
+			return "", fmt.Errorf("参数 %s 要是存储桶名称（小写字母、数字和中划线，带 -APPID，例如 blog-1250000000），%q 不是", p.Name, s)
+		}
+		return s, nil
+	case "json":
+		if len(s) > 20000 || !json.Valid([]byte(s)) {
+			return "", fmt.Errorf("参数 %s 要是 JSON（最多 20000 个字符）", p.Name)
 		}
 		return s, nil
 	case "text":

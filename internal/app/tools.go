@@ -32,6 +32,8 @@ const systemPrompt = `你是 Miao Panel（喵面板）里的服务器运维助�
 腾讯云（需要用户在「设置 → 腾讯云」填好密钥）：用 tencent_dns 查 DNSPod 域名和解析，用 tencent_eo 查 EdgeOne 站点、加速域名和套餐。
 改解析：让一个名字指向某个地址（替换掉它原来的 A、AAAA、CNAME）用 dns.record.set；只加一条记录（MX、TXT、CAA、SRV、NS，或者再加一条 A 做负载均衡）用 dns.record.add；
 改、删、暂停某一条现有记录用 dns.record.modify、dns.record.delete、dns.record.status（record_id 是 tencent_dns 返回的 id）。DNSPod 自带的 NS 记录不能动。
+对象存储 COS：用 tencent_cos 查存储桶。改存储桶设置用 cos.acl.set、cos.referer.set、cos.cors.set、cos.lifecycle.set、cos.versioning.set、cos.encryption.set、cos.website.set、cos.policy.set，新建或删除存储桶用 cos.bucket.create、cos.bucket.delete；
+改生命周期规则时要带上所有想保留的规则（tencent_cos 里标明不能编辑的，把名字放进 keep）。你不能上传、下载或删除存储桶里的文件，需要时请用户到「存储」页操作。
 用户想把一个域名上线、接入 EO（EdgeOne）或开 HTTPS 时：
 - 先查清楚：域名是否在 DNSPod、EdgeOne 里有没有它所在的站点、加速域名是否已经存在、这个主机记录现在解析到哪里、网站在哪台服务器（公网 IP 用 list_servers 查）；
   1Panel 服务器用 panel_websites 看网站是否已经建好、有哪些应用可以代理；
@@ -148,6 +150,16 @@ func (a *App) tools() map[string]ai.Tool {
 				"subdomain": map[string]any{"type": "string", "description": "主机记录，例如 blog；主域名本身是 @"},
 			}),
 		}, Run: a.toolTencentDNS},
+		{Def: ai.ToolDef{
+			Name: "tencent_cos",
+			Description: "查询腾讯云对象存储 COS（只读）：不填 bucket 时列出所有存储桶（地域、访问权限）和 APPID；填 bucket 时显示它的访问权限、防盗链、跨域、生命周期、版本控制、加密、静态网站、存储桶策略、" +
+				"发现的问题，以及 prefix 目录下的前 50 个文件和文件夹。",
+			Schema: obj(map[string]any{
+				"bucket": map[string]any{"type": "string", "description": "存储桶名称，带 APPID，例如 blog-1250000000"},
+				"region": map[string]any{"type": "string", "description": "地域，例如 ap-guangzhou（不填会自动查）"},
+				"prefix": map[string]any{"type": "string", "description": "只看这个目录，例如 images/"},
+			}),
+		}, Run: a.toolTencentCOS},
 		{Def: ai.ToolDef{
 			Name: "tencent_eo",
 			Description: "查询腾讯云 EdgeOne（只读）：不填 domain 时列出所有站点；填 domain 时显示它所在的站点、加速域名（状态、分配的 CNAME、回源地址、HTTPS 证书），" +

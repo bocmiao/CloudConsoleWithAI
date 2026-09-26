@@ -68,6 +68,10 @@ type Fake struct {
 	// lines, served gzipped under /eolog/.
 	L7Logs map[string][]LogPackage
 
+	// COS: buckets by name, and what Cloud Monitor reports for them.
+	COS      map[string]*COSBucket
+	COSUsage map[string]COSUsage
+
 	// TAT: which instances have the agent online, and a function that
 	// plays the server running a command (defaults to echoing nothing).
 	AgentOnline map[string]bool
@@ -156,6 +160,10 @@ type LogPackage struct {
 }
 
 func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/cos") {
+		f.serveCOS(w, r)
+		return
+	}
 	if name, ok := strings.CutPrefix(r.URL.Path, "/eolog/"); ok {
 		f.mu.Lock()
 		defer f.mu.Unlock()
