@@ -57,6 +57,7 @@ type App struct {
 	terms     terminals
 	fpool     filePool
 	eoReports eoReportCache
+	lines     dnsLines
 }
 
 // New creates an App.

@@ -117,6 +117,10 @@ func (s *Server) routes() {
 	api("GET /api/visits/blocked", s.blockedIPs)
 	api("POST /api/visits/block", s.blockIPs)
 	api("POST /api/servers/{id}/realip", s.proposeRealIP)
+	api("GET /api/dns/domains", s.dnsDomains)
+	api("GET /api/dns/records", s.dnsRecords)
+	api("GET /api/dns/lines", s.dnsLines)
+	api("POST /api/dns/plan", s.dnsPlan)
 	api("POST /api/visits/unblock", s.unblockIPs)
 	api("POST /api/visits/judge", s.judgeIPs)
 	api("POST /api/servers/{id}/terminal", s.openTerminal)
@@ -458,6 +462,26 @@ func (s *Server) proposeRealIP(_ http.ResponseWriter, r *http.Request) (any, err
 		return nil, err
 	}
 	return s.app.ProposeRealIP(r.Context(), id)
+}
+
+func (s *Server) dnsDomains(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.DNSDomains(r.Context())
+}
+
+func (s *Server) dnsRecords(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.DNSRecords(r.Context(), r.URL.Query().Get("domain"))
+}
+
+func (s *Server) dnsLines(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.DNSLines(r.Context(), r.URL.Query().Get("domain"))
+}
+
+func (s *Server) dnsPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req app.DNSRequest
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.ProposeDNS(r.Context(), req)
 }
 
 func (s *Server) unblockIPs(_ http.ResponseWriter, r *http.Request) (any, error) {

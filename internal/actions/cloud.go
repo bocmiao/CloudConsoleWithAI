@@ -69,6 +69,14 @@ func applyCloud(ctx context.Context, env *Env, r Resolved, progress Progress) Ou
 		switch r.Impl.Cloud {
 		case "dns_record_set":
 			return applyDNSRecord(ctx, env, r.Values, out, report)
+		case "dns_record_add":
+			return applyRecordAdd(ctx, env, r.Values, out, report)
+		case "dns_record_modify":
+			return applyRecordModify(ctx, env, r.Values, out, report)
+		case "dns_record_delete":
+			return applyRecordDelete(ctx, env, r.Values, out, report)
+		case "dns_record_status":
+			return applyRecordStatus(ctx, env, r.Values, out, report)
 		case "eo_domain_add":
 			return applyEODomain(ctx, env, r.Values, out, report)
 		case "eo_https":
@@ -123,8 +131,10 @@ func undoCloud(ctx context.Context, env *Env, r Resolved, undo map[string]string
 	return traceCloud(env, func() Outcome {
 		var err error
 		switch r.Impl.Cloud {
-		case "dns_record_set":
+		case "dns_record_set", "dns_record_add", "dns_record_modify", "dns_record_delete":
 			err = undoDNSRecord(ctx, env.Cloud, undo)
+		case "dns_record_status":
+			err = undoRecordStatus(ctx, env.Cloud, undo)
 		case "eo_domain_add":
 			err = undoEODomain(ctx, env, undo)
 		case "firewall_open", "firewall_close":
@@ -351,7 +361,8 @@ func undoDNSRecord(ctx context.Context, c *tencent.Client, undo map[string]strin
 	domain := undo["domain"]
 	var errs []error
 	if id, err := strconv.ParseUint(undo["created"], 10, 64); err == nil && id > 0 {
-		if err := c.DeleteRecord(ctx, domain, id); err != nil {
+		// Already gone is as good as deleted.
+		if err := c.DeleteRecord(ctx, domain, id); err != nil && !tencent.IsCode(err, "InvalidParameter.RecordIdInvalid") {
 			errs = append(errs, fmt.Errorf("删除新增的记录失败：%w", err))
 		}
 	}

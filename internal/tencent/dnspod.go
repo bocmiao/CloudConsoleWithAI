@@ -38,6 +38,11 @@ type Record struct {
 	MX       uint64 `json:"MX"`
 	Status   string `json:"Status"` // ENABLE, DISABLE
 	Remark   string `json:"Remark"`
+	// Weight is set when records of a name share traffic by weight.
+	Weight    *uint64 `json:"Weight,omitempty"`
+	UpdatedOn string  `json:"UpdatedOn,omitempty"`
+	// DefaultNS marks the NS records DNSPod keeps for the domain itself.
+	DefaultNS bool `json:"DefaultNS,omitempty"`
 }
 
 // Records lists a domain's records, only those of subdomain when given.
@@ -67,6 +72,14 @@ func recordFields(domain string, r Record) map[string]any {
 	if r.Remark != "" {
 		in["Remark"] = r.Remark
 	}
+	// Left out, a change would switch a paused record back on and drop its
+	// weight.
+	if r.Status != "" {
+		in["Status"] = r.Status
+	}
+	if r.Weight != nil {
+		in["Weight"] = *r.Weight
+	}
 	return in
 }
 
@@ -89,4 +102,27 @@ func (c *Client) ModifyRecord(ctx context.Context, domain string, r Record) erro
 // DeleteRecord removes a record.
 func (c *Client) DeleteRecord(ctx context.Context, domain string, id uint64) error {
 	return c.Call(ctx, "dnspod", dnspodVersion, "DeleteRecord", map[string]any{"Domain": domain, "RecordId": id}, nil)
+}
+
+// SetRecordStatus pauses (DISABLE) or resumes (ENABLE) a record.
+func (c *Client) SetRecordStatus(ctx context.Context, domain string, id uint64, status string) error {
+	return c.Call(ctx, "dnspod", dnspodVersion, "ModifyRecordStatus", map[string]any{"Domain": domain, "RecordId": id, "Status": status}, nil)
+}
+
+// RecordLines lists the resolution lines the domain's plan offers
+// (默认, 电信, 联通, 境外……), by name.
+func (c *Client) RecordLines(ctx context.Context, domain, grade string) ([]string, error) {
+	var out struct {
+		LineList []struct {
+			Name string `json:"Name"`
+		} `json:"LineList"`
+	}
+	if err := c.Call(ctx, "dnspod", dnspodVersion, "DescribeRecordLineList", map[string]any{"Domain": domain, "DomainGrade": grade}, &out); err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, l := range out.LineList {
+		names = append(names, l.Name)
+	}
+	return names, nil
 }

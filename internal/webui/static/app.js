@@ -98,6 +98,8 @@ const ICONS = {
   prompt: 'M4 6l6 6-6 6M12 18h8',
   close: 'M6 6l12 12M18 6L6 18',
   menu: 'M4 7h16M4 12h16M4 17h16',
+  globe: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM3.6 9h16.8M3.6 15h16.8M12 3c-2.4 2.6-3.6 5.6-3.6 9s1.2 6.4 3.6 9M12 3c2.4 2.6 3.6 5.6 3.6 9s-1.2 6.4-3.6 9',
+  bolt: 'M13 3L5 13.5h6L10 21l8-10.5h-6z',
   cloud: 'M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 8.6 4.5 4.5 0 0 1 17.5 18z',
   bell: 'M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15zM10 20.5a2 2 0 0 0 4 0',
 };
@@ -212,6 +214,7 @@ const PlanCard = {
       try {
         p.value = await api('POST', `/api/plans/${p.value.id}/steps/${i}/undo`);
         notify('已撤销');
+        emit('done', p.value);
       } catch (e) { notify(e.message, 'error'); await refresh(); } finally { busy.value = false; }
     }
     const undoable = computed(() => steps.value.filter(s => s.status === 'done' && s.reversible).length);
@@ -221,6 +224,7 @@ const PlanCard = {
       try {
         p.value = await api('POST', `/api/plans/${p.value.id}/undo`);
         notify('已全部撤销');
+        emit('done', p.value);
       } catch (e) { notify(e.message, 'error'); await refresh(); } finally { busy.value = false; }
     }
 
@@ -1784,6 +1788,306 @@ const CertPage = {
       </template>
       <div class="notice" v-for="n in data.notes || []" :key="n"><ui-icon name="info"></ui-icon>没能读取：{{ n }}</div>
     </template>
+  </div>`,
+};
+
+// 解析: DNSPod records, with what EdgeOne does for each name. Changes are
+// proposed as checklists, confirmed in a sheet, and can be undone.
+const RECORD_TYPES = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'CAA', 'SRV'];
+const TTLS = [60, 120, 300, 600, 1800, 3600, 86400];
+const ttlText = n => n >= 86400 && n % 86400 === 0 ? `${n / 86400} 天` : n >= 3600 && n % 3600 === 0 ? `${n / 3600} 小时` : n >= 60 && n % 60 === 0 ? `${n / 60} 分钟` : `${n} 秒`;
+const VALUE_HINT = {
+  A: 'IPv4 地址，例如 1.2.3.4', AAAA: 'IPv6 地址，例如 2001:db8::1', CNAME: '另一个域名，例如 example.github.io',
+  MX: '邮件服务器，例如 mxbiz1.qq.com', TXT: '文本，例如 v=spf1 include:spf.mail.qq.com ~all', NS: '域名服务器，例如 ns1.example.net',
+  CAA: '例如 0 issue "letsencrypt.org"', SRV: '优先级 权重 端口 目标，例如 5 0 5060 sip.example.com',
+};
+const EO_AREAS = [{ id: 'mainland', text: '中国大陆（域名要已备案）' }, { id: 'overseas', text: '全球（不含中国大陆）' }, { id: 'global', text: '全球（含中国大陆，要备案）' }];
+const dnsMemo = new Map();
+
+const DnsPage = {
+  props: { configured: Boolean, active: Boolean, servers: { type: Array, default: () => [] } },
+  emits: ['settings'],
+  setup(props) {
+    const domains = ref([]);
+    const eoError = ref('');
+    const domain = ref(pref('miao.dnsDomain', ''));
+    const data = ref(null);
+    const loading = ref(false);
+    const error = ref('');
+    const q = ref('');
+    const typeFilter = ref('');
+    const plan = ref(null);
+    const planning = ref(false);
+    const lines = ref([]);
+    const formError = ref('');
+    let seq = 0;
+    watch(domain, v => { if (v) setPref('miao.dnsDomain', v); load(); });
+
+    async function loadDomains() {
+      if (!props.configured) return;
+      try {
+        const r = await api('GET', '/api/dns/domains');
+        domains.value = r.domains; eoError.value = r.eoError || '';
+        if (!r.domains.some(d => d.name === domain.value)) domain.value = r.domains.length ? r.domains[0].name : '';
+        else load();
+      } catch (e) { error.value = e.message; }
+    }
+    async function load(fresh) {
+      const d = domain.value;
+      if (!d) { data.value = null; return; }
+      const n = ++seq;
+      const memo = dnsMemo.get(d);
+      if (memo && !fresh) data.value = memo; else if (!memo) data.value = null;
+      loading.value = true; error.value = '';
+      try {
+        const r = await api('GET', '/api/dns/records?domain=' + encodeURIComponent(d));
+        if (n !== seq) return;
+        dnsMemo.set(d, r); data.value = r;
+      } catch (e) { if (n === seq) error.value = e.message; }
+      finally { if (n === seq) loading.value = false; }
+    }
+    // Coming back to the page shows what it had at once, then refreshes.
+    watch(() => props.active, v => { if (v) domains.value.length ? load() : loadDomains(); }, { immediate: true });
+    watch(() => props.configured, v => { if (v) loadDomains(); });
+
+    const current = computed(() => domains.value.find(d => d.name === domain.value) || null);
+    const zone = computed(() => data.value && data.value.edgeone);
+    const eoUsable = computed(() => !eoError.value && !(zone.value && (zone.value.type === 'full' || zone.value.paused)));
+    const shown = computed(() => {
+      if (!data.value) return [];
+      const k = q.value.trim().toLowerCase();
+      return data.value.records.filter(r => (!typeFilter.value || r.type === typeFilter.value) &&
+        (!k || [r.name, r.full, r.value, r.remark || '', r.line].some(s => s.toLowerCase().includes(k))));
+    });
+
+    async function propose(body) {
+      planning.value = true; formError.value = '';
+      try {
+        plan.value = await api('POST', '/api/dns/plan', { domain: domain.value, ...body });
+        editor.open = false; quick.open = false;
+        return true;
+      } catch (e) {
+        if (editor.open || quick.open) formError.value = e.message; else notify(e.message, 'error');
+        return false;
+      } finally { planning.value = false; }
+    }
+    function planDone() { load(true); loadDomains(); }
+    // Closed while it still runs: refresh the records once it has finished.
+    async function closePlan() {
+      const p = plan.value;
+      plan.value = null;
+      if (!p) return;
+      for (let i = 0; i < 200; i++) {
+        await new Promise(r => setTimeout(r, 3000));
+        try {
+          const now = await api('GET', `/api/plans/${p.id}`);
+          if (now.status === 'running') continue;
+          planDone();
+        } catch { /* checked again next time the page loads */ }
+        return;
+      }
+    }
+
+    // Adding or changing one record.
+    const editor = reactive({ open: false, id: 0, sub: '', type: 'A', value: '', line: '默认', ttl: 600, mx: 10, remark: '' });
+    async function loadLines() {
+      try { lines.value = await api('GET', '/api/dns/lines?domain=' + encodeURIComponent(domain.value)); }
+      catch { lines.value = ['默认']; }
+    }
+    function openEditor(r) {
+      formError.value = '';
+      Object.assign(editor, r
+        ? { open: true, id: r.id, sub: r.name, type: r.type, value: r.value, line: r.line, ttl: r.ttl, mx: r.mx || 10, remark: r.remark || '' }
+        : { open: true, id: 0, sub: '', type: 'A', value: '', line: '默认', ttl: 600, mx: 10, remark: '' });
+      loadLines();
+    }
+    const editorTTLs = computed(() => TTLS.includes(editor.ttl) ? TTLS : [...TTLS, editor.ttl].sort((a, b) => a - b));
+    function submitEditor() {
+      const body = { op: editor.id ? 'modify' : 'add', id: editor.id, sub: editor.sub.trim() || '@', type: editor.type, value: editor.value.trim(),
+        line: editor.line, ttl: editor.ttl, remark: editor.remark.trim() };
+      if (editor.type === 'MX') body.mx = editor.mx;
+      propose(body);
+    }
+
+    // One click: a name to a server, an IP or a host, through EdgeOne if wanted.
+    const quick = reactive({ open: false, sub: '', target: 'server', serverId: 0, value: '', edgeone: false, https: true, protocol: 'HTTP', area: 'mainland' });
+    function openQuick(pre) {
+      formError.value = '';
+      const s = props.servers[0];
+      Object.assign(quick, { open: true, sub: '', target: s ? 'server' : 'ip', serverId: s ? s.id : 0, value: '',
+        edgeone: !!(zone.value && zone.value.type === 'partial' && eoUsable.value), https: true, protocol: 'HTTP', area: 'mainland' }, pre || {});
+    }
+    function submitQuick() {
+      propose({ op: 'quick', sub: quick.sub.trim() || '@', target: quick.target, serverId: quick.serverId, value: quick.value.trim(),
+        edgeone: quick.edgeone, https: quick.https, protocol: quick.protocol, area: quick.area });
+    }
+    // An error is about what was sent; editing the form clears it.
+    watch(() => JSON.stringify([editor, quick]), () => { if (!planning.value) formError.value = ''; });
+    const quickName = computed(() => ((quick.sub.trim() || '@') === '@' ? '' : quick.sub.trim() + '.') + domain.value);
+
+    const del = r => propose({ op: 'delete', id: r.id });
+    const toggle = r => propose({ op: 'status', id: r.id, status: r.enabled ? 'disable' : 'enable' });
+    const eoPoint = sub => propose({ op: 'eo_point', sub });
+    const eoOff = r => propose({ op: 'eo_off', id: r.id });
+    const eoOn = r => openQuick({ sub: r.name, target: r.type === 'CNAME' ? 'host' : 'ip', value: r.value, edgeone: true });
+    const canEO = r => r.enabled && !r.edgeone && !r.system && ['A', 'AAAA', 'CNAME'].includes(r.type) && zone.value && zone.value.type === 'partial' && eoUsable.value && !/\.eo\.dnse|\.edgeone\.app/.test(r.value);
+    const planServerName = computed(() => '腾讯云');
+
+    return { RECORD_TYPES, EO_AREAS, VALUE_HINT, domains, eoError, domain, data, loading, error, q, typeFilter, plan, planning, lines, formError,
+      current, zone, eoUsable, shown, load, planDone, closePlan, editor, openEditor, editorTTLs, submitEditor, quick, openQuick, submitQuick, quickName,
+      del, toggle, eoPoint, eoOff, eoOn, canEO, ttlText, planServerName };
+  },
+  template: `
+  <div>
+    <div class="group" v-if="!configured">
+      <div class="row"><ui-icon name="info" class="lg" style="color: var(--accent)"></ui-icon><div class="grow">域名解析在腾讯云 DNSPod，需要先填写腾讯云密钥。</div><button @click="$emit('settings')">去设置</button></div>
+    </div>
+    <template v-else>
+      <div class="page-head"><p>DNSPod 里的域名解析。每次修改都会先生成一份清单，确认后才执行，执行后可以撤销；经过 EdgeOne 的网站会标出来。</p></div>
+      <div class="stat-bar dns-bar">
+        <label class="field"><span>域名</span>
+          <select v-model="domain" aria-label="域名" :disabled="!domains.length"><option v-for="d in domains" :key="d.name" :value="d.name">{{ d.name }}</option></select></label>
+        <label class="field dns-search"><span>搜索</span>
+          <input type="search" v-model="q" placeholder="主机记录、记录值或备注" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" @keydown.esc="q = ''"></label>
+        <label class="field"><span>类型</span>
+          <select v-model="typeFilter" aria-label="记录类型"><option value="">全部</option><option v-for="t in RECORD_TYPES" :key="t" :value="t">{{ t }}</option></select></label>
+        <span class="grow"></span>
+        <button class="plain icon-only" @click="load(true)" :disabled="loading || !domain" title="刷新" aria-label="刷新"><ui-icon name="refresh"></ui-icon></button>
+        <button @click="openEditor()" :disabled="!domain"><ui-icon name="plus"></ui-icon>添加记录</button>
+        <button class="primary" @click="openQuick()" :disabled="!domain"><ui-icon name="bolt"></ui-icon>一键解析</button>
+      </div>
+
+      <div class="notice" v-if="error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ error }}</div>
+      <div class="group" v-if="!domains.length && !error && !loading"><div class="row secondary">DNSPod 里还没有域名。</div></div>
+      <div class="notice" v-if="loading && !data"><span class="spinner"></span>正在读取解析记录……</div>
+
+      <div class="alerts dns-alerts" v-if="data">
+        <div class="alert al-crit" v-if="current && !current.dnsOk"><ui-icon name="alert"></ui-icon>
+          <span class="grow">{{ domain }} 的 DNS 服务器不是 DNSPod，这里的解析不会生效。到域名注册商那里，把 DNS 服务器改成 DNSPod 的地址。</span></div>
+        <div class="alert al-warn" v-if="current && current.status && current.status !== 'ENABLE'"><ui-icon name="warn"></ui-icon>
+          <span class="grow">{{ domain }} 在 DNSPod 里不是启用状态（{{ current.status }}），解析可能不生效。</span></div>
+        <div class="alert al-info" v-if="zone && zone.type === 'full'"><ui-icon name="info"></ui-icon>
+          <span class="grow">{{ domain }} 用 NS 方式接入了 EdgeOne，线上生效的解析在 EdgeOne 里管理，这里的 DNSPod 记录不起作用。</span></div>
+        <div class="alert al-warn" v-for="p in data.pending" :key="p.name"><ui-icon name="warn"></ui-icon>
+          <span class="grow">EdgeOne 里有加速域名 <b>{{ p.name }}</b>（回源到 {{ p.origin }}），但解析还没指过去，访客没有经过 EdgeOne<template v-if="p.current">；现在解析到 {{ p.current }}</template>。</span>
+          <button class="link small" @click="eoPoint(p.sub)" :disabled="planning">解析到 EdgeOne</button></div>
+        <div class="alert al-info" v-if="eoError"><ui-icon name="info"></ui-icon>
+          <span class="grow">读不到 EdgeOne 的信息（{{ eoError }}），经过 EdgeOne 的网站不会标出来。</span></div>
+      </div>
+
+      <div class="group dns-group" v-if="data">
+        <div class="dns-sum small secondary">
+          <span>{{ data.records.length }} 条记录<template v-if="shown.length !== data.records.length">，显示 {{ shown.length }} 条</template></span>
+          <span v-if="zone && zone.type === 'partial'"><ui-icon name="cloud"></ui-icon>已接入 EdgeOne（CNAME 方式）</span>
+          <span v-else-if="!zone && !eoError">没有接入 EdgeOne</span>
+          <span v-if="loading"><span class="spinner inline"></span>正在更新</span>
+        </div>
+        <div class="table-wrap">
+          <table class="table dns-table">
+            <thead><tr><th>主机记录</th><th>类型</th><th>线路</th><th>记录值</th><th>TTL</th><th>状态</th><th><span class="sr-only">操作</span></th></tr></thead>
+            <tbody>
+              <tr v-for="r in shown" :key="r.id" :class="{ off: !r.enabled }">
+                <td class="c-name"><div class="dns-name">{{ r.name }}</div><div class="small tertiary">{{ r.full }}</div></td>
+                <td class="c-type"><span class="tag">{{ r.type }}</span></td>
+                <td class="c-line nowrap">{{ r.line }}</td>
+                <td class="c-value dns-value"><span class="mono">{{ r.value }}</span><div class="small tertiary" v-if="r.type === 'MX'">优先级 {{ r.mx }}</div>
+                  <div class="small tertiary" v-if="r.weight != null">权重 {{ r.weight }}</div><div class="small tertiary" v-if="r.remark">{{ r.remark }}</div></td>
+                <td class="c-ttl nowrap">{{ ttlText(r.ttl) }}</td>
+                <td class="c-state dns-state">
+                  <span class="tag warn" v-if="!r.enabled">已暂停</span>
+                  <span class="tag" v-if="r.system">DNSPod 自带</span>
+                  <template v-if="r.edgeone">
+                    <template v-if="r.edgeone.points"><span class="tag on">经过 EdgeOne</span><div class="small tertiary">回源到 {{ r.edgeone.origin }}<template v-if="r.edgeone.https === 'eofreecert'"> · 免费证书</template></div></template>
+                    <template v-else><span class="tag warn">没走 EdgeOne</span><div class="small tertiary">{{ r.line === '默认' ? 'EdgeOne 里有这个域名，解析没指过去' : '这条线路的访客不经过 EdgeOne' }}</div></template>
+                  </template>
+                  <span class="tertiary" v-if="r.enabled && !r.system && !r.edgeone">—</span>
+                </td>
+                <td class="c-ops dns-ops">
+                  <template v-if="!r.system">
+                    <button class="link small" @click="openEditor(r)" :aria-label="'修改 ' + r.full + ' 的 ' + r.type + ' 记录'">修改</button>
+                    <button class="link small" @click="toggle(r)" :disabled="planning" :aria-label="(r.enabled ? '暂停 ' : '启用 ') + r.full + ' 的 ' + r.type + ' 记录'">{{ r.enabled ? '暂停' : '启用' }}</button>
+                    <button class="link small danger" @click="del(r)" :disabled="planning" :aria-label="'删除 ' + r.full + ' 的 ' + r.type + ' 记录'">删除</button>
+                    <button class="link small" v-if="r.edgeone && r.edgeone.points" @click="eoOff(r)" :disabled="planning">不走 EdgeOne</button>
+                    <button class="link small" v-else-if="r.edgeone && r.line === '默认'" @click="eoPoint(r.name)" :disabled="planning">解析到 EdgeOne</button>
+                    <button class="link small" v-else-if="canEO(r)" @click="eoOn(r)">开启 EdgeOne</button>
+                  </template>
+                </td>
+              </tr>
+              <tr v-if="!shown.length"><td colspan="7" class="secondary">{{ data.records.length ? '没有符合条件的记录' : '还没有解析记录，点「一键解析」或「添加记录」开始' }}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </template>
+
+    <!-- One click -->
+    <div class="sheet-mask" v-if="quick.open" @click.self="quick.open = false">
+      <div class="sheet" role="dialog" aria-label="一键解析">
+        <h2>一键解析</h2>
+        <p>填好名字和要指向的地方，会生成一份清单：确认后执行，每一步都能撤销。</p>
+        <div class="group">
+          <div class="row form"><span class="k">名字</span><span class="v dns-sub"><input v-model="quick.sub" placeholder="www；主域名本身填 @" aria-label="主机记录" autocapitalize="off" spellcheck="false"><span class="secondary">.{{ domain }}</span></span></div>
+          <div class="row form"><span class="k">指向</span><span class="v"><span class="segmented">
+            <button :class="{on: quick.target === 'server'}" @click="quick.target = 'server'" :disabled="!servers.length">我的服务器</button>
+            <button :class="{on: quick.target === 'ip'}" @click="quick.target = 'ip'">IP 地址</button>
+            <button :class="{on: quick.target === 'host'}" @click="quick.target = 'host'">另一个域名</button></span></span></div>
+          <div class="row form" v-if="quick.target === 'server'"><span class="k">服务器</span><span class="v">
+            <select v-model.number="quick.serverId" aria-label="服务器"><option v-for="s in servers" :key="s.id" :value="s.id">{{ s.name }} · {{ s.host }}</option></select></span></div>
+          <div class="row form" v-else><span class="k">{{ quick.target === 'ip' ? 'IP 地址' : '域名' }}</span><span class="v">
+            <input v-model="quick.value" :placeholder="quick.target === 'ip' ? '例如 1.2.3.4' : '例如 example.github.io'" :aria-label="quick.target === 'ip' ? 'IP 地址' : '域名'" autocapitalize="off" spellcheck="false"></span></div>
+        </div>
+        <div class="group">
+          <label class="row form dns-check"><input type="checkbox" v-model="quick.edgeone" :disabled="!eoUsable">
+            <span class="grow"><b>经过 EdgeOne</b><span class="small secondary block">访客先到 EdgeOne 节点：加速、防护、隐藏服务器 IP，还能用免费 HTTPS 证书。{{ !eoUsable ? (zone && zone.type === 'full' ? '这个域名用 NS 方式接入 EdgeOne，请在 EdgeOne 里管理解析。' : '现在读不到 EdgeOne。') : '' }}</span></span></label>
+          <template v-if="quick.edgeone">
+            <div class="row form" v-if="!zone"><span class="k">加速区域</span><span class="v">
+              <select v-model="quick.area" aria-label="加速区域"><option v-for="a in EO_AREAS" :key="a.id" :value="a.id">{{ a.text }}</option></select>
+              <span class="small secondary block">{{ domain }} 还没有接入 EdgeOne，会先接入（CNAME 方式，用账号里还能绑定站点的套餐）。</span></span></div>
+            <div class="row form"><span class="k">回源协议</span><span class="v"><span class="segmented">
+              <button :class="{on: quick.protocol === 'HTTP'}" @click="quick.protocol = 'HTTP'">HTTP</button>
+              <button :class="{on: quick.protocol === 'HTTPS'}" @click="quick.protocol = 'HTTPS'">HTTPS</button></span>
+              <span class="small secondary block">服务器上这个网站没有证书就选 HTTP。</span></span></div>
+            <label class="row form dns-check"><input type="checkbox" v-model="quick.https"><span class="grow">申请 EdgeOne 免费证书，开启 HTTPS<span class="small secondary block">自动续签；要等解析生效后才申请得下来。</span></span></label>
+          </template>
+        </div>
+        <div class="dns-preview small secondary">{{ quickName }} → {{ quick.target === 'server' ? ((servers.find(s => s.id === quick.serverId) || {}).host || '') : (quick.value || '…') }}{{ quick.edgeone ? '（经过 EdgeOne）' : '' }}</div>
+        <div class="notice" v-if="formError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ formError }}</div>
+        <div class="sheet-actions"><button @click="quick.open = false">取消</button>
+          <button class="primary" @click="submitQuick" :disabled="planning || (quick.target !== 'server' && !quick.value.trim())">{{ planning ? '正在生成……' : '生成清单' }}</button></div>
+      </div>
+    </div>
+
+    <!-- One record -->
+    <div class="sheet-mask" v-if="editor.open" @click.self="editor.open = false">
+      <div class="sheet" role="dialog" :aria-label="editor.id ? '修改记录' : '添加记录'">
+        <h2>{{ editor.id ? '修改记录' : '添加记录' }}</h2>
+        <p>确认清单后才会生效，可以一键撤销。</p>
+        <div class="group">
+          <div class="row form"><span class="k">主机记录</span><span class="v dns-sub"><input v-model="editor.sub" placeholder="www；主域名本身填 @；泛解析填 *" aria-label="主机记录" autocapitalize="off" spellcheck="false"><span class="secondary">.{{ domain }}</span></span></div>
+          <div class="row form"><span class="k">类型</span><span class="v"><select v-model="editor.type" aria-label="记录类型"><option v-for="t in RECORD_TYPES" :key="t" :value="t">{{ t }}</option></select></span></div>
+          <div class="row form"><span class="k">线路</span><span class="v"><select v-model="editor.line" aria-label="线路">
+            <option v-for="l in (lines.includes(editor.line) ? lines : [editor.line, ...lines])" :key="l" :value="l">{{ l }}</option></select></span></div>
+          <div class="row form"><span class="k">记录值</span><span class="v"><input v-model="editor.value" :placeholder="VALUE_HINT[editor.type]" aria-label="记录值" autocapitalize="off" spellcheck="false"></span></div>
+          <div class="row form" v-if="editor.type === 'MX'"><span class="k">MX 优先级</span><span class="v"><input type="number" min="1" max="65535" v-model.number="editor.mx" aria-label="MX 优先级"><span class="small secondary block">数字越小越优先</span></span></div>
+          <div class="row form"><span class="k">TTL</span><span class="v"><select v-model.number="editor.ttl" aria-label="TTL"><option v-for="t in editorTTLs" :key="t" :value="t">{{ ttlText(t) }}</option></select>
+            <span class="small secondary block">DNSPod 免费版最小 10 分钟</span></span></div>
+          <div class="row form"><span class="k">备注</span><span class="v"><input v-model="editor.remark" placeholder="可不填" aria-label="备注"></span></div>
+        </div>
+        <div class="notice" v-if="formError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ formError }}</div>
+        <div class="sheet-actions"><button @click="editor.open = false">取消</button>
+          <button class="primary" @click="submitEditor" :disabled="planning || !editor.value.trim()">{{ planning ? '正在生成……' : '生成清单' }}</button></div>
+      </div>
+    </div>
+
+    <!-- The checklist to confirm -->
+    <div class="sheet-mask" v-if="plan" @click.self="closePlan">
+      <div class="sheet plan-sheet" role="dialog" aria-label="确认清单">
+        <h2>{{ plan.title }}</h2>
+        <p>勾选后点「执行」，确认后才会生效；执行后可以在这里或「建议」页撤销。</p>
+        <plan-card :plan="plan" :server-name="planServerName" @done="planDone"></plan-card>
+        <div class="sheet-actions"><button @click="closePlan">关闭</button></div>
+      </div>
+    </div>
   </div>`,
 };
 
@@ -3601,6 +3905,7 @@ app.component('visit-stats', VisitStats);
 app.component('rank-list', RankList);
 app.component('terminal-page', TerminalPage);
 app.component('cert-page', CertPage);
+app.component('dns-page', DnsPage);
 app.component('file-page', FilePage);
 const UiIcon = {
   props: { name: { type: String, required: true } },

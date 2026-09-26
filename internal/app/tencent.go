@@ -172,7 +172,17 @@ func (a *App) toolTencentDNS(ctx context.Context, raw json.RawMessage) (string, 
 		}
 		var b strings.Builder
 		for _, r := range list {
-			fmt.Fprintf(&b, "%s %s %s 线路=%s TTL=%d 状态=%s\n", r.Name, r.Type, r.Value, r.Line, r.TTL, r.Status)
+			fmt.Fprintf(&b, "id=%d %s %s %s 线路=%s TTL=%d 状态=%s", r.RecordID, r.Name, r.Type, r.Value, r.Line, r.TTL, r.Status)
+			if r.Type == "MX" {
+				fmt.Fprintf(&b, " MX优先级=%d", r.MX)
+			}
+			if r.DefaultNS {
+				b.WriteString(" （DNSPod 自带的 NS 记录，不能改）")
+			}
+			if r.Remark != "" {
+				fmt.Fprintf(&b, " 备注=%s", r.Remark)
+			}
+			b.WriteString("\n")
 		}
 		return b.String(), nil
 	})

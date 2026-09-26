@@ -460,7 +460,7 @@ details.free-more[open] summary .icon { transform: rotate(90deg); }
 .free-warn .icon { color: var(--warn); flex: none; margin-top: 1px; }
 
 /* Certificates */
-.table-wrap { overflow-x: auto; }
+.table-wrap { overflow-x: auto; position: relative; } /* keeps .sr-only text inside the scroller */
 .cert-table { min-width: 720px; font-size: 13px; }
 /* One card per domain; one row per certificate, with where its copies are */
 .cert-group { background: var(--surface); border-radius: 12px; box-shadow: var(--shadow); margin-bottom: 14px; overflow: hidden; }
@@ -829,3 +829,51 @@ button.primary.danger { background: var(--crit); }
 textarea.key-text { font: 12px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; resize: vertical; min-height: 96px; }
 
 @media (prefers-reduced-motion: reduce) { .sidebar { transition: none !important; } }
+
+/* 解析 */
+.dns-bar { margin-bottom: 16px; }
+.dns-bar .dns-search input { width: 220px; }
+.dns-alerts { margin-bottom: 14px; }
+.dns-alerts:empty { display: none; }
+.dns-group { overflow: hidden; }
+.dns-sum { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; padding: 12px 16px; border-bottom: 1px solid var(--sep); }
+.dns-sum > span { display: inline-flex; align-items: center; gap: 6px; }
+.dns-sum .icon { width: 15px; height: 15px; color: var(--accent); }
+.dns-table { min-width: 860px; font-size: 13px; }
+.dns-table td { vertical-align: middle; }
+.dns-table tr.off td:not(.dns-ops):not(.dns-state) { opacity: .5; }
+.dns-name { font-weight: 500; }
+.dns-value { max-width: 320px; }
+.dns-value .mono { font: 12.5px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; word-break: break-all; }
+.dns-state .tag + .tag { margin-left: 4px; }
+.dns-state .small { margin-top: 3px; }
+.dns-ops { white-space: nowrap; text-align: right; }
+.dns-ops button + button { margin-left: 12px; }
+button.link.danger { color: var(--crit); }
+.dns-sub { display: flex; align-items: center; gap: 6px; }
+.dns-sub input { flex: 1; min-width: 0; }
+.dns-sub .secondary { white-space: nowrap; max-width: 45%; overflow: hidden; text-overflow: ellipsis; }
+.dns-check { align-items: flex-start; gap: 10px; cursor: pointer; }
+.dns-check input { margin-top: 3px; }
+.small.block, .block { display: block; margin-top: 4px; }
+.dns-preview { margin: -4px 4px 14px; font-variant-numeric: tabular-nums; }
+@media (max-width: 720px) {
+  .dns-bar .dns-search input { width: 100%; }
+  .dns-bar .dns-search { flex: 1 1 100%; }
+}
+/* On a phone each record is a small card: name and type, value, TTL and
+   state, then the actions. */
+@media (max-width: 720px) {
+  .dns-table { min-width: 0; }
+  .dns-table thead { display: none; }
+  .dns-table, .dns-table tbody { display: block; }
+  .dns-table tr { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; grid-template-areas: "name type line" "value value value" "ttl state state" "ops ops ops";
+    gap: 6px 10px; padding: 12px 16px; border-bottom: 1px solid var(--sep); }
+  .dns-table td { padding: 0; }
+  .dns-table .c-name { grid-area: name; } .dns-table .c-type { grid-area: type; } .dns-table .c-line { grid-area: line; color: var(--text-2); }
+  .dns-table .c-value { grid-area: value; max-width: none; } .dns-table .c-ttl { grid-area: ttl; color: var(--text-2); }
+  .dns-table .c-ttl::before { content: "TTL "; color: var(--text-3); }
+  .dns-table .c-state { grid-area: state; text-align: right; } .dns-table .c-ops { grid-area: ops; text-align: left; white-space: normal; }
+  .dns-table .c-ops:empty { display: none; }
+  .dns-table td[colspan] { grid-column: 1 / -1; }
+}

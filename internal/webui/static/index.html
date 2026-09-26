@@ -25,6 +25,7 @@
       <div class="side-item" :class="{active: tab === 'chat'}" @click="go('chat')"><ui-icon name="sparkles"></ui-icon>AI 助手</div>
       <div class="side-item" :class="{active: tab === 'stats'}" @click="go('stats')"><ui-icon name="chart"></ui-icon>网站统计</div>
       <div class="side-item" :class="{active: tab === 'certs'}" @click="go('certs')"><ui-icon name="lock"></ui-icon>证书</div>
+      <div class="side-item" :class="{active: tab === 'dns'}" @click="go('dns')"><ui-icon name="globe"></ui-icon>解析</div>
       <div class="side-item" :class="{active: tab === 'terminal'}" @click="go('terminal')"><ui-icon name="prompt"></ui-icon>终端</div>
       <div class="side-item" :class="{active: tab === 'files'}" @click="go('files')"><ui-icon name="folder"></ui-icon>文件</div>
       <div class="side-item" :class="{active: tab === 'plans'}" @click="go('plans')"><ui-icon name="bulb"></ui-icon>建议</div>
@@ -338,6 +339,14 @@
       <header class="toolbar"><h1>证书</h1></header>
       <div class="page">
         <cert-page :configured="tc.configured" :active="tab === 'certs'" @ask="askAI"></cert-page>
+      </div>
+    </div>
+
+    <!-- DNS -->
+    <div class="tab-pane" v-if="seen.dns" v-show="tab === 'dns'">
+      <header class="toolbar"><h1>解析</h1></header>
+      <div class="page wide">
+        <dns-page :configured="tc.configured" :active="tab === 'dns'" :servers="servers" @settings="go('settings')"></dns-page>
       </div>
     </div>
 

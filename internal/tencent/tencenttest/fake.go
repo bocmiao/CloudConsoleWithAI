@@ -228,7 +228,7 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		ok(w, map[string]any{"RecordList": out})
 	case "dnspod CreateRecord":
-		rec := Record{Name: str("SubDomain"), Type: str("RecordType"), Value: str("Value"), Line: str("RecordLine"), TTL: num("TTL"), Status: "ENABLE"}
+		rec := f.recordFrom(in, str, num)
 		if f.conflicts(str("Domain"), rec, 0) {
 			fail(w, "InvalidParameter.RecordConflict", "记录有冲突。")
 			return
@@ -241,8 +241,8 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		recs := f.Records[str("Domain")]
 		for i := range recs {
 			if recs[i].RecordID == num("RecordId") {
-				next := Record{RecordID: recs[i].RecordID, Name: str("SubDomain"), Type: str("RecordType"), Value: str("Value"),
-					Line: str("RecordLine"), TTL: num("TTL"), Status: "ENABLE"}
+				next := f.recordFrom(in, str, num)
+				next.RecordID = recs[i].RecordID
 				if f.conflicts(str("Domain"), next, next.RecordID) {
 					fail(w, "InvalidParameter.RecordConflict", "记录有冲突。")
 					return
@@ -253,6 +253,26 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		fail(w, "InvalidParameter.RecordIdInvalid", "记录编号错误。")
+	case "dnspod ModifyRecordStatus":
+		recs := f.Records[str("Domain")]
+		for i := range recs {
+			if recs[i].RecordID == num("RecordId") {
+				recs[i].Status = str("Status")
+				ok(w, nil)
+				return
+			}
+		}
+		fail(w, "InvalidParameter.RecordIdInvalid", "记录编号错误。")
+	case "dnspod DescribeRecordLineList":
+		if str("DomainGrade") == "" {
+			fail(w, "MissingParameter", "缺少参数 DomainGrade。")
+			return
+		}
+		var lines []map[string]string
+		for i, n := range []string{tencent.DefaultLine, "电信", "联通", "移动", "教育网", "境外", "搜索引擎"} {
+			lines = append(lines, map[string]string{"Name": n, "LineId": strconv.Itoa(i)})
+		}
+		ok(w, map[string]any{"LineList": lines})
 	case "dnspod DeleteRecord":
 		recs := f.Records[str("Domain")]
 		for i := range recs {
@@ -357,6 +377,24 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(w, "InvalidAction", fmt.Sprintf("fake does not implement %s %s", service, action))
 		}
 	}
+}
+
+// recordFrom reads a record from a CreateRecord or ModifyRecord request,
+// with DNSPod's defaults.
+func (f *Fake) recordFrom(in map[string]any, str func(string) string, num func(string) uint64) Record {
+	rec := Record{Name: str("SubDomain"), Type: str("RecordType"), Value: str("Value"), Line: str("RecordLine"), TTL: num("TTL"),
+		MX: num("MX"), Remark: str("Remark"), Status: str("Status")}
+	if rec.Status == "" {
+		rec.Status = "ENABLE"
+	}
+	if rec.TTL == 0 {
+		rec.TTL = 600
+	}
+	if _, set := in["Weight"]; set {
+		w := num("Weight")
+		rec.Weight = &w
+	}
+	return rec
 }
 
 // conflicts applies DNSPod's rule that a CNAME cannot share a name and

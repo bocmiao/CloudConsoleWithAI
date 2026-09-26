@@ -1378,3 +1378,22 @@ EdgeOne 的统计接口只有请求数、流量、带宽这类总量和排行，
 
 测试：账号服务的初始化码（错误、大小写和横线、用过作废）、弱密码、登录、会话只存哈希、按设备退出、3 天和 30 天过期、IP 锁定和账号锁定、命令行重设、两步验证（开启前要验证、需要验证码、验证码只能用一次、时间容差、关闭要密码）、修改密码让其他登录退出，以及 RFC 6238 的标准测试向量；接口层的未登录、X-Miao 头、HTTPS 反向代理下的 Secure Cookie 和 HSTS、外网伪造 X-Forwarded-For 不能绕过锁定、下载要登录、退出登录；桌面版没有账号且仍检查 Host；粘贴私钥用测试 SSH 服务器实际登录。浏览器里走了初始化、登录、开启两步验证（用真实算出的验证码）、退出、带验证码登录、输错被锁和 HTTP 提示，看了浅色、深色和手机宽度；用示例 Nginx 配置实际代理了一次登录（HTTP/2、Secure Cookie、HSTS、HTTP 跳转 HTTPS）；容器实际运行了一遍（初始化码在日志里、数据卷属于 uid 10001、`docker exec … reset-password`、正常退出）。
 
+### 域名解析页和一键解析（已完成）
+
+侧边栏「解析」页管理 DNSPod 解析，和 EdgeOne 联动。所有修改都走清单：先生成、再确认执行，写进执行日志，能撤销；AI 用的也是同样的操作。
+
+| 操作 | 说明 | 回滚 |
+|---|---|---|
+| `dns.record.add` | 添加一条记录（A、AAAA、CNAME、MX、TXT、NS、CAA、SRV，可选线路、TTL、MX 优先级、备注）；已有一模一样的就跳过；同一线路上 CNAME 和 A/AAAA/CNAME 冲突时先说明，不去碰已有的记录 | 删除这条记录 |
+| `dns.record.modify` | 按记录编号修改；暂停状态和权重保持不变，没填的线路、TTL、备注保持原样 | 改回原来的样子 |
+| `dns.record.delete` | 按记录编号删除 | 把记录加回来（编号会变） |
+| `dns.record.status` | 暂停或启用 | 恢复原来的状态 |
+
+- DNSPod 自带的 NS 记录（`DefaultNS`）不能修改、暂停或删除；记录值按类型检查（CAA 要像 `0 issue "letsencrypt.org"`，SRV 要是「优先级 权重 端口 目标」），线路名只允许中文、字母、数字和少数符号；
+- `ModifyRecord` 带上原来的 `Status` 和 `Weight`（不带的话 DNSPod 会把暂停的记录重新启用、清掉权重）；线路列表来自 `DescribeRecordLineList`（按域名的套餐），读不到时只提供「默认」；
+- 页面上每条记录标出 EdgeOne 的情况：名字是 EdgeOne 加速域名、而且默认线路 CNAME 到它分配的地址，就是「经过 EdgeOne」（显示回源地址和证书）；其他线路直接解析到别处的，标「这条线路的访客不经过 EdgeOne」；EdgeOne 里有加速域名、但没有解析过去的，列在页面顶部，可以一键「解析到 EdgeOne」（`dns.record.set point_to=eo`）；
+- **一键解析**（`ProposeDNS`，op=quick）：名字 + 指向（我的服务器用它的地址，内网地址拒绝；IP 用 A/AAAA；另一个域名用 CNAME）。不经过 EdgeOne 就是一步 `dns.record.set`；经过 EdgeOne 时按现状组合：域名还没接入就先 `eo.zone.create`（要有能绑定站点的套餐，没有就直接说明，不生成清单；包含中国大陆的区域提示要备案），加速域名不存在就 `eo.domain.add`、已存在但回源不同就 `eo.origin.set`，然后 `dns.record.set point_to=eo`，勾了 HTTPS 再加 `eo.https.set`。NS 方式接入 EdgeOne 的域名不在 DNSPod 管理解析，直接说明；
+- 「不走 EdgeOne」（op=eo_off）把名字直接解析回 EdgeOne 里记的源站，加速域名保留，清单里说明缓存、防护和证书不再起作用、服务器 IP 会公开；普通 A/CNAME 记录可以「开启 EdgeOne」（用它现在的值当源站走一键解析）；
+- 清单弹窗关掉时如果还在执行，页面继续跟进，执行完自动刷新记录；撤销后也会刷新。
+
+测试：四个新操作在模拟的 DNSPod 上添加 MX、重复添加跳过、CNAME 冲突被拒、暂停后修改仍是暂停、撤销修改和暂停、删除后加回、撤销已经不存在的新增记录、自带 NS 记录拒绝、各类型记录值和线路名的检查；一键解析直接解析、经过 EdgeOne（三步真实执行）、回源不同改用 `eo.origin.set`、「不走 EdgeOne」、未解析的加速域名提示和「解析到 EdgeOne」、单条记录的增改停删和撤销、内网地址和错误值被拒、没接入的域名先接入、没有可绑定套餐时说明、NS 接入时说明。浏览器里在演示数据上走了一遍：提醒、解析到 EdgeOne、一键解析（经过和不经过 EdgeOne）、错误提示、添加 TXT、修改、启用、删除再撤销、「不走 EdgeOne」，看了浅色、深色和手机宽度。还没有在真实的 DNSPod 和 EdgeOne 账号上执行过。

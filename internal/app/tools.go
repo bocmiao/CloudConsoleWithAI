@@ -30,6 +30,8 @@ const systemPrompt = `你是 Miao Panel（喵面板）里的服务器运维助�
 6. 不要输出或索要密码、密钥等敏感信息。
 
 腾讯云（需要用户在「设置 → 腾讯云」填好密钥）：用 tencent_dns 查 DNSPod 域名和解析，用 tencent_eo 查 EdgeOne 站点、加速域名和套餐。
+改解析：让一个名字指向某个地址（替换掉它原来的 A、AAAA、CNAME）用 dns.record.set；只加一条记录（MX、TXT、CAA、SRV、NS，或者再加一条 A 做负载均衡）用 dns.record.add；
+改、删、暂停某一条现有记录用 dns.record.modify、dns.record.delete、dns.record.status（record_id 是 tencent_dns 返回的 id）。DNSPod 自带的 NS 记录不能动。
 用户想把一个域名上线、接入 EO（EdgeOne）或开 HTTPS 时：
 - 先查清楚：域名是否在 DNSPod、EdgeOne 里有没有它所在的站点、加速域名是否已经存在、这个主机记录现在解析到哪里、网站在哪台服务器（公网 IP 用 list_servers 查）；
   1Panel 服务器用 panel_websites 看网站是否已经建好、有哪些应用可以代理；
