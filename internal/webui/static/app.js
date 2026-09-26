@@ -78,6 +78,8 @@ const ICONS = {
   chart: 'M4 20V10M10 20V4M16 20v-7M22 20H2',
   lock: 'M6 11h12v10H6zM8 11V7a4 4 0 0 1 8 0v4',
   stop: 'M8 8h8v8H8z',
+  prompt: 'M4 6l6 6-6 6M12 18h8',
+  close: 'M6 6l12 12M18 6L6 18',
   cloud: 'M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 8.6 4.5 4.5 0 0 1 17.5 18z',
 };
 
@@ -450,6 +452,7 @@ const LineChart = {
     extraLabel: { type: String, default: '' },
     format: { type: Function, default: fmtCount },
     extraFormat: { type: Function, default: fmtBytes },
+    more: { type: Array, default: () => [] },  // [{label, points, format}] more rows in the tooltip
     span: { type: Number, default: 24 },       // hours shown, picks the time format
   },
   setup(props) {
@@ -510,6 +513,7 @@ const LineChart = {
       return {
         x: px, y: y(props.points[i].v), time: timeText(props.points[i].t), value: props.format(props.points[i].v),
         extra: props.extra[i] ? props.extraFormat(props.extra[i].v) : '', left: px > width.value * 0.6,
+        more: props.more.map(m => ({ label: m.label, value: m.points[i] ? (m.format || fmtCount)(m.points[i].v) : '—' })),
       };
     });
     return { box, width, height, m, line, area, yTicks, xTicks, onMove, onKey, hover, tip, format: props.format, fmtCount };
@@ -535,6 +539,423 @@ const LineChart = {
       <div class="small secondary">{{ tip.time }}</div>
       <div class="ctip-row"><span class="key"></span><b>{{ tip.value }}</b><span class="secondary">{{ label }}</span></div>
       <div class="ctip-row" v-if="tip.extra"><span class="key none"></span><b>{{ tip.extra }}</b><span class="secondary">{{ extraLabel }}</span></div>
+      <div class="ctip-row" v-for="r in tip.more" :key="r.label"><span class="key none"></span><b>{{ r.value }}</b><span class="secondary">{{ r.label }}</span></div>
+    </div>
+  </div>`,
+};
+
+const VISIT_RANGES = [{ d: 1, text: '今天' }, { d: 7, text: '7 天' }, { d: 30, text: '30 天' }];
+const VISIT_TOPS = { page: '受访页面', referer: '来源', ip: '访客 IP', status: '状态码', bot: '爬虫和程序', device: '设备' };
+// Reports already seen this session, by server and range.
+const visitMemo = new Map();
+
+// Website visits counted from the access logs on a server: every site
+// together or one at a time, per day, with rankings.
+const VisitStats = {
+  props: { servers: { type: Array, default: () => [] }, active: Boolean },
+  emits: ['ask'],
+  setup(props, { emit }) {
+    const serverId = ref(props.servers.length ? props.servers[0].id : 0);
+    const days = ref(7);
+    const site = ref('*');
+    const data = ref(null);
+    const loading = ref(false);
+    const error = ref('');
+    let seq = 0;
+    watch(() => props.servers, list => {
+      if (!list.some(s => s.id === serverId.value)) serverId.value = list.length ? list[0].id : 0;
+    });
+    // The server answers at once with the last report it has, even one
+    // from before Miao Panel restarted; if that is old it is shown while
+    // the logs are counted again (refreshing), then replaced.
+    async function load(refresh) {
+      if (!serverId.value) return;
+      const key = serverId.value + '|' + days.value;
+      const memo = visitMemo.get(key);
+      data.value = memo ? memo.data : null;
+      if (!refresh && memo && Date.now() - memo.at < 5 * 60 * 1000) return;
+      const n = ++seq;
+      loading.value = true; error.value = '';
+      const base = `/api/servers/${serverId.value}/visits?days=${days.value}`;
+      try {
+        let d = await api('GET', base + (refresh ? '&refresh=1' : ''));
+        if (n !== seq) return;
+        data.value = d;
+        if (d.refreshing) {
+          d = await api('GET', base + '&wait=1');
+          if (n !== seq) return;
+          data.value = d;
+        }
+        visitMemo.set(key, { data: d, at: Date.now() });
+      } catch (e) { if (n === seq) error.value = e.message; }
+      finally { if (n === seq) loading.value = false; }
+    }
+    watch([serverId, days], () => load(false));
+    watch(() => props.active, on => { if (on) load(false); });
+    onMounted(() => load(false));
+
+    const siteNames = computed(() => ((data.value && data.value.sites) || []).map(s => s.name).filter(n => n !== '*'));
+    // A site that is gone from a loaded report falls back to all sites;
+    // while a range loads there is no report yet, and the choice is kept.
+    watch(siteNames, names => { if (names.length && site.value !== '*' && !names.includes(site.value)) site.value = '*'; });
+    const expanded = reactive({});
+    const cur = computed(() => {
+      const list = (data.value && data.value.sites) || [];
+      return list.find(s => s.name === site.value) || list.find(s => s.name === '*') || null;
+    });
+    const siteRows = computed(() => ((data.value && data.value.sites) || []).filter(s => s.name !== '*'));
+    const dayTime = d => { const [y, m, dd] = d.split('-').map(Number); return new Date(y, m - 1, dd).getTime() / 1000; };
+    // Per day over a range; per hour for today.
+    const series = computed(() => {
+      const c = cur.value;
+      if (!c) return { pv: [], uv: [], ip: [], req: [] };
+      if (days.value === 1) {
+        const base = data.value.today ? dayTime(data.value.today) : Math.floor(Date.now() / 86400000) * 86400;
+        // Up to the latest hour with visits: later hours have not happened yet.
+        const last = c.hours.reduce((m, h) => h.requests > 0 ? h.hour : m, 0);
+        const pts = key => c.hours.filter(h => h.hour <= Math.max(last, 1)).map(h => ({ t: base + h.hour * 3600, v: h[key] }));
+        return { pv: pts('pv'), req: pts('requests'), uv: [], ip: [] };
+      }
+      const pts = key => c.days.map(d => ({ t: dayTime(d.date), v: d[key] }));
+      return { pv: pts('pv'), uv: pts('uv'), ip: pts('ip'), req: pts('requests') };
+    });
+    const more = computed(() => days.value === 1
+      ? [{ label: '次请求', points: series.value.req }]
+      : [{ label: 'UV', points: series.value.uv }, { label: 'IP', points: series.value.ip }, { label: '次请求', points: series.value.req }]);
+    // What a ranking's shares are of.
+    function base(kind) {
+      const t = cur.value ? cur.value.total : {};
+      if (kind === 'status') return t.requests;
+      if (kind === 'bot') return t.bots;
+      if (kind === 'ip') return t.requests - t.bots;
+      return t.pv;
+    }
+    const share = (kind, n) => { const b = base(kind); return b > 0 ? Math.min(1, n / b) : 0; };
+    const dateText = d => { const [, m, dd] = d.split('-'); return `${Number(m)}月${Number(dd)}日`; };
+    const noForward = computed(() => cur.value && cur.value.lines > 0 && cur.value.forwarded === 0);
+    const serverName = computed(() => (props.servers.find(s => s.id === serverId.value) || {}).name || '');
+    const rangeText = computed(() => (VISIT_RANGES.find(r => r.d === days.value) || {}).text || '');
+    function ask() {
+      const who = site.value === '*' ? `「${serverName.value}」上所有网站` : site.value;
+      emit('ask', `根据访问日志分析一下 ${who} ${days.value === 1 ? '今天' : '最近' + rangeText.value}的访问情况：PV、UV、IP 有没有异常变化，访客主要看了什么、从哪里来，爬虫和异常请求多不多，有没有需要处理的问题？`);
+    }
+    return { serverId, days, site, data, loading, error, load, siteNames, cur, siteRows, series, more, share, dateText, expanded, noForward, ask,
+      VISIT_RANGES, VISIT_TOPS, fmtCount, fmtBytes, whenText };
+  },
+  template: `
+  <div>
+    <div class="group" v-if="!servers.length"><div class="row secondary">先在左边添加服务器，这里会统计服务器上网站的访问日志。</div></div>
+    <template v-else>
+      <div class="filter-row">
+        <select v-if="servers.length > 1" v-model="serverId" aria-label="服务器">
+          <option v-for="s in servers" :key="s.id" :value="s.id">{{ s.name }}</option>
+        </select>
+        <select v-model="site" aria-label="网站">
+          <option value="*">全部网站</option>
+          <option v-for="n in siteNames" :key="n" :value="n">{{ n }}</option>
+        </select>
+        <span class="segmented">
+          <button v-for="r in VISIT_RANGES" :key="r.d" :class="{on: days === r.d}" @click="days = r.d">{{ r.text }}</button>
+        </span>
+        <button class="plain" @click="load(true)" :disabled="loading"><ui-icon name="refresh"></ui-icon>刷新</button>
+        <span class="small tertiary live-note" v-if="data && data.checkedAt">
+          <template v-if="loading"><span class="spinner inline"></span>正在重新统计，下面是 {{ whenText(data.checkedAt) }} 的结果</template>
+          <template v-else>统计于 {{ whenText(data.checkedAt) }}</template>
+        </span>
+        <span class="grow"></span>
+        <button class="primary" @click="ask" :disabled="!cur"><ui-icon name="sparkles"></ui-icon>让 AI 分析</button>
+      </div>
+      <div class="group" v-if="error"><div class="row st-crit"><ui-icon name="alert"></ui-icon>{{ error }}</div></div>
+      <div class="group" v-if="data && data.problem"><div class="row secondary"><ui-icon name="info"></ui-icon>{{ data.problem }}</div></div>
+      <div class="group" v-if="!data && loading"><div class="row secondary"><span class="spinner inline"></span>正在服务器上统计访问日志（日志大时要十几秒）……</div></div>
+      <div v-if="cur">
+        <div class="tiles six">
+          <div class="tile"><div class="label">PV（浏览量）</div><div class="value">{{ fmtCount(cur.total.pv) }}</div><div class="sub">打开网页的次数</div></div>
+          <div class="tile"><div class="label">UV（访客）</div><div class="value">{{ fmtCount(cur.total.uv) }}</div><div class="sub">不同的 IP + 浏览器</div></div>
+          <div class="tile"><div class="label">IP</div><div class="value">{{ fmtCount(cur.total.ip) }}</div><div class="sub">不同的访客 IP</div></div>
+          <div class="tile"><div class="label">请求数</div><div class="value">{{ fmtCount(cur.total.requests) }}</div><div class="sub">其中爬虫 {{ fmtCount(cur.total.bots) }}</div></div>
+          <div class="tile"><div class="label">流量</div><div class="value">{{ fmtBytes(cur.total.bytes) }}</div><div class="sub">服务器发出</div></div>
+          <div class="tile"><div class="label">错误</div><div class="value">{{ fmtCount(cur.total.e4xx + cur.total.e5xx) }}</div><div class="sub">4xx {{ fmtCount(cur.total.e4xx) }} · 5xx {{ fmtCount(cur.total.e5xx) }}</div></div>
+        </div>
+
+        <div class="group-title">{{ days === 1 ? '今天每小时的 PV' : '每天的 PV' }}</div>
+        <div class="group chart-card">
+          <line-chart :points="series.pv" :more="more" label="PV" :span="days === 1 ? 24 : days * 24"></line-chart>
+        </div>
+
+        <template v-if="days > 1">
+          <div class="group-title">每天</div>
+          <div class="group table-wrap">
+            <table class="table visit-table">
+              <thead><tr><th>日期</th><th class="num">PV</th><th class="num">UV</th><th class="num">IP</th><th class="num">请求数</th><th class="num">爬虫</th><th class="num">流量</th><th class="num">4xx / 5xx</th></tr></thead>
+              <tbody>
+                <tr v-for="d in [...cur.days].reverse()" :key="d.date">
+                  <td>{{ dateText(d.date) }}</td><td class="num">{{ fmtCount(d.pv) }}</td><td class="num">{{ fmtCount(d.uv) }}</td><td class="num">{{ fmtCount(d.ip) }}</td>
+                  <td class="num">{{ fmtCount(d.requests) }}</td><td class="num">{{ fmtCount(d.bots) }}</td><td class="num">{{ fmtBytes(d.bytes) }}</td><td class="num">{{ d.e4xx }} / {{ d.e5xx }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
+
+        <template v-if="site === '*' && siteRows.length > 1">
+          <div class="group-title">各网站</div>
+          <div class="group table-wrap">
+            <table class="table visit-table site-table">
+              <thead><tr><th>网站</th><th class="num">PV</th><th class="num">UV</th><th class="num">IP</th><th class="num">请求数</th><th class="num">流量</th><th></th></tr></thead>
+              <tbody>
+                <tr v-for="s in siteRows" :key="s.name" @click="site = s.name" class="clickable">
+                  <td class="mono-ish">{{ s.name }}</td><td class="num">{{ fmtCount(s.total.pv) }}</td><td class="num">{{ fmtCount(s.total.uv) }}</td><td class="num">{{ fmtCount(s.total.ip) }}</td>
+                  <td class="num">{{ fmtCount(s.total.requests) }}</td><td class="num">{{ fmtBytes(s.total.bytes) }}</td><td><ui-icon name="chevron" class="tertiary"></ui-icon></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
+
+        <div class="top-grid">
+          <div v-for="(name, key) in VISIT_TOPS" :key="key">
+            <div class="group-title">{{ name }}</div>
+            <div class="group">
+              <div class="row top-row" v-for="t in ((cur.top && cur.top[key]) || []).slice(0, expanded[key] ? 20 : 10)" :key="t.value">
+                <div class="grow">
+                  <div class="top-line"><span class="top-key" :title="t.value">{{ t.value }}</span><span class="num">{{ fmtCount(t.count) }}</span><span class="top-share">{{ (share(key, t.count) * 100).toFixed(1) }}%</span></div>
+                  <div class="share-bar"><div :style="{width: Math.max(1, share(key, t.count) * 100) + '%'}"></div></div>
+                </div>
+              </div>
+              <div class="row secondary" v-if="!cur.top || !(cur.top[key] || []).length">没有数据</div>
+              <div class="row" v-else-if="cur.top[key].length > 10"><button class="link small" @click="expanded[key] = !expanded[key]">{{ expanded[key] ? '收起' : '显示前 20 名' }}</button></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="visit-notes small tertiary">
+          <p>PV 只算浏览器打开网页（不含爬虫、图片脚本等静态文件、/api/ 接口和出错的请求）；UV 是不同的「IP + 浏览器」；时间按服务器时区（{{ data.zone }}）。</p>
+          <p v-if="noForward"><ui-icon name="warn" class="st-warn"></ui-icon>日志里没有 X-Forwarded-For。如果网站经过 EdgeOne 或 CDN，这里的访客 IP 可能都是节点 IP，UV 和 IP 会偏少。</p>
+          <p>经过 EdgeOne 的网站，被 EdgeOne 缓存的请求不会到服务器，请求数和流量以「EdgeOne」页为准。</p>
+          <p v-if="cur.unparsed">有 {{ fmtCount(cur.unparsed) }} 行日志格式无法识别，没有计入。</p>
+          <details v-if="site !== '*' && cur.files && cur.files.length"><summary>读取的日志文件</summary>
+            <div v-for="f in cur.files" :key="f.path" class="mono-ish">{{ f.path }}（{{ fmtBytes(f.size) }}）</div>
+          </details>
+        </div>
+      </div>
+    </template>
+  </div>`,
+};
+
+// xterm.js (MIT, vendored in xterm/) is only loaded when a terminal opens.
+let xtermLoading = null;
+function loadXterm() {
+  if (!xtermLoading) {
+    const script = src => new Promise((ok, bad) => {
+      const el = document.createElement('script');
+      el.src = src; el.onload = ok; el.onerror = () => bad(new Error('终端组件加载失败'));
+      document.head.appendChild(el);
+    });
+    const css = document.createElement('link');
+    css.rel = 'stylesheet'; css.href = 'xterm/xterm.css';
+    document.head.appendChild(css);
+    xtermLoading = script('xterm/xterm.js').then(() => script('xterm/addon-fit.js'));
+    xtermLoading.catch(() => { xtermLoading = null; });
+  }
+  return xtermLoading;
+}
+const TERM_THEME = {
+  background: '#1c1c1e', foreground: '#e8e8ed', cursor: '#0a84ff', cursorAccent: '#1c1c1e',
+  selectionBackground: 'rgba(10, 132, 255, 0.35)',
+};
+
+// Terminals on servers, one tab each. They are the user's own hands on
+// the server: nothing typed here goes through the AI or the checklists.
+const TerminalPage = {
+  props: { servers: { type: Array, default: () => [] }, active: Boolean, request: Object },
+  setup(props) {
+    const tabs = ref([]); // {key, id, serverId, name, state: connecting|open|ended|error, error}
+    const current = ref('');
+    const pick = ref(props.servers.length ? props.servers[0].id : 0);
+    watch(() => props.servers, list => { if (!list.some(s => s.id === pick.value)) pick.value = list.length ? list[0].id : 0; });
+    const live = new Map(); // key -> {term, fit, ctl, queue, sending, ro, el}
+    let n = 0;
+    const tabOf = key => tabs.value.find(t => t.key === key);
+
+    function setBox(key, el) { if (el) { const l = live.get(key) || {}; l.el = el; live.set(key, l); } }
+    function fitNow(key) {
+      const l = live.get(key);
+      if (l && l.fit && l.el && l.el.offsetWidth > 0) { try { l.fit.fit(); } catch { /* not laid out yet */ } }
+    }
+    async function makeTerm(key) {
+      await loadXterm();
+      await nextTick();
+      const l = live.get(key);
+      const term = new window.Terminal({
+        fontFamily: '"SF Mono", Menlo, Consolas, "Cascadia Mono", "Microsoft YaHei Mono", monospace',
+        fontSize: 13, lineHeight: 1.15, cursorBlink: true, scrollback: 5000, theme: TERM_THEME, allowProposedApi: false,
+      });
+      const fit = new window.FitAddon.FitAddon();
+      term.loadAddon(fit);
+      term.open(l.el);
+      // Ctrl+C copies when something is selected (like Windows Terminal);
+      // Ctrl+V pastes through the browser.
+      term.attachCustomKeyEventHandler(e => {
+        if (e.type !== 'keydown' || !e.ctrlKey) return true;
+        const k = e.key.toLowerCase();
+        if (k === 'c' && (term.hasSelection() || e.shiftKey)) {
+          if (term.hasSelection() && navigator.clipboard) navigator.clipboard.writeText(term.getSelection()).catch(() => {});
+          term.clearSelection();
+          return false;
+        }
+        if (k === 'v') return false;
+        return true;
+      });
+      Object.assign(l, { term, fit, queue: '', sending: false });
+      l.ro = new ResizeObserver(() => fitNow(key));
+      l.ro.observe(l.el);
+      fitNow(key);
+      let timer = null;
+      term.onResize(({ cols, rows }) => {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          const t = tabOf(key);
+          if (t && t.id && t.state === 'open') api('POST', `/api/terminals/${t.id}/resize`, { cols, rows }).catch(() => {});
+        }, 150);
+      });
+      term.onData(d => send(key, d));
+      return l;
+    }
+    function send(key, data) {
+      const l = live.get(key), t = tabOf(key);
+      if (!l || !t || t.state !== 'open') return;
+      l.queue += data;
+      if (!l.sending) flush(key);
+    }
+    async function flush(key) {
+      const l = live.get(key), t = tabOf(key);
+      l.sending = true;
+      while (l.queue && t && t.state === 'open') {
+        const data = l.queue;
+        l.queue = '';
+        try { await api('POST', `/api/terminals/${t.id}/input`, { data }); }
+        catch { l.queue = ''; break; }
+      }
+      l.sending = false;
+    }
+    // attach streams the terminal's output into the tab until it ends.
+    async function attach(key) {
+      const t = tabOf(key), l = live.get(key);
+      l.ctl = new AbortController();
+      t.state = 'open';
+      try {
+        const res = await fetch(`/api/terminals/${t.id}/output`, { headers: { 'X-Miao': '1' }, credentials: 'same-origin', signal: l.ctl.signal });
+        if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `连接失败（${res.status}）`); }
+        const reader = res.body.getReader();
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          l.term.write(value);
+        }
+        t.state = 'ended';
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+        t.state = 'error'; t.error = e.message;
+      }
+    }
+    async function open(serverId) {
+      const sv = props.servers.find(s => s.id === serverId);
+      if (!sv) return;
+      const key = 'k' + (++n);
+      tabs.value.push({ key, id: '', serverId, name: sv.name, state: 'connecting', error: '' });
+      current.value = key;
+      await connect(key);
+    }
+    async function connect(key) {
+      const t = tabOf(key);
+      t.state = 'connecting'; t.error = '';
+      try {
+        const l = live.get(key) && live.get(key).term ? live.get(key) : await makeTerm(key);
+        const v = await api('POST', `/api/servers/${t.serverId}/terminal`, { cols: l.term.cols, rows: l.term.rows });
+        t.id = v.id;
+        attach(key);
+        l.term.focus();
+      } catch (e) { t.state = 'error'; t.error = e.message; }
+    }
+    function reconnect(key) {
+      const l = live.get(key);
+      if (l && l.term) l.term.write('\r\n\x1b[90m[重新连接……]\x1b[0m\r\n');
+      connect(key);
+    }
+    async function close(key) {
+      const t = tabOf(key);
+      if (!t) return;
+      if (t.state === 'open' && !confirm(`关闭「${t.name}」的终端？正在运行的命令会被结束。`)) return;
+      const l = live.get(key);
+      if (l) {
+        if (l.ctl) l.ctl.abort();
+        if (l.ro) l.ro.disconnect();
+        if (l.term) l.term.dispose();
+        live.delete(key);
+      }
+      if (t.id && t.state === 'open') api('DELETE', `/api/terminals/${t.id}`).catch(() => {});
+      const i = tabs.value.indexOf(t);
+      tabs.value.splice(i, 1);
+      if (current.value === key) current.value = tabs.value.length ? tabs.value[Math.max(0, i - 1)].key : '';
+    }
+    function show(key) {
+      current.value = key;
+      nextTick(() => { fitNow(key); const l = live.get(key); if (l && l.term) l.term.focus(); });
+    }
+    // Terminals still open on the server (e.g. after the page reloaded).
+    onMounted(async () => {
+      try {
+        const list = await api('GET', '/api/terminals');
+        for (const v of list.filter(v => !v.ended)) {
+          const key = 'k' + (++n);
+          tabs.value.push({ key, id: v.id, serverId: v.serverId, name: v.serverName, state: 'connecting', error: '' });
+          current.value = key;
+          await makeTerm(key);
+          attach(key);
+        }
+      } catch { /* none to restore */ }
+      if (props.request) onRequest(props.request);
+    });
+    function onRequest(r) {
+      if (!r) return;
+      const existing = tabs.value.find(t => t.serverId === r.serverId && t.state === 'open');
+      if (existing) show(existing.key); else open(r.serverId);
+    }
+    watch(() => props.request, onRequest);
+    watch(() => props.active, on => { if (on && current.value) show(current.value); });
+    onUnmounted(() => { for (const [, l] of live) { if (l.ctl) l.ctl.abort(); if (l.ro) l.ro.disconnect(); if (l.term) l.term.dispose(); } });
+    const stateText = t => ({ connecting: '正在连接……', ended: '已结束', error: '出错' }[t.state] || '');
+    return { tabs, current, pick, setBox, open, close, show, reconnect, stateText };
+  },
+  template: `
+  <div class="term-page">
+    <div class="term-bar">
+      <div class="term-tabs" role="tablist">
+        <div v-for="t in tabs" :key="t.key" class="term-tab" :class="{on: current === t.key, off: t.state !== 'open'}" role="tab" :aria-selected="current === t.key" @click="show(t.key)">
+          <ui-icon name="prompt"></ui-icon><span class="name">{{ t.name }}</span><span class="small tertiary" v-if="stateText(t)">{{ stateText(t) }}</span>
+          <button class="plain icon-only" title="关闭" aria-label="关闭终端" @click.stop="close(t.key)"><ui-icon name="close"></ui-icon></button>
+        </div>
+      </div>
+      <span class="grow"></span>
+      <select v-model="pick" aria-label="服务器" v-if="servers.length > 1"><option v-for="s in servers" :key="s.id" :value="s.id">{{ s.name }}</option></select>
+      <button @click="open(pick)" :disabled="!pick"><ui-icon name="plus"></ui-icon>新建终端</button>
+    </div>
+    <div class="term-body">
+      <div class="term-empty" v-if="!tabs.length">
+        <ui-icon name="prompt" class="lg"></ui-icon>
+        <p v-if="servers.length">选择服务器，打开一个命令行终端（SSH），可以直接在服务器上敲命令。</p>
+        <p v-else>先在左边添加服务器。</p>
+        <div class="term-picks"><button v-for="s in servers" :key="s.id" @click="open(s.id)">{{ s.name }}</button></div>
+        <p class="small tertiary">终端里的命令直接在服务器上执行，不经过 AI 检查，也不会自动备份，请确认后再回车。</p>
+      </div>
+      <div v-for="t in tabs" :key="t.key" class="term-wrap" v-show="current === t.key">
+        <div class="term-box" :ref="el => setBox(t.key, el)"></div>
+        <div class="term-over" v-if="t.state === 'error' || t.state === 'ended'">
+          <span :class="t.state === 'error' ? 'st-crit' : ''">{{ t.state === 'error' ? t.error : '会话已结束' }}</span>
+          <button @click="reconnect(t.key)"><ui-icon name="refresh"></ui-icon>重新连接</button>
+        </div>
+      </div>
     </div>
   </div>`,
 };
@@ -906,6 +1327,12 @@ const app = createApp({
       await guarded('正在清除……', async () => { setTencent(await api('DELETE', '/api/settings/tencent')); });
     }
     const seen = reactive({}); // pages opened at least once stay mounted
+    const termRequest = ref(null);
+    function openTerminal(serverId) { termRequest.value = { serverId, at: Date.now() }; go('terminal'); }
+    // 网站统计 shows the access logs or EdgeOne; remembered per viewer.
+    const statsView = ref((() => { try { return localStorage.getItem('miao.statsView') || 'logs'; } catch { return 'logs'; } })());
+    const statsSeen = reactive({ [statsView.value]: true });
+    watch(statsView, v => { statsSeen[v] = true; try { localStorage.setItem('miao.statsView', v); } catch { /* not kept */ } });
     function go(id) {
       tab.value = id;
       seen[id] = true;
@@ -1216,7 +1643,8 @@ const app = createApp({
     const toolName = t => ({ list_servers: '查看服务器列表', get_server_profile: '读取服务器画像', refresh_server_profile: '重新识别服务器',
       run_check: '执行只读检查', propose_plan: '生成修改清单', tencent_dns: '查询 DNSPod 解析', tencent_eo: '查询 EdgeOne',
       tencent_servers: '查询腾讯云服务器', tencent_server_detail: '查看腾讯云服务器详情', tencent_eo_analytics: '分析网站访问数据',
-      certificates: '查看 HTTPS 证书', tencent_eo_security: '查看 EdgeOne 安全防护', panel_websites: '查看 1Panel 网站' }[t] || t);
+      certificates: '查看 HTTPS 证书', tencent_eo_security: '查看 EdgeOne 安全防护', panel_websites: '查看 1Panel 网站',
+      site_visits: '统计网站访问日志' }[t] || t);
     // What a lookup is about, in a few words: the server, domain, checks.
     function toolDetail(tool, args) {
       let a;
@@ -1224,14 +1652,16 @@ const app = createApp({
       if (!a || typeof a !== 'object') return '';
       const parts = [];
       if (a.server_id != null) parts.push(serverName(a.server_id));
-      for (const k of ['domain', 'zone', 'instance', 'title']) if (a[k]) parts.push(String(a[k]));
+      for (const k of ['domain', 'site', 'zone', 'instance', 'title']) if (a[k]) parts.push(String(a[k]));
+      if (a.days) parts.push(a.days === 1 ? '今天' : `${a.days} 天`);
       if (Array.isArray(a.checks) && a.checks.length) parts.push(a.checks.join('、'));
       return parts.join(' · ');
     }
     const actorName = a => ({ user: '你', ai: 'AI', system: '系统' }[a] || a);
     const actionName = a => ({ 'server.add': '添加服务器', 'server.delete': '删除服务器', 'server.test': '测试连接', 'server.discover': '识别环境',
       'server.hostkey.recorded': '记录服务器指纹', 'settings.ai': '修改 AI 设置', 'ai.chat': 'AI 对话', 'plan.propose': 'AI 生成清单',
-      'plan.execute': '执行清单', 'plan.step': '执行步骤', 'plan.undo': '撤销步骤', 'exec.rollback': '回滚', 'onepanel.settings': '修改 1Panel 接口设置', 'settings.tencent': '修改腾讯云密钥' }[a] || a);
+      'plan.execute': '执行清单', 'plan.step': '执行步骤', 'plan.undo': '撤销步骤', 'exec.rollback': '回滚', 'onepanel.settings': '修改 1Panel 接口设置', 'settings.tencent': '修改腾讯云密钥',
+      'terminal.open': '打开终端', 'terminal.close': '关闭终端' }[a] || a);
 
     onMounted(async () => {
       try {
@@ -1248,7 +1678,7 @@ const app = createApp({
       spendText, plans, audit, logView, logFocus, loadAudit, openLog, showAdd, addForm, messages, draft, chatBusy, msgBox, suggestions,
       select, openAdd, addServer, testConn, discover, removeServer, askAbout, send, onEnter, newChat, applyPreset, saveAI, testAI,
       convs, showConvs, conversationId, openConv, deleteConv, relTime,
-      op, saveOnePanel, testOnePanel, tc, saveTencent, testTencent, clearTencent, freeCmd, setFree, seen,
+      op, saveOnePanel, testOnePanel, tc, saveTencent, testTencent, clearTencent, freeCmd, setFree, seen, statsView, statsSeen, termRequest, openTerminal,
       cloud, cloudList, cloudPick, pickCloud, askAI, daysTo, fmtBytes,
       memPct, rootDisk, envSub, dockerText, money, mb, meterClass, levelClass, levelIcon, levelName, riskName, adapterName,
       fmtTime, serverName, parseSteps, toolName, toolDetail, actorName, actionName, md, live, liveStatus, thinkTail, stopAnswer,
@@ -1260,6 +1690,8 @@ app.component('plan-card', PlanCard);
 app.component('exec-log', ExecLog);
 app.component('line-chart', LineChart);
 app.component('eo-stats', EoStats);
+app.component('visit-stats', VisitStats);
+app.component('terminal-page', TerminalPage);
 app.component('cert-page', CertPage);
 app.component('ui-icon', {
   props: { name: { type: String, required: true } },

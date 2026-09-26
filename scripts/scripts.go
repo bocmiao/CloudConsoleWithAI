@@ -29,6 +29,12 @@ func ValidSection(name string) bool {
 	return false
 }
 
+// SiteLogs counts website visits from access logs (read-only). Its one
+// argument is the number of days; see the header of sitelogs.sh.
+//
+//go:embed sitelogs.sh
+var SiteLogs string
+
 //go:embed actions/*.sh
 var actions embed.FS
 

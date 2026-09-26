@@ -3,12 +3,16 @@ package api
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/bocmiao/CloudConsoleWithAI/internal/app"
+	"github.com/bocmiao/CloudConsoleWithAI/internal/sshx/sshtest"
 )
 
 // streamModel streams an answer in two pieces, then, for the next
@@ -136,5 +140,54 @@ func TestChatStreamAndStop(t *testing.T) {
 	}
 	if w := do(s, "POST", "/api/chat/stream", "127.0.0.1:18765", `{"message":" "}`, true); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "请输入问题") {
 		t.Fatalf("empty question: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestTerminalOverHTTP(t *testing.T) {
+	s := newServer(t)
+	ssh := sshtest.Start(t, "root", "pw")
+	sv, err := s.app.AddServer(app.AddServerRequest{Name: "blog", Host: ssh.Host, Port: ssh.Port, Username: "root", AuthKind: "password", Password: "pw"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(s)
+	defer srv.Close()
+	resp := post(t, srv.URL, fmt.Sprintf("/api/servers/%d/terminal", sv.ID), `{"cols":90,"rows":30}`)
+	var term app.TerminalView
+	_ = json.NewDecoder(resp.Body).Decode(&term)
+	resp.Body.Close()
+	if term.ID == "" {
+		t.Fatalf("open: %d", resp.StatusCode)
+	}
+	req, _ := http.NewRequest("GET", srv.URL+"/api/terminals/"+term.ID+"/output", nil)
+	req.Host = "127.0.0.1:18765"
+	req.AddCookie(&http.Cookie{Name: cookieName, Value: "tok"})
+	req.Header.Set("X-Miao", "1")
+	out, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer out.Body.Close()
+	if ct := out.Header.Get("Content-Type"); ct != "application/octet-stream" {
+		t.Fatalf("content type %q", ct)
+	}
+	post(t, srv.URL, "/api/terminals/"+term.ID+"/input", `{"data":"echo via-$((6*7))\n"}`).Body.Close()
+	got := make([]byte, 0, 1024)
+	buf := make([]byte, 1024)
+	for !strings.Contains(string(got), "via-42") {
+		n, err := out.Body.Read(buf)
+		got = append(got, buf[:n]...)
+		if err != nil {
+			t.Fatalf("output ended early: %q %v", got, err)
+		}
+	}
+	if w := do(s, "POST", "/api/terminals/"+term.ID+"/resize", "127.0.0.1:18765", `{"cols":120,"rows":40}`, true); w.Code != 200 {
+		t.Fatalf("resize: %d %s", w.Code, w.Body.String())
+	}
+	if w := do(s, "DELETE", "/api/terminals/"+term.ID, "127.0.0.1:18765", "", true); w.Code != 200 {
+		t.Fatalf("close: %d", w.Code)
+	}
+	if w := do(s, "POST", "/api/terminals/"+term.ID+"/input", "127.0.0.1:18765", `{"data":"ls\n"}`, true); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "关闭") {
+		t.Fatalf("input after close: %d %s", w.Code, w.Body.String())
 	}
 }

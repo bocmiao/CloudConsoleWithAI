@@ -44,6 +44,8 @@ type App struct {
 	locks     serverLocks
 	cloud     cloudCache
 	certs     certCache
+	visits    visitsCache
+	terms     terminals
 	eoReports eoReportCache
 }
 

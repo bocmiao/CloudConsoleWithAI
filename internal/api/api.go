@@ -66,6 +66,13 @@ func New(a *app.App, token string, port int, version string) *Server {
 	api("POST /api/settings/tencent/test", s.testTencent)
 	api("GET /api/tencent/servers", s.tencentServers)
 	api("GET /api/servers/{id}/cloud", s.serverCloud)
+	api("GET /api/servers/{id}/visits", s.serverVisits)
+	api("POST /api/servers/{id}/terminal", s.openTerminal)
+	api("GET /api/terminals", s.listTerminals)
+	api("GET /api/terminals/{tid}/output", s.terminalOutput)
+	api("POST /api/terminals/{tid}/input", s.terminalInput)
+	api("POST /api/terminals/{tid}/resize", s.resizeTerminal)
+	api("DELETE /api/terminals/{tid}", s.closeTerminal)
 	api("GET /api/eo/sites", s.eoSites)
 	api("GET /api/eo/analytics", s.eoAnalytics)
 	api("POST /api/chat", s.chat)
@@ -250,6 +257,95 @@ func (s *Server) testAI(_ http.ResponseWriter, r *http.Request) (any, error) {
 	defer cancel()
 	text, err := s.app.TestAI(ctx)
 	return map[string]string{"reply": text}, err
+}
+
+// serverVisits answers at once with the last visits report for the range
+// (refreshing it in the background when old); wait=1 waits for a current
+// one and refresh=1 counts again.
+func (s *Server) serverVisits(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	q := r.URL.Query()
+	days, _ := strconv.Atoi(q.Get("days"))
+	if days == 0 {
+		days = 7
+	}
+	if q.Get("refresh") == "1" || q.Get("wait") == "1" {
+		return s.app.SiteVisits(r.Context(), id, days, q.Get("refresh") == "1")
+	}
+	return s.app.LatestSiteVisits(r.Context(), id, days)
+}
+
+type termSize struct {
+	Cols int `json:"cols"`
+	Rows int `json:"rows"`
+}
+
+func (s *Server) openTerminal(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	var req termSize
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
+	defer cancel()
+	return s.app.OpenTerminal(ctx, id, req.Cols, req.Rows)
+}
+
+func (s *Server) listTerminals(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return s.app.Terminals(), nil
+}
+
+// terminalOutput streams what the terminal prints, as raw bytes: the
+// recent backlog, then new output as it comes, until the shell ends.
+func (s *Server) terminalOutput(w http.ResponseWriter, r *http.Request) (any, error) {
+	rc := http.NewResponseController(w)
+	started := false
+	err := s.app.TerminalOutput(r.Context(), r.PathValue("tid"), func(p []byte) error {
+		if !started {
+			started = true
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(http.StatusOK)
+		}
+		if len(p) > 0 {
+			if _, err := w.Write(p); err != nil {
+				return err
+			}
+		}
+		return rc.Flush()
+	})
+	if err != nil && !started {
+		return nil, err
+	}
+	return streamed{}, nil
+}
+
+func (s *Server) terminalInput(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req struct {
+		Data string `json:"data"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return map[string]bool{"ok": true}, s.app.TerminalInput(r.PathValue("tid"), req.Data)
+}
+
+func (s *Server) resizeTerminal(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req termSize
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return map[string]bool{"ok": true}, s.app.ResizeTerminal(r.PathValue("tid"), req.Cols, req.Rows)
+}
+
+func (s *Server) closeTerminal(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return map[string]bool{"ok": true}, s.app.CloseTerminal(r.PathValue("tid"))
 }
 
 // getCertificates answers at once with the last overview (refreshing it in

@@ -48,6 +48,8 @@ const systemPrompt = `你是 Miao Panel（喵面板）里的服务器运维助�
   清单的 server_id 填对应的 Miao Panel 服务器编号，没有就填 0；
 - 重启、关机或其他大改动前，建议先加一步 cloud.snapshot.create；到期不足 15 天、流量包用量超过 80% 要主动提醒用户。
 
+网站访问量（每天的 PV、UV、独立 IP，访问了哪些页面、从哪里来、哪些 IP、爬虫、状态码、手机还是电脑）：用 site_visits，它统计服务器上网站的访问日志，可以看全部网站合计，也可以用 site 只看一个网站。
+经过 EdgeOne 的网站，被 EdgeOne 缓存的请求（主要是图片、脚本等静态文件）不会到服务器，所以请求数、流量以 EdgeOne 为准，PV、UV、IP 以访问日志为准。
 网站访问分析（EdgeOne）：用 tencent_eo_analytics。
 - 先用 overview 看整体数据和请求最多的时段；要解释变化（例如「流量为什么涨了」）时，在变化的时段和之前正常的时段分别用 top 查 url、ip、country、ua、referer、status，
   对比找出增长来自哪里，判断是真实访客增长、搜索引擎或爬虫、热点内容，还是刷量/攻击；结论要引用具体的数字、时间和占比；
@@ -158,6 +160,17 @@ func (a *App) tools() map[string]ai.Tool {
 				"domain":  map[string]any{"type": "string"},
 			}),
 		}, Run: a.toolCertificates},
+		{Def: ai.ToolDef{
+			Name: "site_visits",
+			Description: "统计一台服务器上网站的访问日志（只读，1Panel、宝塔或 Nginx）：每个网站和全部网站合计的每天 PV、UV、独立 IP、请求数、爬虫、流量、4xx/5xx，" +
+				"以及受访页面、来源、访客 IP、状态码、爬虫、设备的排行。days 是天数（1 表示今天，默认 7，最多 31）；site 只看一个网站；结果缓存 3 分钟，refresh=true 重新统计。",
+			Schema: obj(map[string]any{
+				"server_id": serverIDProp,
+				"days":      map[string]any{"type": "integer", "minimum": 1, "maximum": 31},
+				"site":      map[string]any{"type": "string", "description": "网站域名，不填就是全部网站"},
+				"refresh":   map[string]any{"type": "boolean"},
+			}, "server_id"),
+		}, Run: a.toolSiteVisits},
 		{Def: ai.ToolDef{
 			Name:        "tencent_eo_security",
 			Description: "查看 EdgeOne 站点的安全防护（只读）：自定义规则（包括 Miao Panel 的封禁 IP 列表）、速率限制规则、CC 防护（自适应频控等）和托管规则的开关。",
