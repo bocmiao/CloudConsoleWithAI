@@ -511,7 +511,9 @@ func visitsReport(v VisitsView, name, date string) string {
 			}
 		}
 	}
-	sort.Slice(sites, func(i, j int) bool { return sites[i].pv > sites[j].pv || sites[i].pv == sites[j].pv && sites[i].name < sites[j].name })
+	sort.Slice(sites, func(i, j int) bool {
+		return sites[i].pv > sites[j].pv || sites[i].pv == sites[j].pv && sites[i].name < sites[j].name
+	})
 	if len(sites) > 1 {
 		var s []string
 		for i, x := range sites {
