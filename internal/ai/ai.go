@@ -63,8 +63,19 @@ type Session interface {
 	AddAssistant(text string)
 	AddToolResults(results []ToolResult)
 	// Next sends everything added since the last call and returns the
-	// model's turn, which is appended to the history.
-	Next(ctx context.Context) (Turn, error)
+	// model's turn, which is appended to the history. With onDelta the
+	// turn is streamed and onDelta sees it as it is generated.
+	Next(ctx context.Context, onDelta func(Delta)) (Turn, error)
+}
+
+// Delta is a piece of a turn as the model generates it.
+type Delta struct {
+	Text      string // more of the answer
+	Reasoning string // more of the model's thinking, for models that show it
+	Tool      string // a tool call to this tool has begun
+	// Reset: forget the text so far, the turn is being generated again
+	// (a declined turn re-served by the fallback model).
+	Reset bool
 }
 
 // Provider kinds.

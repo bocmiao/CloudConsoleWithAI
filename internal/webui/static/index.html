@@ -258,18 +258,37 @@
                 </details>
                 <div v-html="md(m.text)"></div>
                 <plan-card v-for="pl in m.plans" :key="pl.id" :plan="pl" :server-name="serverName(pl.serverId)"></plan-card>
-                <div class="msg-meta" v-if="m.usage">本次约 {{ money(m.cost, m.currency) }} · 输入 {{ m.usage.input }} tokens（缓存 {{ m.usage.cachedInput }}）· 输出 {{ m.usage.output }}</div>
+                <div class="msg-meta" v-if="m.usage && m.usage.input + m.usage.output > 0">本次约 {{ money(m.cost, m.currency) }} · 输入 {{ m.usage.input }} tokens（缓存 {{ m.usage.cachedInput }}）· 输出 {{ m.usage.output }}</div>
               </div>
             </div>
-            <div class="msg" v-if="chatBusy"><div class="typing"><span class="spinner"></span>正在查看服务器数据……</div></div>
+            <!-- The answer as it is being written. -->
+            <div class="msg" v-if="live">
+              <div class="answer">
+                <div class="live-steps" v-if="live.steps.length">
+                  <template v-for="(s, j) in live.steps" :key="j">
+                    <div class="live-note" v-if="s.kind === 'note'" v-html="md(s.text)"></div>
+                    <div class="live-step" v-else>
+                      <span class="spinner inline" v-if="s.state === 'prepare' || s.state === 'run'"></span>
+                      <ui-icon v-else :name="s.state === 'err' ? 'alert' : 'check'" :class="s.state === 'err' ? 'st-crit' : 'st-ok'"></ui-icon>
+                      <span class="grow">{{ toolName(s.tool) }}<span class="tertiary" v-if="toolDetail(s.tool, s.args)"> · {{ toolDetail(s.tool, s.args) }}</span>
+                        <span class="st-crit small" v-if="s.error"> — {{ s.error.length > 80 ? s.error.slice(0, 80) + '…' : s.error }}</span></span>
+                    </div>
+                  </template>
+                </div>
+                <div class="live-text" v-if="live.text" v-html="md(live.text)"></div>
+                <div class="typing" v-if="liveStatus"><span class="spinner"></span>{{ liveStatus }}</div>
+                <div class="think-tail" v-if="live.thinking && !live.text && !liveStatus.startsWith('正在停止')">{{ thinkTail(live.thinking) }}</div>
+              </div>
+            </div>
           </div>
         </div>
         <div class="composer-wrap">
           <div class="composer">
-            <textarea v-model="draft" placeholder="问点什么，比如：服务器内存为什么这么高？" @keydown.enter.exact="onEnter" :disabled="chatBusy" aria-label="输入问题"></textarea>
-            <button class="primary send" @click="send" :disabled="chatBusy || !draft.trim()" title="发送" aria-label="发送"><ui-icon name="arrow-up"></ui-icon></button>
+            <textarea v-model="draft" placeholder="问点什么，比如：服务器内存为什么这么高？" @keydown.enter.exact="onEnter" aria-label="输入问题"></textarea>
+            <button class="send stop" v-if="chatBusy" @click="stopAnswer" :disabled="!live || live.stopping" title="停止回答" aria-label="停止回答"><ui-icon name="stop"></ui-icon></button>
+            <button class="primary send" v-else @click="send" :disabled="!draft.trim()" title="发送" aria-label="发送"><ui-icon name="arrow-up"></ui-icon></button>
           </div>
-          <div class="composer-hint"><span>Enter 发送，Shift + Enter 换行</span><span>任何修改都要你确认后才会执行</span></div>
+          <div class="composer-hint"><span>{{ chatBusy ? 'AI 正在回答，可以点 ■ 停止' : 'Enter 发送，Shift + Enter 换行' }}</span><span>任何修改都要你确认后才会执行</span></div>
         </div>
       </div>
       </div>

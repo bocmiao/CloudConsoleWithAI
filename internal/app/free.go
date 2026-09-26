@@ -261,7 +261,7 @@ func (a *App) reviewFree(ctx context.Context, fc *core.FreeCheck) (verdict, erro
 			return verdict{}, err
 		}
 		sess.AddUser(prompt)
-		turn, err := sess.Next(ctx)
+		turn, err := sess.Next(ctx, nil)
 		if turn.Usage.Input+turn.Usage.Output > 0 {
 			_ = a.Store.AddUsage(store.Usage{Model: settings.Model, InputTokens: turn.Usage.Input, CachedTokens: turn.Usage.CachedInput,
 				OutputTokens: turn.Usage.Output, Cost: settings.Cost(turn.Usage), Currency: settings.Currency})

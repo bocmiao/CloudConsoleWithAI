@@ -40,6 +40,7 @@ type App struct {
 
 	mu        sync.Mutex
 	convs     map[string]*conversation
+	stops     map[string]context.CancelFunc // answers being given, by conversation
 	locks     serverLocks
 	cloud     cloudCache
 	certs     certCache
@@ -48,7 +49,7 @@ type App struct {
 
 // New creates an App.
 func New(st *store.Store, sec secrets.Store) *App {
-	a := &App{Store: st, Secrets: sec, Dial: sshx.Dial, convs: map[string]*conversation{}}
+	a := &App{Store: st, Secrets: sec, Dial: sshx.Dial, convs: map[string]*conversation{}, stops: map[string]context.CancelFunc{}}
 	a.recoverInterrupted()
 	return a
 }

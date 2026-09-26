@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bocmiao/CloudConsoleWithAI/internal/ai"
@@ -68,6 +69,8 @@ func New(a *app.App, token string, port int, version string) *Server {
 	api("GET /api/eo/sites", s.eoSites)
 	api("GET /api/eo/analytics", s.eoAnalytics)
 	api("POST /api/chat", s.chat)
+	api("POST /api/chat/stream", s.chatStream)
+	api("POST /api/chat/stop", s.chatStop)
 	api("GET /api/conversations", s.conversations)
 	api("GET /api/conversations/{id}", s.conversation)
 	api("DELETE /api/conversations/{id}", s.deleteConversation)
@@ -138,6 +141,9 @@ func (s *Server) guard(h func(w http.ResponseWriter, r *http.Request) (any, erro
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		v, err := h(w, r)
+		if _, ok := v.(streamed); ok && err == nil {
+			return // the handler wrote the response itself
+		}
 		if err != nil {
 			var ue *app.UserError
 			switch {
@@ -246,8 +252,15 @@ func (s *Server) testAI(_ http.ResponseWriter, r *http.Request) (any, error) {
 	return map[string]string{"reply": text}, err
 }
 
+// getCertificates answers at once with the last overview (refreshing it in
+// the background when old); wait=1 waits for a current one and refresh=1
+// gathers a new one.
 func (s *Server) getCertificates(_ http.ResponseWriter, r *http.Request) (any, error) {
-	return s.app.Certificates(r.Context(), r.URL.Query().Get("refresh") == "1")
+	q := r.URL.Query()
+	if q.Get("refresh") == "1" || q.Get("wait") == "1" {
+		return s.app.Certificates(r.Context(), q.Get("refresh") == "1")
+	}
+	return s.app.LatestCertificates(r.Context())
 }
 
 func (s *Server) getFreeCommand(_ http.ResponseWriter, _ *http.Request) (any, error) {
@@ -324,6 +337,59 @@ func (s *Server) chat(_ http.ResponseWriter, r *http.Request) (any, error) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 	defer cancel()
 	return s.app.Chat(ctx, req.ConversationID, req.Message)
+}
+
+// streamed is returned by handlers that wrote their response as it went.
+type streamed struct{}
+
+// chatStream answers like chat, but as newline-delimited JSON events while
+// the AI works: "start", then text, thinking, tool steps and so on (see
+// ai.Event), and finally "done" with the whole reply.
+func (s *Server) chatStream(w http.ResponseWriter, r *http.Request) (any, error) {
+	var req struct {
+		ConversationID string `json:"conversationId"`
+		Message        string `json:"message"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+	defer cancel()
+	rc := http.NewResponseController(w)
+	var mu sync.Mutex
+	started := false
+	send := func(v any) {
+		mu.Lock()
+		defer mu.Unlock()
+		if !started {
+			started = true
+			w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(http.StatusOK)
+		}
+		data, _ := json.Marshal(v)
+		_, _ = w.Write(append(data, '\n'))
+		_ = rc.Flush()
+	}
+	reply, err := s.app.ChatStream(ctx, req.ConversationID, req.Message, func(e app.ChatEvent) { send(e) })
+	if err != nil && !started {
+		return nil, err // nothing sent yet: an ordinary error response
+	}
+	if err != nil {
+		reply.Error = "出错了：" + err.Error()
+	}
+	send(map[string]any{"type": "done", "reply": reply})
+	return streamed{}, nil
+}
+
+func (s *Server) chatStop(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req struct {
+		ConversationID string `json:"conversationId"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return map[string]bool{"stopped": s.app.StopChat(req.ConversationID)}, nil
 }
 
 func (s *Server) conversations(_ http.ResponseWriter, _ *http.Request) (any, error) {

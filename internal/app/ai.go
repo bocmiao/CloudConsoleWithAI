@@ -111,7 +111,7 @@ func (a *App) TestAI(ctx context.Context) (string, error) {
 		return "", err
 	}
 	sess.AddUser("请只回复两个字：你好")
-	turn, err := sess.Next(ctx)
+	turn, err := sess.Next(ctx, nil)
 	if err != nil {
 		return "", userErr("连接 AI 模型失败：%v", err)
 	}
@@ -211,9 +211,22 @@ func newID() string {
 	return hex.EncodeToString(b)
 }
 
+// ChatEvent is one piece of an answer being streamed: the conversation it
+// is in first ("start"), then what the AI says and looks up as it goes.
+type ChatEvent struct {
+	ai.Event
+	ConversationID string `json:"conversationId,omitempty"`
+}
+
 // Chat sends a user message in a conversation, creating it if needed.
 // Questions and answers are saved, so conversations survive restarts.
 func (a *App) Chat(ctx context.Context, convID, text string) (ChatReply, error) {
+	return a.ChatStream(ctx, convID, text, nil)
+}
+
+// ChatStream is Chat with the answer streamed to on as it is generated.
+// StopChat ends it early; what was said by then is kept.
+func (a *App) ChatStream(ctx context.Context, convID, text string, on func(ChatEvent)) (ChatReply, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return ChatReply{}, userErr("请输入问题")
@@ -238,13 +251,28 @@ func (a *App) Chat(ctx context.Context, convID, text string) (ChatReply, error) 
 
 	conv.mu.Lock()
 	defer conv.mu.Unlock()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	a.mu.Lock()
+	a.stops[convID] = cancel
+	a.mu.Unlock()
+	defer func() {
+		a.mu.Lock()
+		delete(a.stops, convID)
+		a.mu.Unlock()
+	}()
 	_, _ = a.Store.AddChatMessage(convID, "user", text, "")
 	ask := text
 	if restored {
 		ask = restoredNote + text
 	}
+	var onEvent func(ai.Event)
+	if on != nil {
+		on(ChatEvent{Event: ai.Event{Type: "start"}, ConversationID: convID})
+		onEvent = func(e ai.Event) { on(ChatEvent{Event: e}) }
+	}
 	collector := &planCollector{}
-	reply, err := conv.agent.Ask(withOrigin(context.WithValue(ctx, planCollectorKey{}, collector), OriginAI), ask)
+	reply, err := conv.agent.Ask(withOrigin(context.WithValue(ctx, planCollectorKey{}, collector), OriginAI), ask, onEvent)
 	cost := settings.Cost(reply.Usage)
 	if reply.Usage.Input+reply.Usage.Output > 0 {
 		_ = a.Store.AddUsage(store.Usage{
@@ -253,28 +281,43 @@ func (a *App) Chat(ctx context.Context, convID, text string) (ChatReply, error) 
 		})
 	}
 	out := ChatReply{ConversationID: convID, Reply: reply, Cost: cost, Currency: settings.Currency, Plans: []PlanView{}}
-	if err != nil {
-		var ue *UserError
-		switch {
-		case errors.As(err, &ue):
-			out.Error = ue.Msg
-		case errors.Is(err, context.Canceled):
-			out.Error = "已取消"
-		default:
-			out.Error = fmt.Sprintf("AI 回答失败：%v", err)
-		}
-		_, _ = a.Store.AddChatMessage(convID, "error", out.Error, "")
-		return out, nil
-	}
-	_ = a.Store.Audit("ai", "ai.chat", settings.Model, fmt.Sprintf("查询 %d 次", len(reply.Steps)))
 	for _, id := range collector.ids {
 		if v, err := a.Plan(id); err == nil {
 			out.Plans = append(out.Plans, v)
 		}
 	}
 	extra, _ := json.Marshal(messageExtra{Steps: reply.Steps, Usage: reply.Usage, Cost: cost, Currency: settings.Currency, PlanIDs: collector.ids})
+	if err != nil {
+		var ue *UserError
+		switch {
+		case errors.As(err, &ue):
+			out.Error = ue.Msg
+		case errors.Is(err, context.Canceled):
+			out.Error = "已停止回答"
+		default:
+			out.Error = fmt.Sprintf("AI 回答失败：%v", err)
+		}
+		// Keep what it had said and looked up, and any checklist it made.
+		if reply.Text != "" || len(reply.Steps) > 0 || len(collector.ids) > 0 {
+			_, _ = a.Store.AddChatMessage(convID, "assistant", reply.Text, string(extra))
+		}
+		_, _ = a.Store.AddChatMessage(convID, "error", out.Error, "")
+		return out, nil
+	}
+	_ = a.Store.Audit("ai", "ai.chat", settings.Model, fmt.Sprintf("查询 %d 次", len(reply.Steps)))
 	_, _ = a.Store.AddChatMessage(convID, "assistant", reply.Text, string(extra))
 	return out, nil
+}
+
+// StopChat stops the answer being given in a conversation, if any.
+func (a *App) StopChat(convID string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	stop, ok := a.stops[convID]
+	if ok {
+		stop()
+	}
+	return ok
 }
 
 // ChatMessageView is a saved message as the chat shows it.

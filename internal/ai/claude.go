@@ -75,8 +75,10 @@ func (s *claudeSession) AddToolResults(results []ToolResult) {
 	}
 }
 
-func (s *claudeSession) call(ctx context.Context, model string, msgs []anthropic.MessageParam) (*anthropic.Message, error) {
-	return s.client.Messages.New(ctx, anthropic.MessageNewParams{
+func (s *claudeSession) params(model string, msgs []anthropic.MessageParam) anthropic.MessageNewParams {
+	// Tools run only after the whole turn has arrived, so their input is
+	// not streamed piece by piece (no eager_input_streaming).
+	return anthropic.MessageNewParams{
 		Model:     model,
 		MaxTokens: int64(s.cfg.MaxTokens),
 		System: []anthropic.TextBlockParam{{
@@ -85,17 +87,53 @@ func (s *claudeSession) call(ctx context.Context, model string, msgs []anthropic
 		}},
 		Messages: msgs,
 		Tools:    s.tools,
-	})
+	}
 }
 
-func (s *claudeSession) Next(ctx context.Context) (Turn, error) {
+// call gets one whole answer, streamed to onDelta if it is set.
+func (s *claudeSession) call(ctx context.Context, model string, msgs []anthropic.MessageParam, onDelta func(Delta)) (*anthropic.Message, error) {
+	if onDelta == nil {
+		return s.client.Messages.New(ctx, s.params(model, msgs))
+	}
+	stream := s.client.Messages.NewStreaming(ctx, s.params(model, msgs))
+	defer stream.Close()
+	msg := anthropic.Message{}
+	for stream.Next() {
+		event := stream.Current()
+		if err := msg.Accumulate(event); err != nil {
+			return nil, err
+		}
+		switch ev := event.AsAny().(type) {
+		case anthropic.ContentBlockStartEvent:
+			if ev.ContentBlock.Type == "tool_use" {
+				onDelta(Delta{Tool: ev.ContentBlock.AsToolUse().Name})
+			}
+		case anthropic.ContentBlockDeltaEvent:
+			switch d := ev.Delta.AsAny().(type) {
+			case anthropic.TextDelta:
+				onDelta(Delta{Text: d.Text})
+			case anthropic.ThinkingDelta:
+				onDelta(Delta{Reasoning: d.Thinking})
+			}
+		}
+	}
+	if err := stream.Err(); err != nil {
+		return nil, err
+	}
+	return &msg, nil
+}
+
+func (s *claudeSession) Next(ctx context.Context, onDelta func(Delta)) (Turn, error) {
 	msgs := s.msgs
 	if len(s.pending) > 0 {
 		msgs = append(msgs, anthropic.NewUserMessage(s.pending...))
 	}
-	resp, err := s.call(ctx, s.cfg.Model, msgs)
+	resp, err := s.call(ctx, s.cfg.Model, msgs, onDelta)
 	if err == nil && resp.StopReason == anthropic.StopReasonRefusal && s.cfg.FallbackModel != "" {
-		resp, err = s.call(ctx, s.cfg.FallbackModel, msgs)
+		if onDelta != nil {
+			onDelta(Delta{Reset: true})
+		}
+		resp, err = s.call(ctx, s.cfg.FallbackModel, msgs, onDelta)
 	}
 	if err != nil {
 		return Turn{}, err

@@ -54,14 +54,28 @@ type CertOverview struct {
 	Live      []LiveCert  `json:"live"`
 	Notes     []string    `json:"notes,omitempty"` // sources that could not be read
 	CheckedAt string      `json:"checkedAt"`
+	// Refreshing: this is an older overview and a new one is on its way.
+	Refreshing bool `json:"refreshing,omitempty"`
 }
 
 const certCacheTTL = 5 * time.Minute
 
+// certSettingKey keeps the last overview, so the 证书 page has something
+// to show at once after Miao Panel restarts.
+const certSettingKey = "cert_overview"
+
+// certCache holds the latest overview and the refresh in progress, if any.
+// A refresh runs on its own, so a page that stops waiting does not cancel
+// it and the next visit picks up its result.
 type certCache struct {
-	mu sync.Mutex
-	at time.Time
-	ov CertOverview
+	mu      sync.Mutex
+	loaded  bool      // ov holds an overview, possibly an old one
+	at      time.Time // when ov was gathered in this run; zero if it is old
+	ov      CertOverview
+	err     error
+	gen     int           // bumped when something may have changed a certificate
+	ovGen   int           // gen when the refresh that produced ov began
+	running chan struct{} // closed when the refresh in progress ends
 }
 
 // probeCert fetches the certificate a site serves; tests replace it.
@@ -101,13 +115,100 @@ func parseAnyTime(s string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// Certificates returns the overview, from a 5-minute cache unless refresh.
+// Certificates returns a current overview: the one gathered in the last
+// 5 minutes unless refresh, or else a new one.
 func (a *App) Certificates(ctx context.Context, refresh bool) (CertOverview, error) {
 	a.certs.mu.Lock()
-	defer a.certs.mu.Unlock()
-	if !refresh && !a.certs.at.IsZero() && time.Since(a.certs.at) < certCacheTTL {
+	if !refresh && a.certs.running == nil && !a.certs.at.IsZero() && time.Since(a.certs.at) < certCacheTTL {
+		defer a.certs.mu.Unlock()
 		return a.certs.ov, nil
 	}
+	want := a.certs.gen
+	for {
+		done := a.refreshCertsLocked()
+		a.certs.mu.Unlock()
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return CertOverview{}, ctx.Err()
+		}
+		a.certs.mu.Lock()
+		// A refresh that began before a change was made is not enough.
+		if a.certs.err != nil || a.certs.ovGen >= want {
+			defer a.certs.mu.Unlock()
+			return a.certs.ov, a.certs.err
+		}
+	}
+}
+
+// LatestCertificates answers at once with the last overview, even one
+// saved before Miao Panel restarted, and starts a refresh in the
+// background if it is out of date (Refreshing says so). Only the very
+// first time, with nothing to show, does it wait.
+func (a *App) LatestCertificates(ctx context.Context) (CertOverview, error) {
+	a.certs.mu.Lock()
+	if !a.certs.loaded {
+		if raw, err := a.Store.Setting(certSettingKey); err == nil && raw != "" {
+			var ov CertOverview
+			if json.Unmarshal([]byte(raw), &ov) == nil && ov.CheckedAt != "" {
+				a.certs.ov, a.certs.loaded = ov, true
+			}
+		}
+	}
+	if !a.certs.loaded {
+		a.certs.mu.Unlock()
+		return a.Certificates(ctx, false)
+	}
+	defer a.certs.mu.Unlock()
+	ov := a.certs.ov
+	if a.certs.running != nil || a.certs.at.IsZero() || time.Since(a.certs.at) >= certCacheTTL {
+		a.refreshCertsLocked()
+		ov.Refreshing = true
+	}
+	return ov, nil
+}
+
+// refreshCertsLocked starts gathering a new overview unless one is
+// already under way, and returns a channel closed when it is done.
+func (a *App) refreshCertsLocked() chan struct{} {
+	if a.certs.running != nil {
+		return a.certs.running
+	}
+	done := make(chan struct{})
+	a.certs.running = done
+	gen := a.certs.gen
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		started := time.Now()
+		ov, err := a.gatherCertificates(ctx)
+		a.certs.mu.Lock()
+		defer a.certs.mu.Unlock()
+		a.certs.err = err
+		if err == nil {
+			a.certs.ov, a.certs.loaded, a.certs.at, a.certs.ovGen = ov, true, started, gen
+			if a.certs.gen != gen {
+				a.certs.at = time.Time{} // something changed while it ran
+			}
+			if raw, err := json.Marshal(ov); err == nil {
+				_ = a.Store.SetSetting(certSettingKey, string(raw))
+			}
+		}
+		a.certs.running = nil
+		close(done)
+	}()
+	return done
+}
+
+func (a *App) forgetCertificates() {
+	a.certs.mu.Lock()
+	a.certs.at = time.Time{}
+	a.certs.gen++
+	a.certs.mu.Unlock()
+}
+
+// gatherCertificates reads every source and probes the sites.
+func (a *App) gatherCertificates(ctx context.Context) (CertOverview, error) {
 	ov := CertOverview{Entries: []CertEntry{}, Live: []LiveCert{}, CheckedAt: now()}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -145,14 +246,7 @@ func (a *App) Certificates(ctx context.Context, refresh bool) (CertOverview, err
 		}
 		return ov.Entries[i].Domain < ov.Entries[j].Domain
 	})
-	a.certs.at, a.certs.ov = time.Now(), ov
 	return ov, nil
-}
-
-func (a *App) forgetCertificates() {
-	a.certs.mu.Lock()
-	a.certs.at = time.Time{}
-	a.certs.mu.Unlock()
 }
 
 // eoCerts reads the certificate of every EdgeOne acceleration domain.

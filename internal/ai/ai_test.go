@@ -60,7 +60,7 @@ func TestOpenAIAgentLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	agent := &Agent{Session: sess, Tools: tools}
-	reply, err := agent.Ask(context.Background(), "我有几台服务器？")
+	reply, err := agent.Ask(context.Background(), "我有几台服务器？", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestOpenAIErrorMessage(t *testing.T) {
 	defer srv.Close()
 	sess, _ := NewSession(Config{Kind: KindOpenAI, BaseURL: srv.URL, Model: "m", APIKey: "bad"})
 	sess.AddUser("hi")
-	_, err := sess.Next(context.Background())
+	_, err := sess.Next(context.Background(), nil)
 	if err == nil || !strings.Contains(err.Error(), "401") || !strings.Contains(err.Error(), "Authentication Fails") {
 		t.Fatalf("err = %v", err)
 	}
@@ -128,7 +128,7 @@ func TestClaudeAgentLoop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reply, err := (&Agent{Session: sess, Tools: tools}).Ask(context.Background(), "我有几台服务器？")
+	reply, err := (&Agent{Session: sess, Tools: tools}).Ask(context.Background(), "我有几台服务器？", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestAgentStopsAtMaxRounds(t *testing.T) {
 	defer srv.Close()
 	tools := echoTool()
 	sess, _ := NewSession(Config{Kind: KindOpenAI, BaseURL: srv.URL, Model: "m", APIKey: "k", Tools: []ToolDef{tools["list_servers"].Def}})
-	reply, err := (&Agent{Session: sess, Tools: tools, MaxRounds: 2}).Ask(context.Background(), "loop")
+	reply, err := (&Agent{Session: sess, Tools: tools, MaxRounds: 2}).Ask(context.Background(), "loop", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestClaudeRestoredHistory(t *testing.T) {
 	sess.AddUser("第二个问题")
 	sess.AddAssistant("第二个回答")
 	sess.AddAssistant("")
-	if _, err := (&Agent{Session: sess}).Ask(context.Background(), "第三个问题"); err != nil {
+	if _, err := (&Agent{Session: sess}).Ask(context.Background(), "第三个问题", nil); err != nil {
 		t.Fatal(err)
 	}
 	msgs := api.requests[0]["messages"].([]any)

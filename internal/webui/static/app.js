@@ -77,6 +77,7 @@ const ICONS = {
   eye: 'M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
   chart: 'M4 20V10M10 20V4M16 20v-7M22 20H2',
   lock: 'M6 11h12v10H6zM8 11V7a4 4 0 0 1 8 0v4',
+  stop: 'M8 8h8v8H8z',
   cloud: 'M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 8.6 4.5 4.5 0 0 1 17.5 18z',
 };
 
@@ -544,6 +545,13 @@ const EO_RANGES = [{ h: 1, text: '1 小时' }, { h: 24, text: '24 小时' }, { h
 const eoMemo = new Map();
 const EO_FRESH_MS = 20000;
 const clockText = t => new Date(t).toLocaleTimeString('zh-CN', { hour12: false });
+// whenText: the time alone for today, otherwise the date too.
+const whenText = t => {
+  const d = new Date(t);
+  if (isNaN(d)) return '';
+  const hm = d.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' });
+  return d.toDateString() === new Date().toDateString() ? hm : `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+};
 const TOP_NAMES = { url: '热门路径', country: '国家/地区', status: '状态码', ip: '访问最多的 IP' };
 
 // 网站统计: EdgeOne analytics for one site or domain.
@@ -557,12 +565,25 @@ const CertPage = {
     const loading = ref(false);
     const error = ref('');
     const loadedAt = ref(0);
-    // Keeps what it showed while it reloads, so coming back is instant.
+    let seq = 0;
+    // The server answers at once with the last overview it has, even one
+    // from before Miao Panel restarted; if that is old it is shown while a
+    // new one is gathered (refreshing), then replaced.
     async function load(refresh) {
+      const n = ++seq;
       loading.value = true; error.value = '';
-      try { data.value = await api('GET', '/api/certificates' + (refresh ? '?refresh=1' : '')); loadedAt.value = Date.now(); }
-      catch (e) { error.value = e.message; }
-      finally { loading.value = false; }
+      try {
+        let d = await api('GET', '/api/certificates' + (refresh ? '?refresh=1' : ''));
+        if (n !== seq) return;
+        data.value = d;
+        if (d.refreshing) {
+          d = await api('GET', '/api/certificates?wait=1');
+          if (n !== seq) return;
+          data.value = d;
+        }
+        loadedAt.value = Date.now();
+      } catch (e) { if (n === seq) error.value = e.message; }
+      finally { if (n === seq) loading.value = false; }
     }
     onMounted(() => load(false));
     watch(() => props.active, on => { if (on && !loading.value && Date.now() - loadedAt.value > 5 * 60 * 1000) load(false); });
@@ -587,7 +608,7 @@ const CertPage = {
       return null;
     }
     const ask = text => emit('ask', text);
-    return { data, loading, error, load, loadedAt, clockText, entries, live, counts, date, others, action, ask, icon: l => LEVEL_ICON[l] || 'info' };
+    return { data, loading, error, load, whenText, entries, live, counts, date, others, action, ask, icon: l => LEVEL_ICON[l] || 'info' };
   },
   template: `
   <div>
@@ -595,7 +616,7 @@ const CertPage = {
     <div class="filter-row">
       <button @click="load(true)" :disabled="loading"><ui-icon name="refresh"></ui-icon>刷新</button>
       <button @click="ask('我想给网站申请 HTTPS 证书并开启自动续签，域名是：')"><ui-icon name="plus"></ui-icon>申请证书</button>
-      <span class="small tertiary live-note" v-if="loadedAt"><span class="spinner inline" v-if="loading"></span>更新于 {{ clockText(loadedAt) }}</span>
+      <span class="small tertiary live-note" v-if="data"><template v-if="loading"><span class="spinner inline"></span>正在重新检查，下面是 {{ whenText(data.checkedAt) }} 的结果</template><template v-else>检查于 {{ whenText(data.checkedAt) }}</template></span>
       <span class="grow"></span>
       <button class="primary" @click="ask('检查一下我所有网站的 HTTPS 证书：有没有快到期、已经过期、没有自动续签或者申请失败的？有问题帮我处理。')"><ui-icon name="sparkles"></ui-icon>让 AI 检查</button>
     </div>
@@ -978,26 +999,133 @@ const app = createApp({
         await loadConvs();
       } catch (e) { notify(e.message, 'error'); }
     }
+    // The answer being streamed: its text so far, what the AI is looking
+    // up (steps, and remarks it made between lookups) and its thinking.
+    const live = ref(null);
+    let controller = null;
+    function onChatEvent(lv, e) {
+      const findStep = state => lv.steps.find(s => s.kind === 'tool' && s.tool === e.tool && s.state === state);
+      // Text written before a lookup was a remark on the way; it goes
+      // above the lookup, in order.
+      const toNote = () => {
+        if (lv.text.trim()) lv.steps.push({ kind: 'note', text: lv.text });
+        lv.text = '';
+      };
+      switch (e.type) {
+        case 'start': conversationId.value = e.conversationId; break;
+        case 'thinking': lv.thinking += e.text; if (!lv.text) lv.phase = 'think'; break;
+        case 'text': lv.text += e.text; lv.phase = 'answer'; break;
+        case 'reset': lv.text = ''; break;
+        case 'round': toNote(); lv.thinking = ''; lv.phase = 'wait'; break;
+        case 'prepare': toNote(); lv.steps.push({ kind: 'tool', tool: e.tool, args: '', state: 'prepare' }); lv.phase = 'tool'; break;
+        case 'tool': {
+          const st = findStep('prepare');
+          if (st) Object.assign(st, { args: e.args, state: 'run' });
+          else { toNote(); lv.steps.push({ kind: 'tool', tool: e.tool, args: e.args, state: 'run' }); }
+          lv.phase = 'tool';
+          break;
+        }
+        case 'tool_done': {
+          const st = findStep('run');
+          if (st) Object.assign(st, { state: e.error ? 'err' : 'ok', error: e.error || '' });
+          lv.phase = 'wait';
+          break;
+        }
+      }
+    }
+    const liveStatus = computed(() => {
+      const lv = live.value;
+      if (!lv) return '';
+      if (lv.stopping) return '正在停止……';
+      const busy = [...lv.steps].reverse().find(s => s.kind === 'tool' && (s.state === 'run' || s.state === 'prepare'));
+      if (busy) return `正在${toolName(busy.tool)}……`;
+      if (lv.phase === 'answer') return '';
+      return lv.steps.length ? '正在整理查到的数据……' : '正在思考……';
+    });
+    const thinkTail = t => { const s = (t || '').replace(/\s+/g, ' ').trim(); return s.length > 140 ? '…' + s.slice(-140) : s; };
+    function nearBottom() {
+      const b = msgBox.value;
+      return !b || b.scrollHeight - b.scrollTop - b.clientHeight < 120;
+    }
+    // A stream that ended without "done" (stopped, or the connection
+    // dropped) still keeps what was shown.
+    function keepLive(lv) {
+      const steps = lv.steps.filter(s => s.kind === 'tool' && s.state !== 'prepare')
+        .map(s => ({ tool: s.tool, args: s.args, output: '', error: s.error || '' }));
+      if (lv.text || steps.length) messages.value.push({ role: 'assistant', text: lv.text, steps });
+    }
     async function send() {
       const text = draft.value.trim();
       if (!text || chatBusy.value) return;
       messages.value.push({ role: 'user', text });
       draft.value = '';
       chatBusy.value = true;
+      const lv = reactive({ text: '', thinking: '', steps: [], phase: 'wait', stopping: false });
+      live.value = lv;
+      controller = new AbortController();
       scrollChat();
+      let final = null;
       try {
-        const r = await api('POST', '/api/chat', { conversationId: conversationId.value, message: text });
-        conversationId.value = r.conversationId;
+        const res = await fetch('/api/chat/stream', {
+          method: 'POST', credentials: 'same-origin', signal: controller.signal,
+          headers: { 'X-Miao': '1', 'Content-Type': 'application/json' },
+          body: JSON.stringify({ conversationId: conversationId.value, message: text }),
+        });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          throw new Error(d.error || `请求失败（${res.status}）`);
+        }
+        const reader = res.body.getReader();
+        const dec = new TextDecoder();
+        let buf = '';
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          const follow = nearBottom();
+          buf += dec.decode(value, { stream: true });
+          let i;
+          while ((i = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, i).trim();
+            buf = buf.slice(i + 1);
+            if (!line) continue;
+            let e;
+            try { e = JSON.parse(line); } catch { continue; }
+            if (e.type === 'done') final = e.reply;
+            else onChatEvent(lv, e);
+          }
+          if (follow) scrollChat();
+        }
+        if (!final) throw new Error('连接中断了，回答没有完整收到');
+        const r = final;
+        if (r.conversationId) conversationId.value = r.conversationId;
+        const reply = r.reply || {};
+        if (reply.text || (reply.steps && reply.steps.length) || (r.plans && r.plans.length) || !r.error)
+          messages.value.push({ role: 'assistant', text: reply.text || '', steps: reply.steps || [], usage: reply.usage, cost: r.cost, currency: r.currency, plans: r.plans || [] });
         if (r.error) messages.value.push({ role: 'error', text: r.error });
-        else messages.value.push({ role: 'assistant', text: r.reply.text, steps: r.reply.steps || [], usage: r.reply.usage, cost: r.cost, currency: r.currency, plans: r.plans || [] });
+      } catch (e) {
+        keepLive(lv);
+        messages.value.push({ role: 'error', text: e.name === 'AbortError' ? '已停止回答' : e.message });
+      } finally {
+        live.value = null;
+        controller = null;
+        chatBusy.value = false;
         loadSpend().catch(() => {});
         loadConvs();
-      } catch (e) {
-        messages.value.push({ role: 'error', text: e.message });
-      } finally {
-        chatBusy.value = false;
         scrollChat();
       }
+    }
+    // Stops the answer on the server, which then sends what it has; if that
+    // does not work, stops listening.
+    async function stopAnswer() {
+      const lv = live.value, ctl = controller;
+      if (!lv || lv.stopping) return;
+      lv.stopping = true;
+      let stopped = false;
+      if (conversationId.value) {
+        try { stopped = (await api('POST', '/api/chat/stop', { conversationId: conversationId.value })).stopped; } catch { /* fall back below */ }
+      }
+      if (!stopped) ctl && ctl.abort();
+      else setTimeout(() => { if (controller === ctl && ctl) ctl.abort(); }, 5000);
     }
     // Enter sends, but not while an input method (e.g. Chinese pinyin) is composing.
     function onEnter(e) {
@@ -1087,7 +1215,19 @@ const app = createApp({
     const parseSteps = s => { try { return JSON.parse(s); } catch { return []; } };
     const toolName = t => ({ list_servers: '查看服务器列表', get_server_profile: '读取服务器画像', refresh_server_profile: '重新识别服务器',
       run_check: '执行只读检查', propose_plan: '生成修改清单', tencent_dns: '查询 DNSPod 解析', tencent_eo: '查询 EdgeOne',
-      tencent_servers: '查询腾讯云服务器', tencent_server_detail: '查看腾讯云服务器详情', tencent_eo_analytics: '分析网站访问数据' }[t] || t);
+      tencent_servers: '查询腾讯云服务器', tencent_server_detail: '查看腾讯云服务器详情', tencent_eo_analytics: '分析网站访问数据',
+      certificates: '查看 HTTPS 证书', tencent_eo_security: '查看 EdgeOne 安全防护', panel_websites: '查看 1Panel 网站' }[t] || t);
+    // What a lookup is about, in a few words: the server, domain, checks.
+    function toolDetail(tool, args) {
+      let a;
+      try { a = JSON.parse(args || '{}'); } catch { return ''; }
+      if (!a || typeof a !== 'object') return '';
+      const parts = [];
+      if (a.server_id != null) parts.push(serverName(a.server_id));
+      for (const k of ['domain', 'zone', 'instance', 'title']) if (a[k]) parts.push(String(a[k]));
+      if (Array.isArray(a.checks) && a.checks.length) parts.push(a.checks.join('、'));
+      return parts.join(' · ');
+    }
     const actorName = a => ({ user: '你', ai: 'AI', system: '系统' }[a] || a);
     const actionName = a => ({ 'server.add': '添加服务器', 'server.delete': '删除服务器', 'server.test': '测试连接', 'server.discover': '识别环境',
       'server.hostkey.recorded': '记录服务器指纹', 'settings.ai': '修改 AI 设置', 'ai.chat': 'AI 对话', 'plan.propose': 'AI 生成清单',
@@ -1111,7 +1251,7 @@ const app = createApp({
       op, saveOnePanel, testOnePanel, tc, saveTencent, testTencent, clearTencent, freeCmd, setFree, seen,
       cloud, cloudList, cloudPick, pickCloud, askAI, daysTo, fmtBytes,
       memPct, rootDisk, envSub, dockerText, money, mb, meterClass, levelClass, levelIcon, levelName, riskName, adapterName,
-      fmtTime, serverName, parseSteps, toolName, actorName, actionName, md,
+      fmtTime, serverName, parseSteps, toolName, toolDetail, actorName, actionName, md, live, liveStatus, thinkTail, stopAnswer,
     };
   },
 });

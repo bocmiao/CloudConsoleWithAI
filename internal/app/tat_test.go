@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -195,5 +196,36 @@ func TestCertificateOverview(t *testing.T) {
 	calls := len(f.Calls)
 	if _, err := a.Certificates(context.Background(), false); err != nil || len(f.Calls) != calls {
 		t.Fatal("second overview should come from the cache")
+	}
+	ctx := context.Background()
+	if latest, err := a.LatestCertificates(ctx); err != nil || latest.Refreshing || len(latest.Entries) != len(ov.Entries) {
+		t.Fatalf("latest while current = %+v %v", latest, err)
+	}
+
+	// After a restart the page still gets the last overview at once, while
+	// a new one is gathered; a change made meanwhile is not missed.
+	var probes atomic.Int32
+	gate := make(chan struct{})
+	probeCert = func(_ context.Context, host string) (certs.Info, error) {
+		probes.Add(1)
+		<-gate
+		return certs.Info{Names: []string{host}, NotAfter: time.Now().Add(60 * 24 * time.Hour), Valid: true}, nil
+	}
+	b := New(a.Store, a.Secrets)
+	b.TencentEndpoint = f.Endpoint
+	latest, err := b.LatestCertificates(ctx)
+	if err != nil || !latest.Refreshing || latest.CheckedAt != ov.CheckedAt || len(latest.Entries) != len(ov.Entries) || latest.Live[0].Level != "crit" {
+		t.Fatalf("after restart = %+v %v", latest, err)
+	}
+	b.forgetCertificates()
+	got := make(chan CertOverview)
+	go func() {
+		ov, _ := b.Certificates(ctx, false)
+		got <- ov
+	}()
+	close(gate)
+	fresh := <-got
+	if fresh.Refreshing || len(fresh.Live) != 1 || fresh.Live[0].Level != "ok" || probes.Load() != 2 {
+		t.Fatalf("fresh = %+v after %d probes", fresh, probes.Load())
 	}
 }
