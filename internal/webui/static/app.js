@@ -1291,8 +1291,48 @@ const whenText = t => {
   return d.toDateString() === new Date().toDateString() ? hm : `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
 };
 
-// 网站统计: EdgeOne analytics for one site or domain.
 const LEVEL_ICON = { ok: 'check', warn: 'warn', crit: 'alert', info: 'info' };
+const LEVEL_RANK = { crit: 0, warn: 1, info: 2, ok: 3 };
+const rankOf = l => LEVEL_RANK[l] ?? 2; // unknown counts as info
+const CERT_SHOWS = [{ id: 'all', text: '全部' }, { id: 'attention', text: '需要处理' }, { id: 'manual', text: '不会自动续签' }];
+const CERT_SORTS = [{ id: 'urgent', text: '最紧急在前' }, { id: 'expiry', text: '最先到期' }, { id: 'domain', text: '按域名' }];
+const byStr = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+const nullsLast = (a, b) => a == null ? (b == null ? 0 : 1) : b == null ? -1 : a - b;
+const expiryMs = x => { const t = x && x.notAfter ? Date.parse(x.notAfter) : NaN; return Number.isFinite(t) ? t : null; };
+// Domains sort by the registered name, a parent before its subdomains:
+// *.miao.club, miao.club, www.miao.club, blog.miao.club, sakura.vin, ...
+function domainKey(d) {
+  let h = String(d || '').toLowerCase().trim().replace(/\.$/, '');
+  if (h.startsWith('*.')) h = h.slice(2);
+  if (h.startsWith('www.')) h = h.slice(4);
+  const p = h.split('.');
+  const n = p.length > 2 && /^(com|net|org|gov|edu|ac|co)\.[a-z]{2}$/.test(p.slice(-2).join('.')) ? 3 : 2;
+  return [p.slice(-n).join('.'), p.slice(0, -n).reverse().join('.')];
+}
+const cmpDomain = (a, b) => {
+  const x = domainKey(a), y = domainKey(b);
+  return byStr(x[0], y[0]) || byStr(x[1], y[1]) || byStr(String(a).toLowerCase(), String(b).toLowerCase()) || byStr(a, b);
+};
+// coversHost is covers() in certgroups.go: *.miao.club covers blog.miao.club.
+function coversHost(names, host) {
+  if (!host.includes('.') || host.includes('*')) return false;
+  return (names || []).some(n => {
+    n = String(n).toLowerCase();
+    if (n === host) return true;
+    if (!n.startsWith('*.') || !host.endsWith(n.slice(1))) return false;
+    const rest = host.slice(0, host.length - (n.length - 1));
+    return rest !== '' && !rest.includes('.');
+  });
+}
+// normNeedle makes a pasted address searchable: https://Blog.Sakura.vin:443/x → blog.sakura.vin.
+function normNeedle(q) {
+  let s = String(q || '').trim().toLowerCase().replace(/[。．]/g, '.');
+  s = s.replace(/^[a-z][a-z0-9+.-]*:\/\//, '');
+  s = s.split(/[/?#]/)[0];
+  if (s.includes('.')) s = s.replace(/:\d+$/, '');
+  return s.trim();
+}
+const leftText = d => d == null ? '' : d > 0 ? `剩 ${d} 天` : d === 0 ? '不到 1 天' : '已过期';
 
 const CertPage = {
   props: { configured: Boolean, active: Boolean },
@@ -1334,10 +1374,112 @@ const CertPage = {
       soon: inUse.value.filter(c => c.daysLeft != null && c.daysLeft >= 0 && c.daysLeft < 30 && !c.autoRenew).length,
       bad: groups.value.filter(g => g.level === 'crit').length + live.value.filter(l => l.level === 'crit').length,
     }));
-    // Problems first, then the rest, then certificates nothing seems to use.
-    const attention = computed(() => groups.value.filter(g => g.level === 'crit' || g.level === 'warn'));
-    const fine = computed(() => groups.value.filter(g => g.level !== 'crit' && g.level !== 'warn' && g.certs.some(c => c.inUse)));
-    const unused = computed(() => groups.value.filter(g => g.level !== 'crit' && g.level !== 'warn' && !g.certs.some(c => c.inUse)));
+
+    // Filters are not remembered, so one left on can never hide a new
+    // problem after a restart; the sort is.
+    const q = ref('');
+    const show = ref('all');
+    const s0 = pref('miao.certSort', 'urgent');
+    const sort = ref(CERT_SORTS.some(s => s.id === s0) ? s0 : 'urgent');
+    watch(sort, v => setPref('miao.certSort', v));
+    const needle = computed(() => normNeedle(q.value));
+    const filtered = computed(() => needle.value !== '' || show.value !== 'all');
+    const reveal = ref(new Set()); // domains whose card also shows the rows filtered out
+    watch([needle, show], () => { reveal.value = new Set(); });
+    function toggleReveal(d) { const s = new Set(reveal.value); s.has(d) ? s.delete(d) : s.add(d); reveal.value = s; }
+    function clearFilters() { q.value = ''; show.value = 'all'; }
+
+    // What a search looks at: the certificate's domains, and (without
+    // spanning fields) its issuer, status, renewal and where it is kept, so
+    // server names, EdgeOne, 腾讯云, 过期 all work.
+    const hostHay = (g, c) => [g.domain, ...(c.names || []), ...(c.usedBy || []), ...(c.edgeOne || []), ...(c.servedOn || [])].join('\n').toLowerCase();
+    const infoHay = c => [c.issuer || '', c.status || '', c.renew || '', ...(c.copies || []).map(p => p.where || '')].join('\n').toLowerCase();
+    const matchCert = (g, c) => { const n = needle.value; return !n || hostHay(g, c).includes(n) || infoHay(c).includes(n) || coversHost(c.names, n); };
+    // The rows that put a domain under 需要处理 (as in certgroups.go).
+    const isProblem = (g, c) => (c.level === 'crit' || c.level === 'warn') && (c.inUse || !g.certs.some(x => x.inUse));
+    const isManual = c => c.inUse && !c.autoRenew;
+    const passShow = (g, c) => show.value === 'all' || (show.value === 'attention' ? isProblem(g, c) : isManual(c));
+    const pass = (g, c) => matchCert(g, c) && passShow(g, c);
+
+    // A card per domain with its matching certificates; sections follow the
+    // whole domain, so a card never jumps while typing.
+    function viewOf(g) {
+      const ok = g.certs.filter(c => pass(g, c));
+      const open = reveal.value.has(g.domain);
+      const used = ok.filter(c => c.inUse);
+      const times = (used.length ? used : ok).map(expiryMs).filter(t => t != null);
+      return { g, ok: ok.length, certs: open ? g.certs : ok, open, hidden: g.certs.length - ok.length, when: times.length ? Math.min(...times) : null };
+    }
+    function cmpView(a, b) {
+      const lv = rankOf(a.g.level) - rankOf(b.g.level), dm = cmpDomain(a.g.domain, b.g.domain);
+      if (sort.value === 'expiry') return nullsLast(a.when, b.when) || lv || dm;
+      if (sort.value === 'domain') return dm || lv;
+      return lv || nullsLast(a.when, b.when) || dm;
+    }
+    const sectionOf = g => g.level === 'crit' || g.level === 'warn' ? 'attention' : g.certs.some(c => c.inUse) ? 'fine' : 'unused';
+    const views = computed(() => groups.value.map(viewOf).filter(v => v.ok > 0));
+    const attentionV = computed(() => views.value.filter(v => sectionOf(v.g) === 'attention').sort(cmpView));
+    const fineV = computed(() => views.value.filter(v => sectionOf(v.g) === 'fine').sort(cmpView));
+    const unusedV = computed(() => views.value.filter(v => sectionOf(v.g) === 'unused').sort(cmpView));
+    const unusedOpen = ref(false);
+    watch(() => !!needle.value && unusedV.value.length > 0, on => { if (on) unusedOpen.value = true; });
+
+    // 实际访问到的证书: a search for a server name, issuer or status also
+    // lists the sites its certificates serve.
+    const linked = computed(() => {
+      const n = needle.value, out = new Set();
+      if (!n) return out;
+      for (const g of groups.value) for (const c of g.certs) {
+        if (infoHay(c).includes(n)) [...(c.usedBy || []), ...(c.edgeOne || []), ...(c.servedOn || [])].forEach(d => out.add(d));
+      }
+      return out;
+    });
+    const manualServed = computed(() => {
+      const out = new Set();
+      for (const g of groups.value) for (const c of g.certs) if (matchCert(g, c) && isManual(c)) (c.servedOn || []).forEach(d => out.add(d));
+      return out;
+    });
+    const liveMatch = l => { const n = needle.value; return !n || [l.domain, l.issuer || '', l.status || ''].join('\n').toLowerCase().includes(n) || linked.value.has(l.domain); };
+    const livePass = l => liveMatch(l) && (show.value === 'all' || (show.value === 'attention' ? l.level === 'crit' || l.level === 'warn' : manualServed.value.has(l.domain)));
+    function cmpLive(a, b) {
+      const lv = rankOf(a.level) - rankOf(b.level), dm = cmpDomain(a.domain, b.domain), ex = nullsLast(expiryMs(a), expiryMs(b));
+      if (sort.value === 'expiry') return ex || lv || dm;
+      if (sort.value === 'domain') return dm;
+      return lv || ex || dm;
+    }
+    const liveShown = computed(() => live.value.filter(livePass).sort(cmpLive));
+    const noHttpsShown = computed(() => show.value !== 'all' ? [] : noHttps.value
+      .filter(e => !needle.value || (e.domain + '\n' + (e.where || '')).toLowerCase().includes(needle.value))
+      .sort((a, b) => cmpDomain(a.domain, b.domain)));
+
+    // Problems counted once each: a problem certificate, or a site with a
+    // bad certificate that no problem certificate explains (one it is used
+    // on or was served by).
+    const problemServed = computed(() => {
+      const s = new Set();
+      for (const g of groups.value) for (const c of g.certs) {
+        if (isProblem(g, c)) [...(c.usedBy || []), ...(c.edgeOne || []), ...(c.servedOn || [])].forEach(d => s.add(d));
+      }
+      return s;
+    });
+    const liveOnly = l => (l.level === 'crit' || l.level === 'warn') && !problemServed.value.has(l.domain);
+    const tally = computed(() => {
+      let attention = 0, manual = 0;
+      for (const g of groups.value) for (const c of g.certs) {
+        if (!matchCert(g, c)) continue;
+        if (isProblem(g, c)) attention++;
+        if (isManual(c)) manual++;
+      }
+      return { attention: attention + live.value.filter(l => liveOnly(l) && liveMatch(l)).length, manual };
+    });
+    const hiddenProblems = computed(() => {
+      let n = 0;
+      for (const g of groups.value) for (const c of g.certs) if (isProblem(g, c) && !pass(g, c) && !reveal.value.has(g.domain)) n++;
+      return n + live.value.filter(l => liveOnly(l) && !livePass(l)).length;
+    });
+    const totalCount = computed(() => groups.value.reduce((s, g) => s + g.certs.length, 0));
+    const shownCount = computed(() => groups.value.reduce((s, g) => s + g.certs.filter(c => pass(g, c)).length, 0));
+
     const date = t => t ? new Date(t).toLocaleDateString('zh-CN') : '—';
     const others = g => (g.names || []).filter(n => n !== g.domain).join('、');
     const cut = (list, n) => list.length > n ? list.slice(0, n).join('、') + ` 等 ${list.length} 个` : list.join('、');
@@ -1358,8 +1500,9 @@ const CertPage = {
       return null;
     }
     const ask = text => emit('ask', text);
-    return { data, loading, error, load, whenText, groups, live, noHttps, counts, attention, fine, unused, date, others, uses, copyText, action, ask,
-      icon: l => LEVEL_ICON[l] || 'info' };
+    return { data, loading, error, load, whenText, groups, live, noHttps, counts, date, others, uses, copyText, action, ask,
+      q, show, sort, filtered, tally, hiddenProblems, attentionV, fineV, unusedV, unusedOpen, liveShown, noHttpsShown, shownCount, totalCount,
+      toggleReveal, clearFilters, leftText, CERT_SHOWS, CERT_SORTS, icon: l => LEVEL_ICON[l] || 'info' };
   },
   template: `
   <div>
@@ -1375,77 +1518,114 @@ const CertPage = {
     <div class="notice" v-if="error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ error }}</div>
     <template v-if="data">
       <div class="tiles">
-        <div class="tile"><div class="label"><ui-icon name="lock"></ui-icon>证书</div><div class="value">{{ counts.total }}</div><div class="sub">有到期时间的证书</div></div>
+        <div class="tile"><div class="label"><ui-icon name="lock"></ui-icon>证书</div><div class="value">{{ counts.total }}</div><div class="sub">在用的证书</div></div>
         <div class="tile"><div class="label"><ui-icon name="refresh"></ui-icon>自动续签</div><div class="value">{{ counts.auto }}</div><div class="sub">由 EdgeOne 或 1Panel 自动续签</div></div>
         <div class="tile"><div class="label"><ui-icon name="clock"></ui-icon>30 天内到期</div><div class="value">{{ counts.soon }}</div><div class="sub">而且不会自动续签</div></div>
         <div class="tile"><div class="label"><ui-icon name="alert"></ui-icon>有问题</div><div class="value">{{ counts.bad }}</div><div class="sub">已过期、申请失败或访问异常</div></div>
       </div>
 
-      <template v-for="sec in [{ title: '需要处理', list: attention }, { title: '证书', list: fine }]" :key="sec.title">
+      <div class="stat-bar cert-bar" v-if="groups.length || live.length || noHttps.length">
+        <span class="segmented" role="group" aria-label="显示">
+          <button v-for="s in CERT_SHOWS" :key="s.id" :aria-pressed="show === s.id" :class="{ on: show === s.id }" @click="show = s.id">{{ s.text }}
+            <span class="badge crit" v-if="s.id === 'attention' && tally.attention">{{ tally.attention }}</span>
+            <span class="tertiary" v-if="s.id === 'manual'">{{ tally.manual }}</span></button>
+        </span>
+        <label class="field cert-search"><span>搜索</span>
+          <input type="search" v-model="q" placeholder="域名或服务器名" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" @keydown.esc="q = ''"></label>
+        <span class="grow"></span>
+        <span class="small secondary cert-count" role="status">{{ filtered ? '显示 ' + shownCount + ' / ' + totalCount + ' 张证书' : '' }}</span>
+        <button class="link small" v-if="filtered" @click="clearFilters">清除筛选</button>
+        <label class="field" title="需要处理的始终排在最上面"><span>排序</span>
+          <select v-model="sort"><option v-for="s in CERT_SORTS" :key="s.id" :value="s.id">{{ s.text }}</option></select></label>
+      </div>
+      <div class="alert al-warn cert-hint" v-if="hiddenProblems">
+        <ui-icon name="warn"></ui-icon><span class="grow">还有 {{ hiddenProblems }} 个需要处理的问题被筛选隐藏了</span>
+        <button class="link small" @click="q = ''; show = 'attention'">查看</button>
+      </div>
+
+      <template v-for="sec in [{ title: '需要处理', list: attentionV }, { title: '证书', list: fineV }]" :key="sec.title">
         <template v-if="sec.list.length">
           <div class="group-title">{{ sec.title }}</div>
-          <div class="cert-group" v-for="g in sec.list" :key="g.domain">
+          <div class="cert-group" v-for="v in sec.list" :key="v.g.domain">
             <div class="cert-head">
               <ui-icon name="lock" class="lg"></ui-icon>
-              <div class="grow"><div class="cert-domain">{{ g.domain }}</div><div class="small tertiary" v-if="others(g)">也包括 {{ others(g) }}</div></div>
-              <span class="cert-st" :class="'st-' + g.level"><ui-icon :name="icon(g.level)"></ui-icon>{{ g.status }}</span>
+              <div class="grow"><div class="cert-domain">{{ v.g.domain }}</div><div class="small tertiary" v-if="others(v.g)">也包括 {{ others(v.g) }}</div></div>
+              <span class="cert-st" :class="'st-' + v.g.level"><ui-icon :name="icon(v.g.level)"></ui-icon>{{ v.g.status }}</span>
             </div>
-            <div class="cert-row" v-for="(c, i) in g.certs" :key="i" :class="{ muted: !c.inUse }">
+            <div class="cert-row" v-for="(c, i) in v.certs" :key="i" :class="{ muted: !c.inUse }">
               <div class="grow">
                 <div class="cert-line"><b>{{ c.issuer || '证书' }}</b><span class="tag" :class="c.inUse ? 'on' : ''">{{ c.inUse ? '在用' : '没发现在用' }}</span></div>
-                <div class="small secondary">到期 {{ date(c.notAfter) }}<template v-if="c.daysLeft != null">（{{ c.daysLeft >= 0 ? '剩 ' + c.daysLeft + ' 天' : '已过期' }}）</template> · {{ c.renew }}</div>
+                <div class="small secondary">到期 {{ date(c.notAfter) }}<template v-if="c.daysLeft != null">（{{ leftText(c.daysLeft) }}）</template> · {{ c.renew }}</div>
                 <div class="small tertiary" v-if="uses(c)">用在 {{ uses(c) }}</div>
                 <div class="small tertiary">存放在 {{ c.copies.map(copyText).join('、') }}</div>
                 <div class="small st-crit" v-if="c.renewError">{{ c.renewError }}</div>
               </div>
               <div class="cert-side">
                 <span class="cert-st small" :class="'st-' + c.level"><ui-icon :name="icon(c.level)"></ui-icon>{{ c.status }}</span>
-                <button class="link small" v-if="action(g, c)" @click="ask(action(g, c)[1])">{{ action(g, c)[0] }}</button>
+                <button class="link small" v-if="action(v.g, c)" @click="ask(action(v.g, c)[1])">{{ action(v.g, c)[0] }}</button>
               </div>
+            </div>
+            <div class="cert-row cert-rest" v-if="v.hidden">
+              <button class="link small" :aria-expanded="v.open" @click="toggleReveal(v.g.domain)">{{ v.open ? '收起不符合筛选的证书' : '另有 ' + v.hidden + ' 张证书不符合筛选，显示' }}</button>
             </div>
           </div>
         </template>
       </template>
       <div class="group" v-if="!groups.length && !loading"><div class="row small secondary">还没有找到证书。{{ configured ? '' : '在「设置 → 腾讯云」填好密钥后可以看到 EdgeOne 和腾讯云的证书；' }}配置了 1Panel 接口的服务器会显示 1Panel 里的证书。</div></div>
+      <div class="group" v-if="groups.length && filtered && !attentionV.length && !fineV.length && !unusedV.length">
+        <div class="row" v-if="q.trim()"><div class="grow">没有和「{{ q.trim() }}」有关的证书。</div><button class="link small" @click="clearFilters">清除筛选</button></div>
+        <div class="row" v-else-if="show === 'attention'"><ui-icon name="check" class="st-ok"></ui-icon>
+          <div class="grow"><div>没有需要处理的证书。</div><div class="small tertiary">已过期、快到期、续签或申请失败的证书，都会出现在这里。</div>
+            <div class="small secondary" v-if="liveShown.length">下面「实际访问到的证书」里还有访问时有问题的网址。</div></div></div>
+        <div class="row" v-else><div class="grow">在用的证书都会自动续签，不用手动处理。</div><button class="link small" @click="show = 'all'">显示全部</button></div>
+      </div>
 
-      <details class="cert-more" v-if="unused.length">
-        <summary><ui-icon name="chevron"></ui-icon>没发现在用的证书（{{ unused.length }} 个域名）</summary>
+      <details class="cert-more" v-if="unusedV.length" :open="unusedOpen" @toggle="unusedOpen = $event.target.open">
+        <summary><ui-icon name="chevron"></ui-icon>没发现在用的证书（{{ unusedV.length }} 个域名）</summary>
         <p class="small tertiary">没有网站、EdgeOne 域名在用，访问时也没看到。已经过期的可以在腾讯云或 1Panel 里删除；如果它们用在负载均衡、CDN 等别的地方，请忽略这个提示。</p>
-        <div class="cert-group" v-for="g in unused" :key="g.domain">
+        <div class="cert-group" v-for="v in unusedV" :key="v.g.domain">
           <div class="cert-head">
             <ui-icon name="lock" class="lg"></ui-icon>
-            <div class="grow"><div class="cert-domain">{{ g.domain }}</div><div class="small tertiary" v-if="others(g)">也包括 {{ others(g) }}</div></div>
+            <div class="grow"><div class="cert-domain">{{ v.g.domain }}</div><div class="small tertiary" v-if="others(v.g)">也包括 {{ others(v.g) }}</div></div>
           </div>
-          <div class="cert-row muted" v-for="(c, i) in g.certs" :key="i">
+          <div class="cert-row muted" v-for="(c, i) in v.certs" :key="i">
             <div class="grow">
               <div class="cert-line"><b>{{ c.issuer || '证书' }}</b></div>
               <div class="small secondary">到期 {{ date(c.notAfter) }} · 存放在 {{ c.copies.map(copyText).join('、') }}</div>
             </div>
             <div class="cert-side"><span class="cert-st small st-info"><ui-icon name="info"></ui-icon>{{ c.status }}</span></div>
           </div>
+          <div class="cert-row cert-rest" v-if="v.hidden">
+            <button class="link small" :aria-expanded="v.open" @click="toggleReveal(v.g.domain)">{{ v.open ? '收起不符合筛选的证书' : '另有 ' + v.hidden + ' 张证书不符合筛选，显示' }}</button>
+          </div>
         </div>
       </details>
 
-      <template v-if="noHttps.length">
+      <template v-if="noHttpsShown.length">
         <div class="group-title">没有开启 HTTPS 的 EdgeOne 域名</div>
         <div class="group">
-          <div class="row" v-for="e in noHttps" :key="e.domain">
+          <div class="row" v-for="e in noHttpsShown" :key="e.domain">
             <div class="grow"><div>{{ e.domain }}</div><div class="small tertiary">访问只能用 http://</div></div>
             <button class="link small" @click="ask('帮 ' + e.domain + ' 开启 HTTPS（EdgeOne 免费证书，自动续签）')">开启 HTTPS</button>
           </div>
         </div>
       </template>
 
-      <template v-if="live.length">
-        <div class="group-title">实际访问到的证书</div>
+      <template v-if="liveShown.length">
+        <div class="group-title">实际访问到的证书<span v-if="filtered && liveShown.length < live.length">（显示 {{ liveShown.length }} / {{ live.length }}）</span></div>
         <div class="group table-wrap">
           <table class="table cert-table">
-            <thead><tr><th>网址</th><th>签发</th><th>到期</th><th>状态</th></tr></thead>
+            <thead><tr>
+              <th scope="col" :aria-sort="sort === 'domain' ? 'ascending' : null"><button class="th-sort" :class="{ on: sort === 'domain' }" @click="sort = 'domain'" title="按域名排序">网址<ui-icon name="arrow-up"></ui-icon></button></th>
+              <th scope="col">签发</th>
+              <th scope="col" :aria-sort="sort === 'expiry' ? 'ascending' : null"><button class="th-sort" :class="{ on: sort === 'expiry' }" @click="sort = 'expiry'" title="按到期时间排序，最早到期的在前">到期<ui-icon name="arrow-up"></ui-icon></button></th>
+              <th scope="col" :aria-sort="sort === 'urgent' ? 'ascending' : null"><button class="th-sort" :class="{ on: sort === 'urgent' }" @click="sort = 'urgent'" title="按紧急程度排序，最紧急的在前">状态<ui-icon name="arrow-up"></ui-icon></button></th>
+            </tr></thead>
             <tbody>
-              <tr v-for="l in live" :key="l.domain">
+              <tr v-for="l in liveShown" :key="l.domain">
                 <td>https://{{ l.domain }}</td>
                 <td class="small">{{ l.issuer || '—' }}</td>
-                <td class="num">{{ date(l.notAfter) }}<div class="small tertiary" v-if="l.daysLeft != null">剩 {{ l.daysLeft }} 天</div></td>
+                <td class="num">{{ date(l.notAfter) }}<div class="small tertiary" v-if="l.daysLeft != null">{{ leftText(l.daysLeft) }}</div></td>
                 <td><span class="cert-st" :class="'st-' + l.level"><ui-icon :name="icon(l.level)"></ui-icon>{{ l.status }}</span></td>
               </tr>
             </tbody>

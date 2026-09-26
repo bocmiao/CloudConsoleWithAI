@@ -437,6 +437,7 @@ details.free-more[open] summary .icon { transform: rotate(90deg); }
 .cert-group { background: var(--surface); border-radius: 12px; box-shadow: var(--shadow); margin-bottom: 14px; overflow: hidden; }
 .cert-head { display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--sep); }
 .cert-head > .icon { color: var(--accent); }
+.cert-head > .cert-st { flex: 0 1 auto; max-width: 50%; }
 .cert-domain { font-weight: 600; font-size: 15px; }
 .cert-row { display: flex; align-items: flex-start; gap: 16px; padding: 12px 18px 12px 50px; }
 .cert-row + .cert-row { border-top: 1px solid var(--sep); }
@@ -452,8 +453,23 @@ details.free-more[open] summary .icon { transform: rotate(90deg); }
 .cert-more > summary::-webkit-details-marker { display: none; }
 .cert-more[open] > summary .icon { transform: rotate(90deg); }
 .cert-more > p { margin: 0 4px 10px; }
-@media (max-width: 720px) { .cert-row { flex-direction: column; padding-left: 18px; } .cert-side { align-items: flex-start; max-width: none; text-align: left; } }
+@media (max-width: 720px) {
+  .cert-row { flex-direction: column; padding-left: 18px; } .cert-side { align-items: flex-start; max-width: none; text-align: left; }
+  .cert-head { flex-wrap: wrap; } .cert-head > .cert-st { flex-basis: 100%; max-width: none; padding-left: 28px; }
+}
 .cert-st { display: inline-flex; align-items: flex-start; gap: 5px; }
+.cert-bar { margin-bottom: 18px; }
+.cert-bar .cert-search input { width: 220px; }
+.cert-hint { margin-bottom: 18px; }
+.cert-row.cert-rest { padding-top: 8px; padding-bottom: 10px; }
+.cert-table th { color: var(--text-2); }
+button.th-sort { height: auto; padding: 0; background: none; box-shadow: none; border-radius: 3px; font: inherit; color: inherit; gap: 3px; }
+button.th-sort:hover:not(:disabled) { background: none; color: var(--text); }
+button.th-sort.on { color: var(--text); font-weight: 600; }
+button.th-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.th-sort .icon { width: 12px; height: 12px; transform: rotate(180deg); visibility: hidden; }
+.th-sort.on .icon, .th-sort:hover .icon { visibility: visible; }
+.th-sort:not(.on):hover .icon { opacity: .5; }
 .cert-st .icon { flex: none; margin-top: 2px; }
 .filter-row .primary .icon { color: var(--on-accent); }
 
@@ -591,6 +607,9 @@ details.free-more[open] summary .icon { transform: rotate(90deg); }
 @media (max-width: 720px) {
   .tiles.three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .stat-bar .field { width: 100%; } .stat-bar select { flex: 1; max-width: none; }
+  .cert-bar .segmented { width: 100%; }
+  .cert-bar .segmented button { flex: 1; justify-content: center; padding: 0 6px; }
+  .cert-bar .cert-search input { width: auto; flex: 1; min-width: 0; }
   .kv-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .subtabs { gap: 16px; overflow-x: auto; }
 }
