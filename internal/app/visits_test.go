@@ -352,6 +352,16 @@ func TestJudgeAndBlock(t *testing.T) {
 	if _, err := a.ProposeBlock(ctx, "edgeone", []string{"66.249.66.1"}); err == nil || !strings.Contains(err.Error(), "没有可以封禁的 IP") {
 		t.Fatalf("only a crawler: %v", err)
 	}
+	// Nothing is blocked when EdgeOne cannot say which IPs are its nodes.
+	f.FailAction = "teo DescribeIPRegion"
+	if _, err := a.ProposeBlock(ctx, "edgeone", []string{"45.148.10.9"}); err == nil || !strings.Contains(err.Error(), "没能向 EdgeOne 核对") {
+		t.Fatalf("unchecked block: %v", err)
+	}
+	f.FailAction = ""
+	f.EdgeOneNodes = map[string]bool{"45.148.10.9": true}
+	if _, err := a.ProposeBlock(ctx, "edgeone", []string{"45.148.10.9"}); err == nil || !strings.Contains(err.Error(), "EdgeOne 的节点") {
+		t.Fatalf("EdgeOne node blocked: %v", err)
+	}
 	if _, err := a.ExecutePlan(plan.ID, []int{0}); err != nil {
 		t.Fatal(err)
 	}
@@ -467,5 +477,52 @@ func TestAutoBlock(t *testing.T) {
 	}
 	if st := a.AutoBlock(); len(st.Blocked) != 0 {
 		t.Fatalf("still the rule's: %+v", st.Blocked)
+	}
+}
+
+func TestCrawlerChecks(t *testing.T) {
+	oldAddr, oldHost := lookupAddr, lookupHost
+	t.Cleanup(func() { lookupAddr, lookupHost = oldAddr, oldHost })
+	ptr := map[string]string{
+		"66.249.79.205": "crawl-66-249-79-205.googlebot.com.", // real, but DNS answers are forged
+		"5.6.7.10":      "crawl-5-6-7-10.googlebot.com.",      // its name, not its address
+		"5.6.7.9":       "9.7.6.5.bc.googleusercontent.com.",  // a Google Cloud machine
+	}
+	lookupAddr = func(_ context.Context, ip string) ([]string, error) {
+		if n, ok := ptr[ip]; ok {
+			return []string{n}, nil
+		}
+		return nil, &net.DNSError{Err: "no such host", Name: ip, IsNotFound: true}
+	}
+	lookupHost = func(_ context.Context, host string) ([]string, error) {
+		if host == "9.7.6.5.bc.googleusercontent.com" {
+			return []string{"5.6.7.9"}, nil
+		}
+		return []string{"31.13.64.1"}, nil // what a polluted resolver says
+	}
+	a := newApp(t)
+	gb := "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+	got := a.checkCrawlers(context.Background(), map[string]string{
+		"66.249.79.205":        gb,
+		"8.231.157.220":        gb, // Google's network, outside the crawler ranges, no reverse name
+		"5.6.7.10":             gb,
+		"5.6.7.9":              gb,
+		"5.6.7.8":              gb,
+		"157.55.39.1":          "Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)",
+		"2001:4860:4801:10::1": gb,
+	})
+	want := map[string]crawlerCheck{
+		"66.249.79.205": {name: "Googlebot"}, "2001:4860:4801:10::1": {name: "Googlebot"}, "157.55.39.1": {name: "Bingbot"},
+		"5.6.7.9": {fake: true}, "5.6.7.8": {fake: true},
+	}
+	for ip, w := range want {
+		if got[ip] != w {
+			t.Errorf("%s = %+v, want %+v", ip, got[ip], w)
+		}
+	}
+	for _, ip := range []string{"8.231.157.220", "5.6.7.10"} { // cannot tell: neither verified nor fake
+		if c, ok := got[ip]; ok {
+			t.Errorf("%s = %+v, want unknown", ip, c)
+		}
 	}
 }

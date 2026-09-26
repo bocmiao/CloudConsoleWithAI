@@ -213,6 +213,16 @@ func TestScriptMatchesCounter(t *testing.T) {
 	if guesser == nil || guesser.Login != 6 || guesser.Posts != 6 {
 		t.Fatalf("password guesser = %+v", guesser)
 	}
+	// The scanner came to the server itself; 1.1.1.1 came through EdgeOne
+	// except once, at 13:00.
+	if scanner.Direct != scanner.Requests {
+		t.Fatalf("scanner direct = %d of %d", scanner.Direct, scanner.Requests)
+	}
+	for _, p := range server.Range(1).IPs {
+		if p.IP == "1.1.1.1" && (p.Direct != 1 || p.Requests != 8) {
+			t.Fatalf("forwarded visitor = %+v", p)
+		}
+	}
 	// Programs are named by the word that gave them away.
 	for _, name := range []string{"zgrab", "sqlmap", "python-requests", "Googlebot", "（没有浏览器标识）"} {
 		if !hasItem(blog.Top["bot"], name) {

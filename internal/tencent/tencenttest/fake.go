@@ -48,6 +48,8 @@ type Fake struct {
 	// DeniedService makes every call to that service fail with a
 	// permission error.
 	DeniedService string
+	// FailAction makes calls to one "service Action" fail.
+	FailAction string
 
 	// Servers: a Lighthouse instance and a CVM instance in ap-guangzhou.
 	Instances map[string]*Instance
@@ -184,6 +186,10 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.Calls = append(f.Calls, service+" "+action)
+	if service+" "+action == f.FailAction {
+		fail(w, "InternalError", "the fake was told to fail "+f.FailAction)
+		return
+	}
 	if service == f.DeniedService {
 		fail(w, "UnauthorizedOperation", "you are not authorized to perform operation ("+service+":"+action+")")
 		return

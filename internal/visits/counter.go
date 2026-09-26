@@ -91,7 +91,7 @@ func (c *Counter) Add(site string, t time.Time, ip, method, target string, statu
 	}
 	t = t.In(c.today.Location())
 	r := classify(site, method, target, status, ref, ua)
-	r.ip, r.bytes = ip, bytes
+	r.ip, r.bytes, r.direct = ip, bytes, !forwarded
 	date, stamp, minute := t.Format("2006-01-02"), t.Format("2006-01-02 15:04:05"), t.Format("2006-01-02 15:04")
 
 	for _, k := range []string{site, All} {
@@ -219,6 +219,9 @@ func profile(x *ipAcc, r request, stamp, minute string) {
 	}
 	if r.login {
 		p.Login++
+	}
+	if r.direct {
+		p.Direct++
 	}
 	x.paths[r.path]++
 	x.sites[r.site]++

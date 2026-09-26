@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bocmiao/CloudConsoleWithAI/internal/geoip"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/visits"
 )
 
@@ -55,7 +56,11 @@ func (a *App) facts(ctx context.Context, r *visits.Report) map[string]visits.Fac
 	}
 	out := make(map[string]visits.Facts, len(ips))
 	if r.Source == "server" { // EdgeOne's own logs have the visitors' IPs
-		for ip, eo := range a.edgeOneNodes(ctx, ips) {
+		nodes, err := a.edgeOneNodes(ctx, ips)
+		if err != nil {
+			r.Notes = append(r.Notes, "没能向 EdgeOne 核对哪些 IP 是它的节点（"+err.Error()+"）。列表里的风险只看访问记录；封禁前会再核对一次，核对不了就不封")
+		}
+		for ip, eo := range nodes {
 			f := out[ip]
 			f.EdgeOne = eo
 			out[ip] = f
@@ -70,8 +75,8 @@ func (a *App) facts(ctx context.Context, r *visits.Report) map[string]visits.Fac
 }
 
 // edgeOneNodes asks EdgeOne which IPs are its nodes (when Tencent Cloud is
-// set up); unknown IPs are left out.
-func (a *App) edgeOneNodes(ctx context.Context, ips map[string]string) map[string]bool {
+// set up); unknown IPs are left out, and err says why some are unknown.
+func (a *App) edgeOneNodes(ctx context.Context, ips map[string]string) (map[string]bool, error) {
 	out := map[string]bool{}
 	var ask []string
 	a.ipf.mu.Lock()
@@ -88,7 +93,7 @@ func (a *App) edgeOneNodes(ctx context.Context, ips map[string]string) map[strin
 	a.ipf.mu.Unlock()
 	c := a.tencentClient()
 	if c == nil || len(ask) == 0 {
-		return out
+		return out, nil
 	}
 	for i := 0; i < len(ask); i += 100 {
 		batch := ask[i:min(i+100, len(ask))]
@@ -96,7 +101,7 @@ func (a *App) edgeOneNodes(ctx context.Context, ips map[string]string) map[strin
 		res, err := c.EdgeOneIPs(ctx, batch)
 		cancel()
 		if err != nil {
-			break // e.g. no EdgeOne permission: nothing is known
+			return out, err // e.g. no EdgeOne permission: the rest is unknown
 		}
 		a.ipf.mu.Lock()
 		for _, ip := range batch {
@@ -105,12 +110,13 @@ func (a *App) edgeOneNodes(ctx context.Context, ips map[string]string) map[strin
 		}
 		a.ipf.mu.Unlock()
 	}
-	return out
+	return out, nil
 }
 
-// checkCrawlers verifies IPs whose UA claims a search engine crawler the
-// way the search engines say to: the reverse DNS name must be theirs and
-// resolve back to the IP.
+// checkCrawlers verifies IPs whose UA claims a search engine crawler: by
+// the address ranges Google and Bing publish, otherwise the way the search
+// engines say to, the reverse DNS name must be theirs and resolve back to
+// the IP.
 func (a *App) checkCrawlers(ctx context.Context, ips map[string]string) map[string]crawlerCheck {
 	out := map[string]crawlerCheck{}
 	var mu sync.Mutex
@@ -124,6 +130,10 @@ func (a *App) checkCrawlers(ctx context.Context, ips map[string]string) map[stri
 	for ip, ua := range ips {
 		name, hosts, ok := visits.ClaimedCrawler(ua)
 		if !ok {
+			continue
+		}
+		if in, _ := visits.PublishedCrawler(name, ip); in {
+			out[ip] = crawlerCheck{name: name}
 			continue
 		}
 		a.ipf.mu.Lock()
@@ -154,7 +164,10 @@ func (a *App) checkCrawlers(ctx context.Context, ips map[string]string) map[stri
 	return out
 }
 
-// verifyCrawler reports known=false when DNS could not be asked.
+// verifyCrawler reports known=false when DNS could not tell. In mainland
+// China answers for foreign names are often forged, so a name that does
+// not resolve back to the IP proves nothing, and an address the IP
+// database gives to the search engine's own company is never called fake.
 func verifyCrawler(ctx context.Context, ip, name string, hosts []string) (c crawlerCheck, known bool) {
 	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
@@ -178,7 +191,11 @@ func verifyCrawler(ctx context.Context, ip, name string, hosts []string) (c craw
 					return crawlerCheck{name: name}, true
 				}
 			}
+			return c, false // its name, but not its address: maybe a forged answer
 		}
+	}
+	if loc, ok := geoip.Lookup(ip); ok && visits.OwnedBy(name, loc.ISP) {
+		return c, false
 	}
 	return crawlerCheck{fake: true}, true
 }

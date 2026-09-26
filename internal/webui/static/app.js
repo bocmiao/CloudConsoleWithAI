@@ -756,6 +756,10 @@ const VisitStats = {
     const judgement = computed(() => judgements[source.value + '|' + days.value] || null);
     const verdictOf = ip => { const j = judgement.value; return j ? (j.verdicts || []).find(v => v.ip === ip) : null; };
     const blockable = p => !p.edgeOne && !p.crawler && !/^(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(p.ip);
+    // Server logs say which requests came to the server itself rather than
+    // through EdgeOne; blocking in EdgeOne does not stop those.
+    const fromServer = computed(() => String(source.value).startsWith('server:'));
+    const directRows = computed(() => fromServer.value ? ipRows.value.filter(p => p.direct > 0).length : 0);
     const blockedSet = computed(() => new Set(blocked.value.flatMap(z => z.ips)));
     function togglePick(ip) {
       const next = new Set(picked.value);
@@ -894,7 +898,7 @@ const VisitStats = {
     }
     return { sources, source, days, site, section, series, data, loading, error, load, siteNames, range, cur, total, top, siteInfo, siteRows,
       ips, risky, ipRows, counts, judgement, verdictOf, blockable, blockedSet, picked, togglePick, pickSuggested, judge, judging, showAll,
-      block, unblock, plan, planning, planDone, realIP, planServerName, blocked, drawer, openIP, alerts, trend, dayRows, hourRows, delta, yesterday, pct, SERIES, sourceTitle,
+      block, unblock, plan, planning, planDone, realIP, planServerName, fromServer, directRows, blocked, drawer, openIP, alerts, trend, dayRows, hourRows, delta, yesterday, pct, SERIES, sourceTitle,
       askAI, askIP, shortUA, deadLinks, askDead, auto, autoEdit, autoBusy, autoForm, editAuto, saveAuto, turnOffAuto, runAuto, autoRule, autoUntil, untilText, VISIT_RANGES, VISIT_SECTIONS, RISK, VERDICT, fmtCount, fmtBytes, whenText };
   },
   template: `
@@ -1069,13 +1073,15 @@ const VisitStats = {
               <button class="small" @click="judge" :disabled="judging || !ips.length"><span class="spinner inline" v-if="judging"></span><ui-icon name="sparkles" v-else></ui-icon>{{ picked.size ? 'AI 研判选中的 ' + picked.size + ' 个' : 'AI 研判' }}</button>
               <button class="primary small" @click="block([...picked])" :disabled="!picked.size || planning || !tencent" :title="tencent ? '' : '封禁通过 EdgeOne 进行，需要先填写腾讯云密钥'">封禁选中的 {{ picked.size }} 个</button>
             </header>
+            <p class="small secondary card-note" v-if="directRows">{{ directRows }} 个 IP 标了「直连服务器」：它们直接访问服务器的 IP，没经过 EdgeOne。在 EdgeOne 封禁只能挡住它们经过 EdgeOne 的访问，挡不住直接访问服务器。</p>
             <div class="table-wrap">
               <table class="table ip-table" v-if="ipRows.length">
                 <thead><tr><th></th><th>IP</th><th>风险</th><th>它做了什么</th><th class="num">请求</th><th class="num">404/403</th><th class="num">每分钟最多</th><th>最后访问</th></tr></thead>
                 <tbody>
                   <tr v-for="p in ipRows" :key="p.ip" class="clickable" @click="drawer = p">
                     <td @click.stop><input type="checkbox" :checked="picked.has(p.ip)" :disabled="!blockable(p) || blockedSet.has(p.ip)" @change="togglePick(p.ip)" :aria-label="'选中 ' + p.ip"></td>
-                    <td><div class="mono-ish">{{ p.ip }}</div><div class="small tertiary">{{ p.place || '未知' }} {{ p.isp }}</div></td>
+                    <td><div class="mono-ish">{{ p.ip }}</div><div class="small tertiary">{{ p.place || '未知' }} {{ p.isp }}</div>
+                      <span class="tag direct-tag" v-if="fromServer && p.direct > 0" :title="'有 ' + p.direct + ' 次请求直接访问服务器 IP，没经过 EdgeOne'">直连服务器</span></td>
                     <td><span class="risk-chip" :class="RISK[p.risk].cls">{{ RISK[p.risk].text }}</span>
                       <div class="small verdict" v-if="verdictOf(p.ip)" :class="'v-' + verdictOf(p.ip).action">AI：{{ VERDICT[verdictOf(p.ip).action] }}</div>
                       <div class="small tertiary" v-if="blockedSet.has(p.ip)">已封禁</div></td>
@@ -1089,7 +1095,8 @@ const VisitStats = {
             </div>
           </section>
           <section class="card" v-if="tencent">
-            <header class="card-head"><h3>已在 EdgeOne 封禁</h3><span class="small tertiary">Miao Panel 封禁的 IP，解封也要确认</span></header>
+            <header class="card-head"><h3>已在 EdgeOne 封禁</h3><span class="small tertiary">封错了点 × 解封（也要确认）</span></header>
+            <p class="small secondary card-note">封禁只在 EdgeOne 上挡住这些 IP 访问你的网站，不改服务器，也不影响你用 SSH、1Panel 和 Miao Panel 管理服务器。EdgeOne 的节点和已验证的搜索引擎爬虫不会被封，封禁前会再向 EdgeOne 核对一次。</p>
             <div class="blocked" v-if="blocked.length">
               <div v-for="z in blocked" :key="z.zone" class="blocked-zone">
                 <div class="small secondary">站点 {{ z.zone }}</div>
@@ -1149,6 +1156,7 @@ const VisitStats = {
               <span class="fact ok" v-if="drawer.crawler">已验证：{{ drawer.crawler }}</span>
               <span class="fact crit" v-if="drawer.fakeCrawler">冒充搜索引擎</span>
               <span class="fact warn" v-if="drawer.edgeOne">EdgeOne 节点（不是真实访客）</span>
+              <span class="fact warn" v-if="fromServer && drawer.direct > 0">直接访问服务器 {{ fmtCount(drawer.direct) }} 次（没经过 EdgeOne，EdgeOne 封禁挡不住）</span>
               <span class="fact" v-if="drawer.bot && !drawer.crawler">程序：{{ drawer.bot }}</span>
             </div>
             <div class="kv-grid">

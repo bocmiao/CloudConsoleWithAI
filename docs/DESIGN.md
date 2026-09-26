@@ -1354,3 +1354,12 @@ EdgeOne 的统计接口只有请求数、流量、带宽这类总量和排行，
 
 测试：用本机单独启动的 Nginx 实际执行脚本：带正确请求头时 `$remote_addr` 变成访客 IP，伪造 `X-Forwarded-For`、`EO-Connecting-IP` 无效，重复执行不重复修改，撤销后恢复，已有别的 `real_ip_header` 时拒绝，名字不合规时拒绝；手动检查了 Nginx 没有读取这个目录时自动恢复。模拟的腾讯云检查清单内容（只包括回源到这台服务器的域名）、名字只生成一次且 AI 不能指定、EdgeOne 设置的打开和撤销、已有别的名字时不修改。浏览器里从统计页的提示生成清单并实际执行（服务器一步在本机的系统 Nginx 目录，EdgeOne 一步在模拟接口），再撤销，以及手机宽度下的清单。
 
+### 封禁的安全检查：EdgeOne 节点、搜索引擎爬虫、直连服务器（已完成）
+
+- **搜索引擎爬虫的核实**：先看 Google 和 Bing 公布的爬虫 IP 段（googlebot.json、bingbot.json，2026-09-26 取自 github.com/lord-alfred/ipranges 的同步，内置在程序里），在里面就是真的，不用查 DNS。不在里面再按搜索引擎说的方法查反向 DNS 和正向解析。在国内 googlebot.com 的解析常被污染，名字对得上但解析回来的 IP 对不上时，结果是「不确定」而不是「冒充」；IP 库显示这个地址属于搜索引擎自己的公司（Google、Microsoft、百度……）时也不算冒充。`googleusercontent.com` 不再当作 Googlebot 的域名：任何人租一台 Google 云服务器都有这样的反向解析名字；
+- **封禁前再核对一次**：生成封禁清单（手动或自动封禁）时，不用统计报告里旧的结论，而是现查：向 EdgeOne（`DescribeIPRegion`）确认这些 IP 不是它的节点，查不了就一个都不封；自称搜索引擎爬虫的 IP，只有确认是冒充的才封，确认不了真假的也不封，免得影响收录；
+- **直连服务器**：服务器日志里没有 `X-Forwarded-For` 的请求是直接连到服务器 IP 的（没经过 EdgeOne 或别的代理），统计脚本和本地计数器都按 IP 记下次数（`direct`）。安全页给这些 IP 标「直连服务器」并说明：在 EdgeOne 封禁只能挡住经过 EdgeOne 的访问，挡不住它们直接访问服务器；封禁清单的说明里也会写；
+- 统计时没能向 EdgeOne 核对节点，页面会提示原因；安全页说明封禁只在 EdgeOne 上生效，不影响 SSH、1Panel 和 Miao Panel 管理服务器，封错了可以解封。
+
+测试：爬虫核实覆盖公布 IP 段（IPv4、IPv6、Bingbot）、被污染的 DNS 回答、属于 Google 网络但不在爬虫段里的地址（不确定）、Google 云服务器冒充 Googlebot（冒充）；封禁时 EdgeOne 查询失败不封、EdgeOne 节点不封；统计脚本和本地计数器的直连次数一致。
+

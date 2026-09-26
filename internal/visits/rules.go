@@ -85,6 +85,7 @@ type request struct {
 	bytes                                   int64
 	bot, page, sensitive, inject, login     bool
 	leak, dead                              bool
+	direct                                  bool // reached the server without a proxy
 	botName, refHost, device, dir           string
 	deadFrom                                string // where a dead link was followed from
 }

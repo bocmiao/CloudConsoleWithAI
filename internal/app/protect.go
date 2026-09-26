@@ -115,11 +115,30 @@ func (a *App) blockPlan(ctx context.Context, actor, source string, ips []string,
 	if err != nil {
 		return PlanView{}, err
 	}
+	// Ask again now rather than trust the report, which may be older than
+	// the checks: EdgeOne's nodes and search engine crawlers are never
+	// blocked, and when EdgeOne cannot be asked nothing is.
+	check, claims := map[string]string{}, map[string]string{}
+	for _, ip := range ips {
+		ip = strings.TrimSpace(ip)
+		if net.ParseIP(ip) != nil && !visits.Private(ip) {
+			check[ip] = ""
+			if p, ok := known[ip]; ok && p.UA != "" {
+				claims[ip] = p.UA
+			}
+		}
+	}
+	nodes, err := a.edgeOneNodes(ctx, check)
+	if err != nil {
+		return PlanView{}, userErr("没能向 EdgeOne 核对这些 IP 是不是它的节点（%v），为了不误封，这次没有封禁，请稍后再试", err)
+	}
+	crawlers := a.checkCrawlers(ctx, claims)
 	byZone := map[string][]string{}
-	var skipped, notes []string
+	var skipped, notes, direct []string
 	for _, ip := range ips {
 		ip = strings.TrimSpace(ip)
 		p, ok := known[ip]
+		claimed, _, isClaim := visits.ClaimedCrawler(p.UA)
 		switch {
 		case net.ParseIP(ip) == nil:
 			skipped = append(skipped, ip+"：不是 IP 地址")
@@ -127,12 +146,18 @@ func (a *App) blockPlan(ctx context.Context, actor, source string, ips []string,
 		case visits.Private(ip):
 			skipped = append(skipped, ip+"：内网地址")
 			continue
-		case ok && p.EdgeOne:
-			skipped = append(skipped, ip+"：EdgeOne 的节点，封了会挡住所有经过它的访客")
+		case nodes[ip] || (ok && p.EdgeOne):
+			skipped = append(skipped, ip+"：EdgeOne 的节点，不是访客（服务器日志没记下真实访客 IP 时看到的就是它）")
 			continue
-		case ok && p.Crawler != "":
-			skipped = append(skipped, ip+"：已验证的搜索引擎爬虫（"+p.Crawler+"）")
+		case crawlers[ip].name != "" || (ok && p.Crawler != ""):
+			skipped = append(skipped, ip+"：已验证的搜索引擎爬虫（"+orDash(crawlers[ip].name+p.Crawler)+"）")
 			continue
+		case isClaim && !crawlers[ip].fake:
+			skipped = append(skipped, ip+"：自称"+claimed+"，没能确认真假，为了不影响搜索引擎收录没有封禁")
+			continue
+		}
+		if v.Report.Source == "server" && p.Direct > 0 {
+			direct = append(direct, ip)
 		}
 		sites := []string{}
 		for _, s := range p.Sites {
@@ -174,6 +199,10 @@ func (a *App) blockPlan(ctx context.Context, actor, source string, ips []string,
 			Params: map[string]any{"domain": z, "ips": strings.Join(byZone[z], ",")}})
 	}
 	reason := lead + "\n" + strings.Join(notes, "\n")
+	if len(direct) > 0 {
+		reason += fmt.Sprintf("\n注意：%s 有直接访问服务器 IP 的记录（没经过 EdgeOne）。在 EdgeOne 封禁只能挡住它们经过 EdgeOne 的访问，挡不住直接访问服务器",
+			strings.Join(direct, "、"))
+	}
 	if len(skipped) > 0 {
 		reason += "\n没有加入：\n" + strings.Join(skipped, "\n")
 	}

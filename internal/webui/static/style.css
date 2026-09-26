@@ -760,3 +760,7 @@ button.primary.danger { background: var(--crit); }
   .sheet-mask.fm-ed-mask { padding-top: 0; }
   .fm-editor { width: 100vw; height: 100vh; border-radius: 0; }
 }
+
+/* 安全: IPs that came to the server itself, and notes under card headers */
+.card-note { margin: 10px 18px 0; }
+.tag.direct-tag { display: inline-block; margin-top: 3px; background: var(--warn-track); color: var(--text); }

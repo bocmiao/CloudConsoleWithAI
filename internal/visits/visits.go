@@ -105,12 +105,16 @@ type IPProfile struct {
 	Inject    int64  `json:"inject"`    // requests carrying attack payloads
 	Login     int64  `json:"login"`     // refused login attempts
 	PeakMin   int64  `json:"peakMin"`   // most requests in one minute
-	First     string `json:"first"`
-	Last      string `json:"last"`
-	UA        string `json:"ua"`
-	Bot       string `json:"bot,omitempty"`
-	Sites     []Item `json:"sites"`
-	TopPaths  []Item `json:"topPaths"`
+	// Direct counts requests that reached the server itself, not through
+	// EdgeOne or another proxy (server logs only): blocking the IP in
+	// EdgeOne does not stop these.
+	Direct   int64  `json:"direct,omitempty"`
+	First    string `json:"first"`
+	Last     string `json:"last"`
+	UA       string `json:"ua"`
+	Bot      string `json:"bot,omitempty"`
+	Sites    []Item `json:"sites"`
+	TopPaths []Item `json:"topPaths"`
 
 	// Set by Locate and Assess.
 	Place       string   `json:"place,omitempty"`
@@ -410,11 +414,11 @@ func Parse(out string) Report {
 				s.Top[f[3]] = append(s.Top[f[3]], Item{Value: f[5], Count: num(f[4])})
 			}
 		case "I":
-			if len(f) >= 17 {
+			if len(f) >= 18 {
 				p := b.ip(int(num(f[1])), f[2])
 				p.Requests, p.PV, p.E4xx, p.E5xx, p.Posts, p.Paths = num(f[3]), num(f[4]), num(f[5]), num(f[6]), num(f[7]), num(f[8])
 				p.Sensitive, p.Inject, p.Login, p.PeakMin = num(f[9]), num(f[10]), num(f[11]), num(f[12])
-				p.First, p.Last, p.Bot, p.UA = f[13], f[14], f[15], strings.Join(f[16:], "\t")
+				p.First, p.Last, p.Bot, p.Direct, p.UA = f[13], f[14], f[15], num(f[16]), strings.Join(f[17:], "\t")
 			}
 		case "P":
 			if len(f) >= 6 {

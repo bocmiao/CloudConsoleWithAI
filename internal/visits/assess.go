@@ -184,18 +184,39 @@ func score(p *IPProfile) (int, []string) {
 	return s, why
 }
 
-// Crawlers that can be checked by reverse DNS: the UA word, and the host
-// names their addresses resolve to.
+// Crawlers that can be checked by reverse DNS: the UA word, the host names
+// their addresses resolve to, and words in the network's owner (from the
+// IP database) that mean the address really is the search engine's.
+// googleusercontent.com is left out on purpose: every Google Cloud machine
+// has such a name, so anyone renting one could pass as Googlebot.
 var Crawlers = []struct {
 	Name, UA string
 	Hosts    []string
+	Owners   []string
 }{
-	{"Googlebot", "googlebot", []string{".googlebot.com", ".google.com", ".googleusercontent.com"}},
-	{"Bingbot", "bingbot", []string{".search.msn.com"}},
-	{"百度蜘蛛", "baiduspider", []string{".baidu.com", ".baidu.jp"}},
-	{"Yandex", "yandex", []string{".yandex.ru", ".yandex.net", ".yandex.com"}},
-	{"搜狗蜘蛛", "sogou", []string{".sogou.com"}},
-	{"Applebot", "applebot", []string{".applebot.apple.com"}},
+	{"Googlebot", "googlebot", []string{".googlebot.com", ".google.com"}, []string{"google"}},
+	{"Bingbot", "bingbot", []string{".search.msn.com"}, []string{"microsoft"}},
+	{"百度蜘蛛", "baiduspider", []string{".baidu.com", ".baidu.jp"}, []string{"百度", "baidu"}},
+	{"Yandex", "yandex", []string{".yandex.ru", ".yandex.net", ".yandex.com"}, []string{"yandex"}},
+	{"搜狗蜘蛛", "sogou", []string{".sogou.com"}, []string{"搜狗", "sogou"}},
+	{"Applebot", "applebot", []string{".applebot.apple.com"}, []string{"apple"}},
+}
+
+// OwnedBy says whether a network owner's name (the ISP field) belongs to
+// the named crawler's company.
+func OwnedBy(name, isp string) bool {
+	isp = lower(isp)
+	for _, c := range Crawlers {
+		if c.Name != name {
+			continue
+		}
+		for _, o := range c.Owners {
+			if isp != "" && strings.Contains(isp, o) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ClaimedCrawler returns which checkable crawler a UA says it is.

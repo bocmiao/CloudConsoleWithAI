@@ -41,7 +41,7 @@
 #   S  R 网站 请求 PV UV IP 爬虫 流量 4xx 5xx         整段时间（UV、IP 按整段去重）
 #   T  R 网站 类别 次数 值                            排行（page dir referer ip status bot
 #                                                     device errpage dead leak，每类前 20）
-#   I  R IP 请求 PV 4xx 5xx POST 不同地址 敏感探测 注入 登录失败 每分钟峰值 最早 最晚 爬虫名 浏览器标识
+#   I  R IP 请求 PV 4xx 5xx POST 不同地址 敏感探测 注入 登录失败 每分钟峰值 最早 最晚 爬虫名 直连次数（没经过代理） 浏览器标识
 #   P  R IP path|site 次数 值                         这个 IP 最常访问的地址和网站（前 5）
 #   A  R 网站 visitor PV 访客IP                       有浏览的访客（每个网站前 3000，用来统计地区）
 #   X  说明                                           统计被截断等
@@ -253,6 +253,7 @@ function profile(r,   key, pk) {
 	if (sensitive) ISE[key]++
 	if (inject) IIN[key]++
 	if (login) ILO[key]++
+	if (!fwd) IDI[key]++
 	pk = key SUBSEP path
 	if (!(pk in IPP)) IPN[key]++
 	IPP[pk]++
@@ -288,9 +289,10 @@ BEGIN {
 	split(q[2], rq, " "); method = rq[1]; target = rq[2]
 	split(q[3], st, " "); status = st[1] + 0; bytes = st[2] + 0
 	ref = q[4]; ua = q[6]
+	fwd = 0
 	if (nq >= 9 && q[8] != "-" && q[8] != "") {
 		split(q[8], xf, ","); c = xf[1]; gsub(/ /, "", c)
-		if (c != "") { ip = c; XF[site]++ }
+		if (c != "") { ip = c; XF[site]++; fwd = 1 }
 	}
 	classify()
 	dayc(site); dayc("*")
@@ -323,7 +325,7 @@ END {
 	}
 	for (r in NS) for (i = 1; i <= NS[r]; i++) {
 		x = SK[r, i]; SEL[x] = 1; split(x, k, SUBSEP)
-		print "I" t k[1] t k[2] t IQ[x] t IPV[x] + 0 t IE4[x] + 0 t IE5[x] + 0 t IPO[x] + 0 t IPN[x] + 0 t ISE[x] + 0 t IIN[x] + 0 t ILO[x] + 0 t IPK[x] + 0 t IFI[x] t ILA[x] t IBN[x] t IUA[x]
+		print "I" t k[1] t k[2] t IQ[x] t IPV[x] + 0 t IE4[x] + 0 t IE5[x] + 0 t IPO[x] + 0 t IPN[x] + 0 t ISE[x] + 0 t IIN[x] + 0 t ILO[x] + 0 t IPK[x] + 0 t IFI[x] t ILA[x] t IBN[x] t IDI[x] + 0 t IUA[x]
 	}
 	for (x in IPP) { split(x, k, SUBSEP); if ((k[1] SUBSEP k[2]) in SEL) print "P" t k[1] t k[2] t "path" t IPP[x] t k[3] }
 	for (x in ISI) { split(x, k, SUBSEP); if ((k[1] SUBSEP k[2]) in SEL) print "P" t k[1] t k[2] t "site" t ISI[x] t k[3] }
