@@ -4,6 +4,7 @@
 package tencenttest
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -57,6 +58,11 @@ type Fake struct {
 	// EdgeOne: site-level security policies by zone, and plans.
 	Policies map[string]map[string]any
 	Plans    []tencent.Plan
+	// EdgeOneNodes are the IPs DescribeIPRegion calls EdgeOne's own.
+	EdgeOneNodes map[string]bool
+	// L7Logs are offline log packages by zone: each a name and its JSON
+	// lines, served gzipped under /eolog/.
+	L7Logs map[string][]LogPackage
 
 	// TAT: which instances have the agent online, and a function that
 	// plays the server running a command (defaults to echoing nothing).
@@ -139,7 +145,30 @@ func ok(w http.ResponseWriter, resp map[string]any) {
 	_, _ = w.Write(data)
 }
 
+// LogPackage is an EdgeOne offline log package.
+type LogPackage struct {
+	Domain, Name, Lines string
+	Start               time.Time
+}
+
 func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if name, ok := strings.CutPrefix(r.URL.Path, "/eolog/"); ok {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		for _, list := range f.L7Logs {
+			for _, p := range list {
+				if p.Name == name {
+					f.Calls = append(f.Calls, "GET "+name)
+					gz := gzip.NewWriter(w)
+					_, _ = io.WriteString(gz, p.Lines)
+					_ = gz.Close()
+					return
+				}
+			}
+		}
+		http.NotFound(w, r)
+		return
+	}
 	body, _ := io.ReadAll(r.Body)
 	service := strings.Trim(r.URL.Path, "/")
 	action := r.Header.Get("X-TC-Action")

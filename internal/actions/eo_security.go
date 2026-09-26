@@ -434,3 +434,11 @@ func undoCC(ctx context.Context, c *tencent.Client, undo map[string]string) erro
 	next["AdaptiveFrequencyControl"] = prev
 	return c.SetHTTPDDoS(ctx, undo["zone_id"], next)
 }
+
+// BlockedIPs lists the IPs Miao Panel has blocked in a site's policy.
+func BlockedIPs(p tencent.SecurityPolicy) []string {
+	if i := findRule(p.CustomRules, BlockRuleName); i >= 0 {
+		return ruleIPs(p.CustomRules[i])
+	}
+	return nil
+}

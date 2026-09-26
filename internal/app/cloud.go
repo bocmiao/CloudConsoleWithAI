@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bocmiao/CloudConsoleWithAI/internal/geoip"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/tencent"
 )
 
@@ -446,15 +447,22 @@ type EOReport struct {
 	Bytes     int64              `json:"bytes"`
 	PeakBps   int64              `json:"peakBps"`
 	AvgRespMs int64              `json:"avgRespMs"`
-	HitRatio  float64            `json:"hitRatio"` // -1 when unknown
-	Series    []tencent.Point    `json:"series"`   // requests over time
-	Flux      []tencent.Point    `json:"flux"`     // bytes over time
+	HitRatio  float64            `json:"hitRatio"`  // -1 when unknown
+	Series    []tencent.Point    `json:"series"`    // requests over time
+	Flux      []tencent.Point    `json:"flux"`      // bytes over time
+	Bandwidth []tencent.Point    `json:"bandwidth"` // bits per second over time
+	Resp      []tencent.Point    `json:"resp"`      // average response time (ms) over time
 	Tops      map[string][]EOTop `json:"tops,omitempty"`
+	// The same length of time just before, for comparison; -1 when unknown.
+	PrevRequests int64  `json:"prevRequests"`
+	PrevBytes    int64  `json:"prevBytes"`
+	CheckedAt    string `json:"checkedAt,omitempty"`
 }
 
 // EOTop is one row of a ranking with its share of the total.
 type EOTop struct {
 	Key   string  `json:"key"`
+	Label string  `json:"label,omitempty"` // what the key means, e.g. 美国 for US
 	Value int64   `json:"value"`
 	Share float64 `json:"share"`
 }
@@ -514,9 +522,9 @@ func overviewIn(ctx context.Context, c *tencent.Client, rg eoRange, domain strin
 		case "l7Flow_outFlux":
 			r.Bytes, r.Flux = s.Sum, s.Points
 		case "l7Flow_outBandwidth":
-			r.PeakBps = s.Max
+			r.PeakBps, r.Bandwidth = s.Max, s.Points
 		case "l7Flow_avgResponseTime":
-			r.AvgRespMs = s.Avg
+			r.AvgRespMs, r.Resp = s.Avg, s.Points
 		}
 	}
 	// Cache hit ratio: bytes served from cache over all bytes.
@@ -582,8 +590,20 @@ type eoCached struct {
 	r  EOReport
 }
 
-// EOAnalytics is the 网站统计 page's report: totals, the time series and
-// four rankings, all fetched at the same time.
+// eoPageDims are the rankings on the 网站统计 page's EdgeOne view.
+var eoPageDims = []string{"url", "country", "status", "ip", "referer", "device", "browser"}
+
+// LatestEOAnalytics is the last report made for a domain and range, however
+// old, so the page can show it at once while a fresh one is fetched.
+func (a *App) LatestEOAnalytics(domain string, hours int) (EOReport, bool) {
+	a.eoReports.mu.Lock()
+	defer a.eoReports.mu.Unlock()
+	c, ok := a.eoReports.m[fmt.Sprintf("%s|%d", strings.ToLower(domain), hours)]
+	return c.r, ok
+}
+
+// EOAnalytics is the 网站统计 page's report: totals, the time series,
+// the rankings and the period before, all fetched at the same time.
 func (a *App) EOAnalytics(ctx context.Context, domain string, hours int, refresh bool) (EOReport, error) {
 	c := a.tencentClient()
 	if c == nil {
@@ -602,21 +622,43 @@ func (a *App) EOAnalytics(ctx context.Context, domain string, hours int, refresh
 	if err != nil {
 		return EOReport{}, err
 	}
-	dims := []string{"url", "country", "status", "ip"}
+	dims := append([]string{}, eoPageDims...)
+	if len(rg.scope) == 0 { // the whole site: which of its domains
+		dims = append(dims, "domain")
+	}
 	tops := make([][]EOTop, len(dims))
 	var r EOReport
+	var prev []tencent.Series
+	var prevErr error
 	var wg sync.WaitGroup
-	wg.Add(1 + len(dims))
+	wg.Add(2 + len(dims))
 	go func() { defer wg.Done(); r, err = overviewIn(ctx, c, rg, domain, nil) }()
+	go func() {
+		defer wg.Done()
+		span := rg.end.Sub(rg.start)
+		prev, prevErr = c.L7Timing(ctx, []string{rg.zone.ZoneID}, []string{"l7Flow_request", "l7Flow_outFlux"},
+			rg.start.Add(-span), rg.start, rg.interval, rg.scope)
+	}()
 	for i, dim := range dims {
 		go func(i int, dim string) {
 			defer wg.Done()
-			tops[i], _ = topIn(ctx, c, rg, EOQuery{Dimension: dim, Limit: 10}, 0)
+			tops[i], _ = topIn(ctx, c, rg, EOQuery{Dimension: dim, Limit: 20}, 0)
 		}(i, dim)
 	}
 	wg.Wait()
 	if err != nil {
 		return r, err
+	}
+	r.PrevRequests, r.PrevBytes = -1, -1
+	if prevErr == nil {
+		for _, s := range prev {
+			switch s.Metric {
+			case "l7Flow_request":
+				r.PrevRequests = s.Sum
+			case "l7Flow_outFlux":
+				r.PrevBytes = s.Sum
+			}
+		}
 	}
 	r.Tops = map[string][]EOTop{}
 	for i, dim := range dims {
@@ -624,11 +666,13 @@ func (a *App) EOAnalytics(ctx context.Context, domain string, hours int, refresh
 			if r.Requests > 0 {
 				tops[i][j].Share = float64(tops[i][j].Value) / float64(r.Requests)
 			}
+			tops[i][j].Label = eoLabel(dim, tops[i][j].Key)
 		}
 		if tops[i] != nil {
 			r.Tops[dim] = tops[i]
 		}
 	}
+	r.CheckedAt = time.Now().UTC().Format(time.RFC3339)
 	a.eoReports.mu.Lock()
 	if a.eoReports.m == nil {
 		a.eoReports.m = map[string]eoCached{}
@@ -637,6 +681,30 @@ func (a *App) EOAnalytics(ctx context.Context, domain string, hours int, refresh
 	a.eoReports.mu.Unlock()
 	return r, nil
 }
+
+// eoLabel says in words what a ranking's key is, where it is a code.
+func eoLabel(dim, key string) string {
+	switch dim {
+	case "country":
+		return geoip.CountryName(key)
+	case "status":
+		return statusMeaning[key]
+	case "device":
+		return deviceNames[strings.ToLower(key)]
+	}
+	return ""
+}
+
+var statusMeaning = map[string]string{
+	"200": "正常", "204": "正常（没有内容）", "206": "部分内容（下载、视频）", "301": "永久跳转", "302": "临时跳转",
+	"304": "没有变化（用浏览器缓存）", "307": "临时跳转", "308": "永久跳转", "400": "请求有误", "401": "需要登录",
+	"403": "拒绝访问", "404": "找不到", "405": "请求方式不允许", "408": "请求超时", "413": "请求太大",
+	"416": "请求范围不对", "418": "被拦截", "429": "请求太频繁（被限速）", "499": "访客提前断开",
+	"500": "源站程序出错", "502": "源站出错", "503": "源站暂时不可用", "504": "源站响应超时",
+	"520": "源站返回异常", "522": "连不上源站", "523": "源站不可达", "524": "源站响应超时",
+}
+
+var deviceNames = map[string]string{"pc": "电脑", "mobile": "手机", "tablet": "平板", "tv": "电视", "other": "其他", "unknown": "未知"}
 
 // EOSites lists the EdgeOne sites and acceleration domains, for the
 // 网站统计 page's picker.

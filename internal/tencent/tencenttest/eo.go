@@ -27,6 +27,42 @@ func (f *Fake) serveEO(w http.ResponseWriter, service, action string, in map[str
 			"CertificateId": "ssl-abc", "Domain": "api.example.com", "SubjectAltName": []string{"api.example.com"}, "From": "trustasia",
 			"ProductZhName": "TrustAsia 免费版", "Status": 1, "StatusName": "已通过", "CertEndTime": end, "IsDv": true, "HostingStatus": -1,
 		}}})
+	case "teo DownloadL7Logs":
+		zones, _ := in["ZoneIds"].([]any)
+		start, _ := time.Parse(time.RFC3339, str("StartTime"))
+		end, _ := time.Parse(time.RFC3339, str("EndTime"))
+		if len(zones) != 1 || start.IsZero() || end.IsZero() {
+			fail(w, "InvalidParameter", "bad DownloadL7Logs request")
+			return true
+		}
+		var data []map[string]any
+		for _, p := range f.L7Logs[fmt.Sprint(zones[0])] {
+			if p.Start.Before(start.Add(-time.Hour)) || p.Start.After(end) {
+				continue
+			}
+			data = append(data, map[string]any{"Domain": p.Domain, "Area": "mainland", "LogPacketName": p.Name, "Url": f.URL + "/eolog/" + p.Name,
+				"LogStartTime": p.Start.UTC().Format(time.RFC3339), "LogEndTime": p.Start.Add(time.Hour).UTC().Format(time.RFC3339), "Size": len(p.Lines)})
+		}
+		off, _ := in["Offset"].(float64)
+		lim, _ := in["Limit"].(float64)
+		total := len(data)
+		data = data[min(int(off), total):min(int(off+lim), total)]
+		ok(w, map[string]any{"TotalCount": total, "Data": data})
+	case "teo DescribeIPRegion":
+		ips, _ := in["IPs"].([]any)
+		if len(ips) > 100 {
+			fail(w, "InvalidParameter.IPsTooMany", "at most 100 IPs")
+			return true
+		}
+		var info []map[string]any
+		for _, ip := range ips {
+			yes := "no"
+			if f.EdgeOneNodes[fmt.Sprint(ip)] {
+				yes = "yes"
+			}
+			info = append(info, map[string]any{"IP": ip, "IsEdgeOneIP": yes})
+		}
+		ok(w, map[string]any{"IPRegionInfo": info})
 	case "teo DescribeSecurityPolicy":
 		if str("Entity") != "ZoneDefaultPolicy" {
 			fail(w, "InvalidParameter", "fake only has site policies")

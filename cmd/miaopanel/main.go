@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"time"
 
@@ -86,8 +87,13 @@ func run(port int, dataDir string, openBrowser, window bool) error {
 		return err
 	}
 	token := hex.EncodeToString(tok)
+	a := app.New(st, sec)
+	a.CacheDir = filepath.Join(dir, "cache")
+	warmCtx, stopWarm := context.WithCancel(context.Background())
+	defer stopWarm()
+	go a.KeepWarm(warmCtx, 20*time.Minute) // statistics ready before the pages open
 	srv := &http.Server{
-		Handler:           api.New(app.New(st, sec), token, boundPort, version),
+		Handler:           api.New(a, token, boundPort, version),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	url := api.LaunchURL(boundPort, token)

@@ -66,7 +66,12 @@ func New(a *app.App, token string, port int, version string) *Server {
 	api("POST /api/settings/tencent/test", s.testTencent)
 	api("GET /api/tencent/servers", s.tencentServers)
 	api("GET /api/servers/{id}/cloud", s.serverCloud)
-	api("GET /api/servers/{id}/visits", s.serverVisits)
+	api("GET /api/visits/sources", s.visitSources)
+	api("GET /api/visits", s.getVisits)
+	api("GET /api/visits/blocked", s.blockedIPs)
+	api("POST /api/visits/block", s.blockIPs)
+	api("POST /api/visits/unblock", s.unblockIPs)
+	api("POST /api/visits/judge", s.judgeIPs)
 	api("POST /api/servers/{id}/terminal", s.openTerminal)
 	api("GET /api/terminals", s.listTerminals)
 	api("GET /api/terminals/{tid}/output", s.terminalOutput)
@@ -259,23 +264,19 @@ func (s *Server) testAI(_ http.ResponseWriter, r *http.Request) (any, error) {
 	return map[string]string{"reply": text}, err
 }
 
-// serverVisits answers at once with the last visits report for the range
+func (s *Server) visitSources(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return s.app.VisitSources()
+}
+
+// getVisits answers at once with the last visits report of a source
 // (refreshing it in the background when old); wait=1 waits for a current
 // one and refresh=1 counts again.
-func (s *Server) serverVisits(_ http.ResponseWriter, r *http.Request) (any, error) {
-	id, err := pathID(r)
-	if err != nil {
-		return nil, err
-	}
+func (s *Server) getVisits(_ http.ResponseWriter, r *http.Request) (any, error) {
 	q := r.URL.Query()
-	days, _ := strconv.Atoi(q.Get("days"))
-	if days == 0 {
-		days = 7
-	}
 	if q.Get("refresh") == "1" || q.Get("wait") == "1" {
-		return s.app.SiteVisits(r.Context(), id, days, q.Get("refresh") == "1")
+		return s.app.Visits(r.Context(), q.Get("source"), q.Get("refresh") == "1")
 	}
-	return s.app.LatestSiteVisits(r.Context(), id, days)
+	return s.app.LatestVisits(r.Context(), q.Get("source"))
 }
 
 type termSize struct {
@@ -348,6 +349,45 @@ func (s *Server) closeTerminal(_ http.ResponseWriter, r *http.Request) (any, err
 	return map[string]bool{"ok": true}, s.app.CloseTerminal(r.PathValue("tid"))
 }
 
+func (s *Server) blockedIPs(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.Blocked(r.Context())
+}
+
+type ipsRequest struct {
+	Source string   `json:"source"`
+	Zone   string   `json:"zone"`
+	Days   int      `json:"days"`
+	IPs    []string `json:"ips"`
+}
+
+// blockIPs proposes a checklist that blocks IPs; the page shows it to be
+// confirmed and run like any other.
+func (s *Server) blockIPs(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req ipsRequest
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.ProposeBlock(r.Context(), req.Source, req.IPs)
+}
+
+func (s *Server) unblockIPs(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req ipsRequest
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.ProposeUnblock(r.Context(), req.Zone, req.IPs)
+}
+
+func (s *Server) judgeIPs(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req ipsRequest
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+	defer cancel()
+	return s.app.JudgeIPs(ctx, req.Source, req.Days, req.IPs)
+}
+
 // getCertificates answers at once with the last overview (refreshing it in
 // the background when old); wait=1 waits for a current one and refresh=1
 // gathers a new one.
@@ -417,9 +457,17 @@ func (s *Server) eoSites(_ http.ResponseWriter, r *http.Request) (any, error) {
 	return s.app.EOSites(r.Context())
 }
 
+// eoAnalytics answers with=cached from the last report, however old, when
+// there is one; the page then asks again for a fresh one.
 func (s *Server) eoAnalytics(_ http.ResponseWriter, r *http.Request) (any, error) {
-	hours, _ := strconv.Atoi(r.URL.Query().Get("hours"))
-	return s.app.EOAnalytics(r.Context(), r.URL.Query().Get("domain"), hours, r.URL.Query().Get("refresh") == "1")
+	q := r.URL.Query()
+	hours, _ := strconv.Atoi(q.Get("hours"))
+	if q.Get("cached") == "1" {
+		if rep, ok := s.app.LatestEOAnalytics(q.Get("domain"), hours); ok {
+			return rep, nil
+		}
+	}
+	return s.app.EOAnalytics(r.Context(), q.Get("domain"), hours, q.Get("refresh") == "1")
 }
 
 func (s *Server) chat(_ http.ResponseWriter, r *http.Request) (any, error) {

@@ -143,7 +143,8 @@ function serviceList(free) {
 
 const PlanCard = {
   props: { plan: { type: Object, required: true }, serverName: { type: String, default: '' } },
-  setup(props) {
+  emits: ['done'],
+  setup(props, { emit }) {
     const openLog = inject('openLog', () => {});
     const p = ref(props.plan);
     const picked = ref(new Set());
@@ -170,6 +171,7 @@ const PlanCard = {
         p.value = await api('GET', `/api/plans/${p.value.id}`);
         if (p.value.status !== 'running') {
           stop();
+          emit('done', p.value);
           const failed = steps.value.some(s => ['failed', 'rolled_back', 'refused'].includes(s.status));
           notify(failed ? '执行结束，有步骤没有成功，请查看详情' : '全部执行完成', failed ? 'error' : 'ok');
         }
@@ -227,7 +229,7 @@ const PlanCard = {
   <div class="plan">
     <div class="group-title">清单<span v-if="serverName"> · {{ serverName }}</span></div>
     <div class="group">
-      <div class="row stack"><b>{{ p.title }}</b><div class="small secondary">{{ p.reason }}</div></div>
+      <div class="row stack"><b>{{ p.title }}</b><div class="small secondary pre-line">{{ p.reason }}</div></div>
       <div class="row step" v-for="(s, i) in steps" :key="i" :class="{off: !s.executable}">
         <span class="step-mark">
           <span v-if="s.status === 'running'" class="spinner"></span>
@@ -310,7 +312,7 @@ const PlanCard = {
   </div>`,
 };
 
-const ORIGIN_NAME = { ai: 'AI 检查', user: '你操作的', plan: '清单（你确认后执行）' };
+const ORIGIN_NAME = { ai: 'AI 检查', user: '你操作的', plan: '清单（你确认后执行）', auto: '后台自动更新' };
 const EXEC_STATUS = {
   running: { icon: '', cls: 'info', text: '执行中' },
   done: { icon: 'check', cls: 'ok', text: '完成' },
@@ -454,11 +456,12 @@ const LineChart = {
     extraFormat: { type: Function, default: fmtBytes },
     more: { type: Array, default: () => [] },  // [{label, points, format}] more rows in the tooltip
     span: { type: Number, default: 24 },       // hours shown, picks the time format
+    partial: Boolean,                          // the last point is a period not over yet (dashed)
   },
   setup(props) {
     const box = ref(null);
     const width = ref(640);
-    const height = 240, m = { l: 52, r: 16, t: 12, b: 26 };
+    const height = 240;
     const hover = ref(-1);
     let ro = null;
     onMounted(() => {
@@ -468,30 +471,41 @@ const LineChart = {
     onUnmounted(() => ro && ro.disconnect());
 
     const scale = computed(() => niceScale(Math.max(0, ...props.points.map(p => p.v))));
-    const x = i => m.l + (props.points.length < 2 ? 0 : i * (width.value - m.l - m.r) / (props.points.length - 1));
-    const y = v => m.t + (1 - v / scale.value.max) * (height - m.t - m.b);
-    const line = computed(() => props.points.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.v).toFixed(1)}`).join(''));
-    const area = computed(() => props.points.length ? `${line.value}L${x(props.points.length - 1).toFixed(1)},${y(0)}L${x(0).toFixed(1)},${y(0)}Z` : '');
-    const yTicks = computed(() => {
+    // The left margin fits the widest axis label (10.0 Kbps, 1.5万).
+    const labels = computed(() => {
       const out = [];
-      for (let v = 0; v <= scale.value.max + 1e-9; v += scale.value.step) out.push({ v, y: y(v) });
+      for (let v = 0; v <= scale.value.max + 1e-9; v += scale.value.step) out.push({ v, text: props.format(v) });
       return out;
     });
+    const textWidth = t => [...t].reduce((w, c) => w + (c.charCodeAt(0) > 255 ? 11 : 6.4), 0);
+    const m = reactive({ l: computed(() => Math.max(36, Math.ceil(Math.max(...labels.value.map(l => textWidth(l.text))) + 14))), r: 16, t: 12, b: 26 });
+    const x = i => m.l + (props.points.length < 2 ? 0 : i * (width.value - m.l - m.r) / (props.points.length - 1));
+    const y = v => m.t + (1 - v / scale.value.max) * (height - m.t - m.b);
+    const path = list => list.map((p, i) => `${i ? 'L' : 'M'}${x(p.i).toFixed(1)},${y(p.v).toFixed(1)}`).join('');
+    const indexed = computed(() => props.points.map((p, i) => ({ i, v: p.v })));
+    const cut = computed(() => props.partial && props.points.length > 1 ? props.points.length - 1 : props.points.length);
+    const line = computed(() => path(indexed.value.slice(0, cut.value)));
+    const tail = computed(() => cut.value < props.points.length ? path(indexed.value.slice(cut.value - 1)) : '');
+    const area = computed(() => props.points.length ? `${path(indexed.value)}L${x(props.points.length - 1).toFixed(1)},${y(0)}L${x(0).toFixed(1)},${y(0)}Z` : '');
+    const yTicks = computed(() => labels.value.map(l => ({ v: l.v, text: l.text, y: y(l.v) })));
     const timeText = t => {
       const d = new Date(t * 1000);
       const hm = d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
       return props.span <= 24 ? hm : `${d.getMonth() + 1}-${d.getDate()}${props.span <= 72 ? ' ' + hm : ''}`;
     };
+    // Labels at an even step (every day, every 2 days, ...), the last one
+    // always shown.
     const xTicks = computed(() => {
       const n = props.points.length;
       if (!n) return [];
-      const want = Math.max(2, Math.min(6, Math.floor(width.value / 110)));
-      const out = [];
-      for (let k = 0; k < want; k++) {
-        const i = Math.round(k * (n - 1) / (want - 1));
-        out.push({ x: x(i), text: timeText(props.points[i].t), anchor: k === 0 ? 'start' : k === want - 1 ? 'end' : 'middle' });
-      }
-      return out;
+      const room = Math.max(2, Math.min(8, Math.floor((width.value - m.l - m.r) / 84) + 1));
+      const step = Math.max(1, Math.ceil((n - 1) / (room - 1)));
+      const idx = [];
+      for (let i = n - 1; i >= 0; i -= step) idx.unshift(i);
+      const gap = (width.value - m.l - m.r) / Math.max(1, n - 1);
+      if (idx.length > 1 && idx[0] > 0 && idx[0] * gap >= 70) idx.unshift(0);
+      return idx.map((i, k) => ({ x: x(i), text: timeText(props.points[i].t),
+        anchor: i === 0 ? 'start' : i === n - 1 && k === idx.length - 1 ? 'end' : 'middle' }));
     });
     function onMove(e) {
       const r = box.value.getBoundingClientRect();
@@ -506,17 +520,25 @@ const LineChart = {
       if (e.key === 'ArrowRight') { hover.value = Math.min(n - 1, hover.value < 0 ? 0 : hover.value + 1); e.preventDefault(); }
       if (e.key === 'ArrowLeft') { hover.value = Math.max(0, hover.value < 0 ? n - 1 : hover.value - 1); e.preventDefault(); }
     }
+    // The tooltip names the point exactly: a day, or a time on a day.
+    const tipTime = t => {
+      const pts = props.points, step = pts.length > 1 ? pts[1].t - pts[0].t : 3600;
+      if (props.span <= 24) return timeText(t);
+      const d = new Date(t * 1000), day = `${d.getMonth() + 1}月${d.getDate()}日`;
+      return step >= 86400 ? day : day + ' ' + d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+    };
     const tip = computed(() => {
       const i = hover.value;
       if (i < 0 || i >= props.points.length) return null;
       const px = x(i);
       return {
-        x: px, y: y(props.points[i].v), time: timeText(props.points[i].t), value: props.format(props.points[i].v),
+        x: px, y: y(props.points[i].v), time: tipTime(props.points[i].t) + (props.partial && i === props.points.length - 1 ? '（还没过完）' : ''),
+        value: props.format(props.points[i].v),
         extra: props.extra[i] ? props.extraFormat(props.extra[i].v) : '', left: px > width.value * 0.6,
         more: props.more.map(m => ({ label: m.label, value: m.points[i] ? (m.format || fmtCount)(m.points[i].v) : '—' })),
       };
     });
-    return { box, width, height, m, line, area, yTicks, xTicks, onMove, onKey, hover, tip, format: props.format, fmtCount };
+    return { box, width, height, m, line, tail, area, yTicks, xTicks, onMove, onKey, hover, tip, fmtCount };
   },
   template: `
   <div class="lchart" ref="box" @pointermove="onMove" @pointerleave="hover = -1">
@@ -525,11 +547,12 @@ const LineChart = {
         <line v-for="t in yTicks" :key="t.v" :x1="m.l" :x2="width - m.r" :y1="t.y" :y2="t.y"></line>
       </g>
       <g class="ticks">
-        <text v-for="t in yTicks" :key="'y' + t.v" :x="m.l - 8" :y="t.y + 4" text-anchor="end">{{ format(t.v) }}</text>
+        <text v-for="t in yTicks" :key="'y' + t.v" :x="m.l - 8" :y="t.y + 4" text-anchor="end">{{ t.text }}</text>
         <text v-for="(t, i) in xTicks" :key="'x' + i" :x="t.x" :y="height - 6" :text-anchor="t.anchor">{{ t.text }}</text>
       </g>
       <path class="area" :d="area"></path>
       <path class="line" :d="line"></path>
+      <path class="line partial" :d="tail" v-if="tail"></path>
       <template v-if="tip">
         <line class="cross" :x1="tip.x" :x2="tip.x" :y1="m.t" :y2="height - m.b"></line>
         <circle class="dot" :cx="tip.x" :cy="tip.y" r="4"></circle>
@@ -545,198 +568,492 @@ const LineChart = {
 };
 
 const VISIT_RANGES = [{ d: 1, text: '今天' }, { d: 7, text: '7 天' }, { d: 30, text: '30 天' }];
-const VISIT_TOPS = { page: '受访页面', referer: '来源', ip: '访客 IP', status: '状态码', bot: '爬虫和程序', device: '设备' };
-// Reports already seen this session, by server and range.
+const VISIT_SECTIONS = [{ id: 'overview', text: '概览' }, { id: 'visitors', text: '访客' }, { id: 'content', text: '内容' }, { id: 'security', text: '安全' }];
+const RISK = { high: { text: '高风险', cls: 'crit' }, medium: { text: '中风险', cls: 'warn' }, low: { text: '低风险', cls: 'low' }, none: { text: '正常', cls: 'ok' } };
+const VERDICT = { block: '建议封禁', watch: '继续观察', ignore: '不用管' };
+// Reports already seen this session, by source.
 const visitMemo = new Map();
+const pref = (k, d) => { try { return localStorage.getItem(k) || d; } catch { return d; } };
+const setPref = (k, v) => { try { localStorage.setItem(k, v); } catch { /* not kept */ } };
 
-// Website visits counted from the access logs on a server: every site
-// together or one at a time, per day, with rankings.
+// One ranking: rows with a share bar; clicking a row picks its value.
+const RankList = {
+  props: { items: { type: Array, default: () => [] }, total: { type: Number, default: 0 }, limit: { type: Number, default: 10 },
+    clickable: Boolean, empty: { type: String, default: '没有数据' }, expandable: { type: Boolean, default: true } },
+  emits: ['pick'],
+  setup(props) {
+    const more = ref(false);
+    const shown = computed(() => props.items.slice(0, more.value ? 20 : props.limit));
+    const base = computed(() => props.total > 0 ? props.total : props.items.reduce((s, i) => s + i.count, 0));
+    const share = n => base.value > 0 ? Math.min(1, n / base.value) : 0;
+    return { more, shown, share, fmtCount };
+  },
+  template: `
+  <div class="rank">
+    <div class="rank-row" v-for="t in shown" :key="t.value" :class="{ clickable }" @click="clickable && $emit('pick', t.value)">
+      <div class="rank-line">
+        <span class="rank-key" :title="t.value">{{ t.value }}</span>
+        <span class="rank-note" v-if="t.note" :title="t.note">{{ t.note }}</span>
+        <span class="num">{{ fmtCount(t.count) }}</span>
+        <span class="rank-share">{{ (share(t.count) * 100).toFixed(1) }}%</span>
+      </div>
+      <div class="share-bar"><div :style="{ width: Math.max(1, share(t.count) * 100) + '%' }"></div></div>
+    </div>
+    <div class="rank-empty" v-if="!items.length">{{ empty }}</div>
+    <button class="link small rank-more" v-if="expandable && items.length > limit" @click="more = !more">{{ more ? '收起' : '显示前 20 名' }}</button>
+  </div>`,
+};
+
+// 访问分析: visits counted from access logs (EdgeOne's or a server's),
+// in four sections, with the IPs worth a look and blocking.
 const VisitStats = {
-  props: { servers: { type: Array, default: () => [] }, active: Boolean },
+  props: { servers: { type: Array, default: () => [] }, active: Boolean, tencent: Boolean },
   emits: ['ask'],
   setup(props, { emit }) {
-    const serverId = ref(props.servers.length ? props.servers[0].id : 0);
-    const days = ref(7);
+    const sources = ref([]);
+    const source = ref(pref('miao.visitSource', ''));
+    const days = ref(Number(pref('miao.visitDays', '7')) || 7);
     const site = ref('*');
+    const section = ref(pref('miao.visitSection', 'overview'));
+    const series = ref('pv');
     const data = ref(null);
     const loading = ref(false);
     const error = ref('');
+    const judging = ref(false);
+    const judgements = reactive({}); // source|days -> {summary, verdicts, cost, currency}
+    const picked = ref(new Set());
+    const showAll = ref(false);
+    const drawer = ref(null); // IP profile shown on the side
+    const plan = ref(null); // checklist being confirmed
+    const planning = ref(false);
+    const blocked = ref([]);
     let seq = 0;
-    watch(() => props.servers, list => {
-      if (!list.some(s => s.id === serverId.value)) serverId.value = list.length ? list[0].id : 0;
-    });
-    // The server answers at once with the last report it has, even one
-    // from before Miao Panel restarted; if that is old it is shown while
-    // the logs are counted again (refreshing), then replaced.
+    watch(days, v => setPref('miao.visitDays', String(v)));
+    watch(section, v => setPref('miao.visitSection', v));
+
+    async function loadSources() {
+      try {
+        sources.value = await api('GET', '/api/visits/sources');
+        if (!sources.value.some(s => s.key === source.value)) source.value = sources.value.length ? sources.value[0].key : '';
+      } catch (e) { error.value = e.message; }
+    }
+    // The server answers at once with the last report it has (even from
+    // before a restart); if old it is shown while counting again.
     async function load(refresh) {
-      if (!serverId.value) return;
-      const key = serverId.value + '|' + days.value;
-      const memo = visitMemo.get(key);
-      data.value = memo ? memo.data : null;
-      if (!refresh && memo && Date.now() - memo.at < 5 * 60 * 1000) return;
+      if (!source.value) return;
+      const memo = visitMemo.get(source.value);
+      if (memo) data.value = memo;
+      else if (!data.value || data.value.sourceKey !== source.value) data.value = null;
       const n = ++seq;
       loading.value = true; error.value = '';
-      const base = `/api/servers/${serverId.value}/visits?days=${days.value}`;
+      const base = `/api/visits?source=${encodeURIComponent(source.value)}`;
       try {
         let d = await api('GET', base + (refresh ? '&refresh=1' : ''));
         if (n !== seq) return;
-        data.value = d;
+        data.value = d; visitMemo.set(source.value, d);
         if (d.refreshing) {
           d = await api('GET', base + '&wait=1');
           if (n !== seq) return;
-          data.value = d;
+          data.value = d; visitMemo.set(source.value, d);
         }
-        visitMemo.set(key, { data: d, at: Date.now() });
       } catch (e) { if (n === seq) error.value = e.message; }
       finally { if (n === seq) loading.value = false; }
     }
-    watch([serverId, days], () => load(false));
-    watch(() => props.active, on => { if (on) load(false); });
-    onMounted(() => load(false));
+    async function loadBlocked() {
+      if (!props.tencent) { blocked.value = []; return; }
+      try { blocked.value = await api('GET', '/api/visits/blocked'); } catch { blocked.value = []; }
+    }
+    watch(source, v => { setPref('miao.visitSource', v); site.value = '*'; picked.value = new Set(); load(false); });
+    watch(() => props.active, on => { if (on) { loadSources().then(() => load(false)); loadBlocked(); } });
+    watch(() => props.servers.length, () => loadSources());
+    watch(() => props.tencent, () => { loadSources(); loadBlocked(); });
+    onMounted(async () => { await loadSources(); load(false); loadBlocked(); });
 
     const siteNames = computed(() => ((data.value && data.value.sites) || []).map(s => s.name).filter(n => n !== '*'));
-    // A site that is gone from a loaded report falls back to all sites;
-    // while a range loads there is no report yet, and the choice is kept.
     watch(siteNames, names => { if (names.length && site.value !== '*' && !names.includes(site.value)) site.value = '*'; });
-    const expanded = reactive({});
-    const cur = computed(() => {
-      const list = (data.value && data.value.sites) || [];
-      return list.find(s => s.name === site.value) || list.find(s => s.name === '*') || null;
+    const range = computed(() => data.value && data.value.ranges ? data.value.ranges[String(days.value)] : null);
+    const cur = computed(() => range.value && range.value.sites ? (range.value.sites[site.value] || range.value.sites['*'] || null) : null);
+    const total = computed(() => cur.value ? cur.value.total : {});
+    const top = kind => (cur.value && cur.value.top && cur.value.top[kind]) || [];
+    const siteInfo = computed(() => ((data.value && data.value.sites) || []).find(s => s.name === site.value) || null);
+    const siteRows = computed(() => range.value ? siteNames.value.map(n => ({ name: n, total: (range.value.sites[n] || {}).total || {} })) : []);
+
+    // IPs: those that touched the chosen site, riskiest first.
+    const ips = computed(() => {
+      const list = (range.value && range.value.ips) || [];
+      return site.value === '*' ? list : list.filter(p => (p.sites || []).some(s => s.value === site.value));
     });
-    const siteRows = computed(() => ((data.value && data.value.sites) || []).filter(s => s.name !== '*'));
-    const dayTime = d => { const [y, m, dd] = d.split('-').map(Number); return new Date(y, m - 1, dd).getTime() / 1000; };
-    // Per day over a range; per hour for today.
-    const series = computed(() => {
-      const c = cur.value;
-      if (!c) return { pv: [], uv: [], ip: [], req: [] };
-      if (days.value === 1) {
-        const base = data.value.today ? dayTime(data.value.today) : Math.floor(Date.now() / 86400000) * 86400;
-        // Up to the latest hour with visits: later hours have not happened yet.
-        const last = c.hours.reduce((m, h) => h.requests > 0 ? h.hour : m, 0);
-        const pts = key => c.hours.filter(h => h.hour <= Math.max(last, 1)).map(h => ({ t: base + h.hour * 3600, v: h[key] }));
-        return { pv: pts('pv'), req: pts('requests'), uv: [], ip: [] };
+    const risky = computed(() => ips.value.filter(p => p.risk !== 'none'));
+    const ipRows = computed(() => showAll.value ? ips.value : risky.value);
+    const counts = computed(() => ({
+      high: risky.value.filter(p => p.risk === 'high').length,
+      medium: risky.value.filter(p => p.risk === 'medium').length,
+      low: risky.value.filter(p => p.risk === 'low').length,
+      // high-risk IPs not blocked yet: what still needs doing
+      open: risky.value.filter(p => p.risk === 'high' && !blockedSet.value.has(p.ip)).length,
+    }));
+    const judgement = computed(() => judgements[source.value + '|' + days.value] || null);
+    const verdictOf = ip => { const j = judgement.value; return j ? (j.verdicts || []).find(v => v.ip === ip) : null; };
+    const blockable = p => !p.edgeOne && !p.crawler && !/^(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(p.ip);
+    const blockedSet = computed(() => new Set(blocked.value.flatMap(z => z.ips)));
+    function togglePick(ip) {
+      const next = new Set(picked.value);
+      next.has(ip) ? next.delete(ip) : next.add(ip);
+      picked.value = next;
+    }
+    function pickSuggested() {
+      picked.value = new Set(ips.value.filter(p => blockable(p) && !blockedSet.value.has(p.ip) &&
+        (verdictOf(p.ip) ? verdictOf(p.ip).action === 'block' : p.risk === 'high')).map(p => p.ip));
+    }
+    async function judge() {
+      judging.value = true;
+      try {
+        const want = picked.value.size ? [...picked.value] : [];
+        judgements[source.value + '|' + days.value] = await api('POST', '/api/visits/judge', { source: source.value, days: days.value, ips: want });
+        loadSpendSoon();
+      } catch (e) { notify(e.message, 'error'); }
+      finally { judging.value = false; }
+    }
+    const loadSpendSoon = inject('loadSpend', () => {});
+    async function block(list) {
+      planning.value = true;
+      try { plan.value = await api('POST', '/api/visits/block', { source: source.value, ips: list }); }
+      catch (e) { notify(e.message, 'error'); }
+      finally { planning.value = false; }
+    }
+    async function unblock(zone, ip) {
+      planning.value = true;
+      try { plan.value = await api('POST', '/api/visits/unblock', { zone, ips: [ip] }); }
+      catch (e) { notify(e.message, 'error'); }
+      finally { planning.value = false; }
+    }
+    function planDone() { loadBlocked(); picked.value = new Set(); }
+    function openIP(ip) {
+      const p = ((range.value && range.value.ips) || []).find(x => x.ip === ip);
+      if (p) drawer.value = p;
+      else notify('这个 IP 访问得不多，没有详细记录', 'ok');
+    }
+
+    // What needs attention, most important first.
+    const alerts = computed(() => {
+      const out = [];
+      const d = data.value;
+      if (!d) return out;
+      if (d.problem) out.push({ level: 'info', text: d.problem });
+      for (const s of d.sites || []) {
+        if (s.warning && (site.value === '*' || s.name === site.value)) out.push({ level: 'warn', text: (site.value === '*' ? s.name + '：' : '') + s.warning });
       }
-      const pts = key => c.days.map(d => ({ t: dayTime(d.date), v: d[key] }));
-      return { pv: pts('pv'), uv: pts('uv'), ip: pts('ip'), req: pts('requests') };
+      for (const l of top('leak')) out.push({ level: 'crit', text: `敏感文件被成功下载：${l.value.replace(/^200 /, '')}（${l.count} 次）。里面的密钥或代码可能已经泄露，请删除或禁止访问这个文件，并更换其中的密码和密钥。`, ask: `我的网站 ${l.value.replace(/^200 /, '')} 返回了 200，可能泄露了敏感信息，帮我看看怎么处理` });
+      const c = counts.value;
+      if (c.open) out.push({ level: 'crit', text: `发现 ${c.open} 个高风险 IP 还没有封禁（扫描、攻击或猜密码）`, go: 'security' });
+      else if (c.high) out.push({ level: 'info', text: `${c.high} 个高风险 IP 都已在 EdgeOne 封禁`, go: 'security' });
+      if (c.medium) out.push({ level: 'warn', text: `有 ${c.medium} 个可疑 IP 值得看一看`, go: 'security' });
+      const t = total.value;
+      if (t.requests > 50 && t.e5xx / t.requests > 0.01) out.push({ level: 'warn', text: `服务器出错（5xx）${fmtCount(t.e5xx)} 次，占请求的 ${(t.e5xx / t.requests * 100).toFixed(1)}%`, go: 'content' });
+      if (t.requests > 50 && t.bots / t.requests > 0.5) out.push({ level: 'info', text: `爬虫和程序占了请求的 ${Math.round(t.bots / t.requests * 100)}%` , go: 'visitors' });
+      for (const n of d.notes || []) out.push({ level: 'info', text: n });
+      return out;
     });
-    const more = computed(() => days.value === 1
-      ? [{ label: '次请求', points: series.value.req }]
-      : [{ label: 'UV', points: series.value.uv }, { label: 'IP', points: series.value.ip }, { label: '次请求', points: series.value.req }]);
-    // What a ranking's shares are of.
-    function base(kind) {
-      const t = cur.value ? cur.value.total : {};
-      if (kind === 'status') return t.requests;
-      if (kind === 'bot') return t.bots;
-      if (kind === 'ip') return t.requests - t.bots;
-      return t.pv;
+
+    // Trend: per hour today, per day otherwise.
+    const dayTime = s => { const [y, m, dd] = s.split('-').map(Number); return new Date(y, m - 1, dd).getTime() / 1000; };
+    const SERIES = { pv: 'PV', uv: 'UV', ip: 'IP', requests: '请求' };
+    const trend = computed(() => {
+      const d = data.value;
+      if (!d) return { main: [], more: [] };
+      if (days.value === 1) {
+        const hours = (d.hours && d.hours[site.value]) || [];
+        const base = d.today ? dayTime(d.today) : 0;
+        const last = hours.reduce((m, h) => h.requests > 0 ? h.hour : m, 0);
+        const list = hours.filter(h => h.hour <= Math.max(last, 1));
+        const key = series.value === 'requests' ? 'requests' : 'pv';
+        const pts = k => list.map(h => ({ t: base + h.hour * 3600, v: h[k] }));
+        return { main: pts(key), more: [{ label: key === 'pv' ? '次请求' : 'PV', points: pts(key === 'pv' ? 'requests' : 'pv') }] };
+      }
+      const list = ((d.days && d.days[site.value]) || []).slice(-days.value);
+      const pts = k => list.map(x => ({ t: dayTime(x.date), v: x[k] }));
+      return { main: pts(series.value), more: Object.keys(SERIES).filter(k => k !== series.value).map(k => ({ label: SERIES[k], points: pts(k) })) };
+    });
+    const dayRows = computed(() => (((data.value && data.value.days) || {})[site.value] || []).slice(-days.value).reverse());
+    const hourRows = computed(() => (((data.value && data.value.hours) || {})[site.value] || []).filter(h => h.requests > 0).reverse());
+    // Full days only (today is not over): the last N days against the N
+    // before them. Only PV and requests add up over days.
+    const fullDays = computed(() => {
+      const list = (data.value && data.value.days && data.value.days[site.value]) || [];
+      return list.length && list[list.length - 1].date === data.value.today ? list.slice(0, -1) : list;
+    });
+    function delta(key) {
+      const n = days.value, list = fullDays.value;
+      if (n === 1 || list.length < n * 2) return null;
+      const sum = arr => arr.reduce((s, x) => s + x[key], 0);
+      const now = sum(list.slice(-n)), before = sum(list.slice(-2 * n, -n));
+      return before ? Math.round((now - before) / before * 100) : null;
     }
-    const share = (kind, n) => { const b = base(kind); return b > 0 ? Math.min(1, n / b) : 0; };
-    const dateText = d => { const [, m, dd] = d.split('-'); return `${Number(m)}月${Number(dd)}日`; };
-    const noForward = computed(() => cur.value && cur.value.lines > 0 && cur.value.forwarded === 0);
-    const serverName = computed(() => (props.servers.find(s => s.id === serverId.value) || {}).name || '');
-    const rangeText = computed(() => (VISIT_RANGES.find(r => r.d === days.value) || {}).text || '');
-    function ask() {
-      const who = site.value === '*' ? `「${serverName.value}」上所有网站` : site.value;
-      emit('ask', `根据访问日志分析一下 ${who} ${days.value === 1 ? '今天' : '最近' + rangeText.value}的访问情况：PV、UV、IP 有没有异常变化，访客主要看了什么、从哪里来，爬虫和异常请求多不多，有没有需要处理的问题？`);
+    const yesterday = key => { const l = fullDays.value; return l.length ? l[l.length - 1][key] : null; };
+    const pct = (a, b) => b > 0 ? (a / b * 100).toFixed(1) + '%' : '—';
+    const rangeText = computed(() => (VISIT_RANGES.find(r => r.d === days.value) || {}).text);
+    const sourceTitle = computed(() => (sources.value.find(s => s.key === source.value) || {}).title || '');
+    function askAI() {
+      const who = site.value === '*' ? '所有网站' : site.value;
+      const src = source.value === 'edgeone' ? 'EdgeOne 日志（source=edgeone）' : `服务器日志（server_id=${(data.value || {}).serverId}）`;
+      emit('ask', `根据${src}分析 ${who} ${days.value === 1 ? '今天' : '最近' + rangeText.value}的访问情况：PV、UV、IP 和地区有没有异常变化，访客主要看了什么、从哪里来，爬虫、错误和可疑 IP 多不多，有没有需要处理的问题？`);
     }
-    return { serverId, days, site, data, loading, error, load, siteNames, cur, siteRows, series, more, share, dateText, expanded, noForward, ask,
-      VISIT_RANGES, VISIT_TOPS, fmtCount, fmtBytes, whenText };
+    function askIP(p) {
+      emit('ask', `分析一下 IP ${p.ip}（${p.place || ''} ${p.isp || ''}）最近${rangeText.value}在我网站上的行为：它访问了什么、频率如何、是不是扫描或攻击，要不要封禁？`);
+    }
+    const shortUA = ua => (ua || '').length > 90 ? ua.slice(0, 90) + '…' : (ua || '—');
+    return { sources, source, days, site, section, series, data, loading, error, load, siteNames, range, cur, total, top, siteInfo, siteRows,
+      ips, risky, ipRows, counts, judgement, verdictOf, blockable, blockedSet, picked, togglePick, pickSuggested, judge, judging, showAll,
+      block, unblock, plan, planning, planDone, blocked, drawer, openIP, alerts, trend, dayRows, hourRows, delta, yesterday, pct, SERIES, sourceTitle,
+      askAI, askIP, shortUA, VISIT_RANGES, VISIT_SECTIONS, RISK, VERDICT, fmtCount, fmtBytes, whenText };
   },
   template: `
-  <div>
-    <div class="group" v-if="!servers.length"><div class="row secondary">先在左边添加服务器，这里会统计服务器上网站的访问日志。</div></div>
+  <div class="vs">
+    <div class="group" v-if="!sources.length && !error"><div class="row secondary">添加服务器或者填写腾讯云密钥后，这里会统计网站的访问日志。</div></div>
     <template v-else>
-      <div class="filter-row">
-        <select v-if="servers.length > 1" v-model="serverId" aria-label="服务器">
-          <option v-for="s in servers" :key="s.id" :value="s.id">{{ s.name }}</option>
-        </select>
-        <select v-model="site" aria-label="网站">
-          <option value="*">全部网站</option>
-          <option v-for="n in siteNames" :key="n" :value="n">{{ n }}</option>
-        </select>
-        <span class="segmented">
-          <button v-for="r in VISIT_RANGES" :key="r.d" :class="{on: days === r.d}" @click="days = r.d">{{ r.text }}</button>
-        </span>
-        <button class="plain" @click="load(true)" :disabled="loading"><ui-icon name="refresh"></ui-icon>刷新</button>
-        <span class="small tertiary live-note" v-if="data && data.checkedAt">
-          <template v-if="loading"><span class="spinner inline"></span>正在重新统计，下面是 {{ whenText(data.checkedAt) }} 的结果</template>
-          <template v-else>统计于 {{ whenText(data.checkedAt) }}</template>
+      <div class="stat-bar">
+        <label class="field"><span>数据</span>
+          <select v-model="source" aria-label="数据来源"><option v-for="s in sources" :key="s.key" :value="s.key">{{ s.title }}</option></select></label>
+        <label class="field"><span>网站</span>
+          <select v-model="site" aria-label="网站"><option value="*">全部网站</option><option v-for="n in siteNames" :key="n" :value="n">{{ n }}</option></select></label>
+        <span class="segmented" role="tablist" aria-label="时间">
+          <button v-for="r in VISIT_RANGES" :key="r.d" role="tab" :aria-selected="days === r.d" :class="{ on: days === r.d }" @click="days = r.d">{{ r.text }}</button>
         </span>
         <span class="grow"></span>
-        <button class="primary" @click="ask" :disabled="!cur"><ui-icon name="sparkles"></ui-icon>让 AI 分析</button>
+        <span class="small tertiary live-note" v-if="data && data.checkedAt">
+          <span class="spinner inline" v-if="loading"></span>{{ loading ? '正在更新，下面是 ' : '统计于 ' }}{{ whenText(data.checkedAt) }}{{ loading ? ' 的结果' : '' }}
+        </span>
+        <button class="plain" @click="load(true)" :disabled="loading" title="重新统计"><ui-icon name="refresh"></ui-icon>刷新</button>
+        <button class="primary" @click="askAI" :disabled="!cur"><ui-icon name="sparkles"></ui-icon>让 AI 分析</button>
       </div>
-      <div class="group" v-if="error"><div class="row st-crit"><ui-icon name="alert"></ui-icon>{{ error }}</div></div>
-      <div class="group" v-if="data && data.problem"><div class="row secondary"><ui-icon name="info"></ui-icon>{{ data.problem }}</div></div>
-      <div class="group" v-if="!data && loading"><div class="row secondary"><span class="spinner inline"></span>正在服务器上统计访问日志（日志大时要十几秒）……</div></div>
-      <div v-if="cur">
-        <div class="tiles six">
-          <div class="tile"><div class="label">PV（浏览量）</div><div class="value">{{ fmtCount(cur.total.pv) }}</div><div class="sub">打开网页的次数</div></div>
-          <div class="tile"><div class="label">UV（访客）</div><div class="value">{{ fmtCount(cur.total.uv) }}</div><div class="sub">不同的 IP + 浏览器</div></div>
-          <div class="tile"><div class="label">IP</div><div class="value">{{ fmtCount(cur.total.ip) }}</div><div class="sub">不同的访客 IP</div></div>
-          <div class="tile"><div class="label">请求数</div><div class="value">{{ fmtCount(cur.total.requests) }}</div><div class="sub">其中爬虫 {{ fmtCount(cur.total.bots) }}</div></div>
-          <div class="tile"><div class="label">流量</div><div class="value">{{ fmtBytes(cur.total.bytes) }}</div><div class="sub">服务器发出</div></div>
-          <div class="tile"><div class="label">错误</div><div class="value">{{ fmtCount(cur.total.e4xx + cur.total.e5xx) }}</div><div class="sub">4xx {{ fmtCount(cur.total.e4xx) }} · 5xx {{ fmtCount(cur.total.e5xx) }}</div></div>
-        </div>
+      <p class="source-note small tertiary" v-if="sources.length">{{ (sources.find(s => s.key === source) || {}).note }}</p>
 
-        <div class="group-title">{{ days === 1 ? '今天每小时的 PV' : '每天的 PV' }}</div>
-        <div class="group chart-card">
-          <line-chart :points="series.pv" :more="more" label="PV" :span="days === 1 ? 24 : days * 24"></line-chart>
-        </div>
+      <nav class="subtabs" role="tablist">
+        <button v-for="s in VISIT_SECTIONS" :key="s.id" role="tab" :aria-selected="section === s.id" :class="{ on: section === s.id }" @click="section = s.id">
+          {{ s.text }}<span class="badge crit" v-if="s.id === 'security' && counts.open" :title="counts.open + ' 个高风险 IP 还没有封禁'">{{ counts.open }}</span>
+        </button>
+      </nav>
 
-        <template v-if="days > 1">
-          <div class="group-title">每天</div>
-          <div class="group table-wrap">
-            <table class="table visit-table">
-              <thead><tr><th>日期</th><th class="num">PV</th><th class="num">UV</th><th class="num">IP</th><th class="num">请求数</th><th class="num">爬虫</th><th class="num">流量</th><th class="num">4xx / 5xx</th></tr></thead>
-              <tbody>
-                <tr v-for="d in [...cur.days].reverse()" :key="d.date">
-                  <td>{{ dateText(d.date) }}</td><td class="num">{{ fmtCount(d.pv) }}</td><td class="num">{{ fmtCount(d.uv) }}</td><td class="num">{{ fmtCount(d.ip) }}</td>
-                  <td class="num">{{ fmtCount(d.requests) }}</td><td class="num">{{ fmtCount(d.bots) }}</td><td class="num">{{ fmtBytes(d.bytes) }}</td><td class="num">{{ d.e4xx }} / {{ d.e5xx }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </template>
+      <div class="notice" v-if="error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ error }}</div>
+      <div class="notice" v-if="!data && loading"><span class="spinner"></span>正在统计访问日志（第一次要下载或读取日志，可能要一两分钟）……</div>
 
-        <template v-if="site === '*' && siteRows.length > 1">
-          <div class="group-title">各网站</div>
-          <div class="group table-wrap">
-            <table class="table visit-table site-table">
-              <thead><tr><th>网站</th><th class="num">PV</th><th class="num">UV</th><th class="num">IP</th><th class="num">请求数</th><th class="num">流量</th><th></th></tr></thead>
-              <tbody>
-                <tr v-for="s in siteRows" :key="s.name" @click="site = s.name" class="clickable">
-                  <td class="mono-ish">{{ s.name }}</td><td class="num">{{ fmtCount(s.total.pv) }}</td><td class="num">{{ fmtCount(s.total.uv) }}</td><td class="num">{{ fmtCount(s.total.ip) }}</td>
-                  <td class="num">{{ fmtCount(s.total.requests) }}</td><td class="num">{{ fmtBytes(s.total.bytes) }}</td><td><ui-icon name="chevron" class="tertiary"></ui-icon></td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </template>
-
-        <div class="top-grid">
-          <div v-for="(name, key) in VISIT_TOPS" :key="key">
-            <div class="group-title">{{ name }}</div>
-            <div class="group">
-              <div class="row top-row" v-for="t in ((cur.top && cur.top[key]) || []).slice(0, expanded[key] ? 20 : 10)" :key="t.value">
-                <div class="grow">
-                  <div class="top-line"><span class="top-key" :title="t.value">{{ t.value }}</span><span class="num">{{ fmtCount(t.count) }}</span><span class="top-share">{{ (share(key, t.count) * 100).toFixed(1) }}%</span></div>
-                  <div class="share-bar"><div :style="{width: Math.max(1, share(key, t.count) * 100) + '%'}"></div></div>
-                </div>
-              </div>
-              <div class="row secondary" v-if="!cur.top || !(cur.top[key] || []).length">没有数据</div>
-              <div class="row" v-else-if="cur.top[key].length > 10"><button class="link small" @click="expanded[key] = !expanded[key]">{{ expanded[key] ? '收起' : '显示前 20 名' }}</button></div>
+      <template v-if="cur">
+        <!-- 概览 -->
+        <template v-if="section === 'overview'">
+          <div class="alerts" v-if="alerts.length">
+            <div class="alert" v-for="(a, i) in alerts" :key="i" :class="'al-' + a.level">
+              <ui-icon :name="a.level === 'crit' ? 'alert' : a.level === 'warn' ? 'warn' : 'info'"></ui-icon>
+              <span class="grow">{{ a.text }}</span>
+              <button class="link small" v-if="a.go" @click="section = a.go">查看</button>
+              <button class="link small" v-if="a.ask" @click="$emit('ask', a.ask)">让 AI 处理</button>
             </div>
           </div>
+          <div class="kpi-group">
+            <div class="kpi-title">访问</div>
+            <div class="tiles four">
+              <div class="tile"><div class="label">PV · 浏览量</div><div class="value">{{ fmtCount(total.pv) }}</div>
+                <div class="sub" v-if="days === 1 && yesterday('pv') !== null">昨天全天 {{ fmtCount(yesterday('pv')) }}</div>
+                <div class="sub" v-else-if="delta('pv') !== null" :title="'最近 ' + days + ' 个整天（不含今天）和再往前 ' + days + ' 天相比'">
+                  <span :class="delta('pv') >= 0 ? 'up' : 'down'">{{ delta('pv') >= 0 ? '↑' : '↓' }} {{ Math.abs(delta('pv')) }}%</span> 较前 {{ days }} 天</div>
+                <div class="sub" v-else>打开网页的次数</div></div>
+              <div class="tile"><div class="label">UV · 访客</div><div class="value">{{ fmtCount(total.uv) }}</div><div class="sub">不同的 IP + 浏览器</div></div>
+              <div class="tile"><div class="label">IP · 独立 IP</div><div class="value">{{ fmtCount(total.ip) }}</div><div class="sub">浏览过网页的 IP</div></div>
+              <div class="tile"><div class="label">人均浏览</div><div class="value">{{ total.uv ? (total.pv / total.uv).toFixed(1) : '—' }}</div><div class="sub">每个访客看的页面数</div></div>
+            </div>
+          </div>
+          <div class="kpi-group">
+            <div class="kpi-title">请求与质量</div>
+            <div class="tiles four">
+              <div class="tile"><div class="label">请求数</div><div class="value">{{ fmtCount(total.requests) }}</div>
+                <div class="sub" v-if="days === 1 && yesterday('requests') !== null">昨天全天 {{ fmtCount(yesterday('requests')) }}</div>
+                <div class="sub" v-else-if="delta('requests') !== null" :title="'最近 ' + days + ' 个整天（不含今天）和再往前 ' + days + ' 天相比'">
+                  <span :class="delta('requests') >= 0 ? 'up' : 'down'">{{ delta('requests') >= 0 ? '↑' : '↓' }} {{ Math.abs(delta('requests')) }}%</span> 较前 {{ days }} 天</div>
+                <div class="sub" v-else>含图片、脚本、接口</div></div>
+              <div class="tile"><div class="label">爬虫和程序</div><div class="value">{{ pct(total.bots, total.requests) }}</div><div class="sub">{{ fmtCount(total.bots) }} 次请求</div></div>
+              <div class="tile"><div class="label">流量</div><div class="value">{{ fmtBytes(total.bytes) }}</div><div class="sub">{{ source === 'edgeone' ? 'EdgeOne 发给访客' : '服务器发出' }}</div></div>
+              <div class="tile"><div class="label">错误率</div><div class="value">{{ pct(total.e4xx + total.e5xx, total.requests) }}</div><div class="sub">4xx {{ fmtCount(total.e4xx) }} · 5xx {{ fmtCount(total.e5xx) }}</div></div>
+            </div>
+          </div>
+
+          <section class="card">
+            <header class="card-head">
+              <h3>{{ days === 1 ? '今天每小时' : '每天' }}</h3>
+              <span class="segmented small">
+                <button v-for="(t, k) in SERIES" :key="k" v-show="days > 1 || k === 'pv' || k === 'requests'" :class="{ on: series === k }" @click="series = k">{{ t }}</button>
+              </span>
+            </header>
+            <line-chart :points="trend.main" :more="trend.more" :label="SERIES[series] || 'PV'" :span="days === 1 ? 24 : days * 24" partial></line-chart>
+            <details class="card-foot">
+              <summary><ui-icon name="chevron"></ui-icon>{{ days === 1 ? '每小时明细' : '每天明细' }}</summary>
+              <div class="table-wrap">
+                <table class="table visit-table" v-if="days > 1">
+                  <thead><tr><th>日期</th><th class="num">PV</th><th class="num">UV</th><th class="num">IP</th><th class="num">请求</th><th class="num">爬虫</th><th class="num">流量</th><th class="num">4xx / 5xx</th></tr></thead>
+                  <tbody><tr v-for="d in dayRows" :key="d.date"><td>{{ d.date.slice(5).replace('-', '月') }}日</td><td class="num">{{ fmtCount(d.pv) }}</td><td class="num">{{ fmtCount(d.uv) }}</td><td class="num">{{ fmtCount(d.ip) }}</td>
+                    <td class="num">{{ fmtCount(d.requests) }}</td><td class="num">{{ fmtCount(d.bots) }}</td><td class="num">{{ fmtBytes(d.bytes) }}</td><td class="num">{{ d.e4xx }} / {{ d.e5xx }}</td></tr></tbody>
+                </table>
+                <table class="table visit-table" v-else>
+                  <thead><tr><th>时间</th><th class="num">PV</th><th class="num">请求</th></tr></thead>
+                  <tbody><tr v-for="h in hourRows" :key="h.hour"><td>{{ h.hour }}:00</td><td class="num">{{ fmtCount(h.pv) }}</td><td class="num">{{ fmtCount(h.requests) }}</td></tr></tbody>
+                </table>
+              </div>
+            </details>
+          </section>
+
+          <div class="card-grid three">
+            <section class="card"><header class="card-head"><h3>热门页面</h3><button class="link small" @click="section = 'content'">全部</button></header>
+              <rank-list :items="top('page')" :total="total.pv" :limit="5" :expandable="false"></rank-list></section>
+            <section class="card"><header class="card-head"><h3>来源</h3><button class="link small" @click="section = 'visitors'">全部</button></header>
+              <rank-list :items="top('referer')" :total="total.pv" :limit="5" :expandable="false"></rank-list></section>
+            <section class="card"><header class="card-head"><h3>访客地区</h3><button class="link small" @click="section = 'visitors'">全部</button></header>
+              <rank-list :items="top('region')" :limit="5" :expandable="false"></rank-list></section>
+          </div>
+
+          <section class="card" v-if="site === '*' && siteRows.length > 1">
+            <header class="card-head"><h3>各网站</h3><span class="small tertiary">点一行只看这个网站</span></header>
+            <div class="table-wrap">
+              <table class="table visit-table site-table">
+                <thead><tr><th>网站</th><th class="num">PV</th><th class="num">UV</th><th class="num">IP</th><th class="num">请求</th><th class="num">流量</th><th></th></tr></thead>
+                <tbody><tr v-for="s in siteRows" :key="s.name" class="clickable" @click="site = s.name">
+                  <td>{{ s.name }}</td><td class="num">{{ fmtCount(s.total.pv) }}</td><td class="num">{{ fmtCount(s.total.uv) }}</td><td class="num">{{ fmtCount(s.total.ip) }}</td>
+                  <td class="num">{{ fmtCount(s.total.requests) }}</td><td class="num">{{ fmtBytes(s.total.bytes) }}</td><td><ui-icon name="chevron" class="tertiary"></ui-icon></td></tr></tbody>
+              </table>
+            </div>
+          </section>
+        </template>
+
+        <!-- 访客 -->
+        <div class="card-grid" v-if="section === 'visitors'">
+          <section class="card"><header class="card-head"><h3>访客地区</h3><span class="small tertiary">按独立 IP</span></header>
+            <rank-list :items="top('region')"></rank-list></section>
+          <section class="card"><header class="card-head"><h3>来源</h3><span class="small tertiary">打开网页前在哪里</span></header>
+            <rank-list :items="top('referer')" :total="total.pv"></rank-list></section>
+          <section class="card"><header class="card-head"><h3>访客 IP</h3><span class="small tertiary">点一行看它做了什么</span></header>
+            <rank-list :items="top('ip')" :total="total.requests - total.bots" clickable @pick="openIP"></rank-list></section>
+          <section class="card"><header class="card-head"><h3>运营商</h3><span class="small tertiary">按独立 IP</span></header>
+            <rank-list :items="top('isp')"></rank-list></section>
+          <section class="card"><header class="card-head"><h3>设备</h3></header>
+            <rank-list :items="top('device')" :total="total.pv"></rank-list></section>
+          <section class="card"><header class="card-head"><h3>爬虫和程序</h3><span class="small tertiary">{{ fmtCount(total.bots) }} 次请求</span></header>
+            <rank-list :items="top('bot')" :total="total.bots"></rank-list></section>
         </div>
 
-        <div class="visit-notes small tertiary">
-          <p>PV 只算浏览器打开网页（不含爬虫、图片脚本等静态文件、/api/ 接口和出错的请求）；UV 是不同的「IP + 浏览器」；时间按服务器时区（{{ data.zone }}）。</p>
-          <p v-if="noForward"><ui-icon name="warn" class="st-warn"></ui-icon>日志里没有 X-Forwarded-For。如果网站经过 EdgeOne 或 CDN，这里的访客 IP 可能都是节点 IP，UV 和 IP 会偏少。</p>
-          <p>经过 EdgeOne 的网站，被 EdgeOne 缓存的请求不会到服务器，请求数和流量以「EdgeOne」页为准。</p>
-          <p v-if="cur.unparsed">有 {{ fmtCount(cur.unparsed) }} 行日志格式无法识别，没有计入。</p>
-          <details v-if="site !== '*' && cur.files && cur.files.length"><summary>读取的日志文件</summary>
-            <div v-for="f in cur.files" :key="f.path" class="mono-ish">{{ f.path }}（{{ fmtBytes(f.size) }}）</div>
-          </details>
+        <!-- 内容 -->
+        <div class="card-grid" v-if="section === 'content'">
+          <section class="card"><header class="card-head"><h3>受访页面</h3><span class="small tertiary">按 PV</span></header>
+            <rank-list :items="top('page')" :total="total.pv"></rank-list></section>
+          <section class="card"><header class="card-head"><h3>访问目录</h3><span class="small tertiary">按请求，含爬虫</span></header>
+            <rank-list :items="top('dir')" :total="total.requests"></rank-list></section>
+          <section class="card"><header class="card-head"><h3>出错的地址</h3><span class="small tertiary">404 多半是扫描或死链</span></header>
+            <rank-list :items="top('errpage')" :total="total.e4xx + total.e5xx" empty="没有出错的请求"></rank-list></section>
+          <section class="card"><header class="card-head"><h3>状态码</h3></header>
+            <rank-list :items="top('status')" :total="total.requests"></rank-list></section>
+        </div>
+
+        <!-- 安全 -->
+        <template v-if="section === 'security'">
+          <div class="risk-summary">
+            <span class="risk-chip crit">高风险 {{ counts.high }}</span>
+            <span class="risk-chip warn">中风险 {{ counts.medium }}</span>
+            <span class="risk-chip low">低风险 {{ counts.low }}</span>
+            <span class="grow"></span>
+            <label class="check small"><input type="checkbox" v-model="showAll"> 显示全部记录的 IP（{{ ips.length }}）</label>
+          </div>
+          <div class="alerts" v-if="alerts.some(a => a.level === 'warn' && source !== 'edgeone')">
+            <div class="alert al-warn" v-for="(a, i) in alerts.filter(a => a.level === 'warn' && !a.go)" :key="i"><ui-icon name="warn"></ui-icon><span class="grow">{{ a.text }}</span></div>
+          </div>
+          <div class="alert al-info judge-box" v-if="judgement">
+            <ui-icon name="sparkles"></ui-icon>
+            <span class="grow"><b>AI 研判：</b>{{ judgement.summary }}<span class="tertiary small" v-if="judgement.cost"> · 约 {{ judgement.currency === 'USD' ? '$' : '¥' }}{{ judgement.cost.toFixed(4) }}</span></span>
+          </div>
+          <section class="card">
+            <header class="card-head">
+              <h3>值得注意的 IP</h3>
+              <span class="grow"></span>
+              <button class="plain small" @click="pickSuggested" :disabled="!ips.length">选中建议封禁的</button>
+              <button class="small" @click="judge" :disabled="judging || !ips.length"><span class="spinner inline" v-if="judging"></span><ui-icon name="sparkles" v-else></ui-icon>{{ picked.size ? 'AI 研判选中的 ' + picked.size + ' 个' : 'AI 研判' }}</button>
+              <button class="primary small" @click="block([...picked])" :disabled="!picked.size || planning || !tencent" :title="tencent ? '' : '封禁通过 EdgeOne 进行，需要先填写腾讯云密钥'">封禁选中的 {{ picked.size }} 个</button>
+            </header>
+            <div class="table-wrap">
+              <table class="table ip-table" v-if="ipRows.length">
+                <thead><tr><th></th><th>IP</th><th>风险</th><th>它做了什么</th><th class="num">请求</th><th class="num">404/403</th><th class="num">每分钟最多</th><th>最后访问</th></tr></thead>
+                <tbody>
+                  <tr v-for="p in ipRows" :key="p.ip" class="clickable" @click="drawer = p">
+                    <td @click.stop><input type="checkbox" :checked="picked.has(p.ip)" :disabled="!blockable(p) || blockedSet.has(p.ip)" @change="togglePick(p.ip)" :aria-label="'选中 ' + p.ip"></td>
+                    <td><div class="mono-ish">{{ p.ip }}</div><div class="small tertiary">{{ p.place || '未知' }} {{ p.isp }}</div></td>
+                    <td><span class="risk-chip" :class="RISK[p.risk].cls">{{ RISK[p.risk].text }}</span>
+                      <div class="small verdict" v-if="verdictOf(p.ip)" :class="'v-' + verdictOf(p.ip).action">AI：{{ VERDICT[verdictOf(p.ip).action] }}</div>
+                      <div class="small tertiary" v-if="blockedSet.has(p.ip)">已封禁</div></td>
+                    <td class="small why">{{ (verdictOf(p.ip) && verdictOf(p.ip).reason) || (p.reasons || []).slice(0, 2).join('；') || (p.bot ? '程序：' + p.bot : '普通访问') }}</td>
+                    <td class="num">{{ fmtCount(p.requests) }}</td><td class="num">{{ fmtCount(p.e4xx) }}</td><td class="num">{{ p.peakMin }}</td>
+                    <td class="small">{{ p.last.slice(5, 16) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <div class="rank-empty" v-else>{{ showAll ? '没有记录的 IP' : '这段时间没有发现可疑 IP' }}</div>
+            </div>
+          </section>
+          <section class="card" v-if="tencent">
+            <header class="card-head"><h3>已在 EdgeOne 封禁</h3><span class="small tertiary">Miao Panel 封禁的 IP，解封也要确认</span></header>
+            <div class="blocked" v-if="blocked.length">
+              <div v-for="z in blocked" :key="z.zone" class="blocked-zone">
+                <div class="small secondary">站点 {{ z.zone }}</div>
+                <span class="ip-chip" v-for="ip in z.ips" :key="ip">{{ ip }}<button class="plain icon-only" title="解除封禁" :aria-label="'解除封禁 ' + ip" @click="unblock(z.zone, ip)" :disabled="planning"><ui-icon name="close"></ui-icon></button></span>
+              </div>
+            </div>
+            <div class="rank-empty" v-else>还没有封禁的 IP</div>
+          </section>
+        </template>
+      </template>
+
+      <!-- One IP: where it is and what it did -->
+      <div class="drawer-mask" v-if="drawer" @click.self="drawer = null">
+        <aside class="drawer" role="dialog" :aria-label="'IP ' + drawer.ip">
+          <header class="drawer-head">
+            <div class="grow"><div class="drawer-ip mono-ish">{{ drawer.ip }}</div><div class="small secondary">{{ drawer.place || '未知地区' }} {{ drawer.isp }}</div></div>
+            <span class="risk-chip" :class="RISK[drawer.risk].cls">{{ RISK[drawer.risk].text }} · {{ drawer.score }} 分</span>
+            <button class="plain icon-only" @click="drawer = null" aria-label="关闭"><ui-icon name="close"></ui-icon></button>
+          </header>
+          <div class="drawer-body">
+            <div class="facts">
+              <span class="fact ok" v-if="drawer.crawler">已验证：{{ drawer.crawler }}</span>
+              <span class="fact crit" v-if="drawer.fakeCrawler">冒充搜索引擎</span>
+              <span class="fact warn" v-if="drawer.edgeOne">EdgeOne 节点（不是真实访客）</span>
+              <span class="fact" v-if="drawer.bot && !drawer.crawler">程序：{{ drawer.bot }}</span>
+            </div>
+            <div class="kv-grid">
+              <div><span>请求</span><b>{{ fmtCount(drawer.requests) }}</b></div>
+              <div><span>浏览网页</span><b>{{ fmtCount(drawer.pv) }}</b></div>
+              <div><span>404/403</span><b>{{ fmtCount(drawer.e4xx) }}</b></div>
+              <div><span>5xx</span><b>{{ fmtCount(drawer.e5xx) }}</b></div>
+              <div><span>POST</span><b>{{ fmtCount(drawer.posts) }}</b></div>
+              <div><span>不同地址</span><b>{{ fmtCount(drawer.paths) }}</b></div>
+              <div><span>每分钟最多</span><b>{{ drawer.peakMin }}</b></div>
+              <div><span>登录失败</span><b>{{ drawer.login }}</b></div>
+            </div>
+            <div class="drawer-sec"><h4>时间</h4><p class="small">{{ drawer.first }} 到 {{ drawer.last }}</p></div>
+            <div class="drawer-sec" v-if="(drawer.reasons || []).length"><h4>判断依据</h4><ul class="small"><li v-for="r in drawer.reasons" :key="r">{{ r }}</li></ul></div>
+            <div class="drawer-sec" v-if="verdictOf(drawer.ip)"><h4>AI 研判</h4><p class="small"><b>{{ VERDICT[verdictOf(drawer.ip).action] }}</b>：{{ verdictOf(drawer.ip).reason }}</p></div>
+            <div class="drawer-sec"><h4>访问的网站</h4><rank-list :items="drawer.sites || []" :total="drawer.requests" :limit="5"></rank-list></div>
+            <div class="drawer-sec"><h4>常访问的地址</h4><rank-list :items="drawer.topPaths || []" :total="drawer.requests" :limit="5"></rank-list></div>
+            <div class="drawer-sec"><h4>浏览器标识</h4><p class="small mono-ish ua">{{ drawer.ua || '—' }}</p></div>
+          </div>
+          <footer class="drawer-foot">
+            <button @click="askIP(drawer)"><ui-icon name="sparkles"></ui-icon>让 AI 分析</button>
+            <span class="grow"></span>
+            <span class="small tertiary" v-if="blockedSet.has(drawer.ip)">已封禁</span>
+            <button class="primary" v-else-if="blockable(drawer)" :disabled="planning || !tencent" @click="block([drawer.ip])">封禁这个 IP</button>
+            <span class="small tertiary" v-else>这个 IP 不能封禁</span>
+          </footer>
+        </aside>
+      </div>
+
+      <!-- The checklist to confirm -->
+      <div class="sheet-mask" v-if="plan" @click.self="plan = null">
+        <div class="sheet plan-sheet" role="dialog" aria-label="确认清单">
+          <h2>{{ plan.title }}</h2>
+          <p>勾选后点「执行」，确认后才会生效；执行后可以在这里或「建议」页撤销。</p>
+          <plan-card :plan="plan" server-name="腾讯云" @done="planDone"></plan-card>
+          <div class="sheet-actions"><button @click="plan = null">关闭</button></div>
         </div>
       </div>
     </template>
@@ -973,7 +1290,6 @@ const whenText = t => {
   const hm = d.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' });
   return d.toDateString() === new Date().toDateString() ? hm : `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
 };
-const TOP_NAMES = { url: '热门路径', country: '国家/地区', status: '状态码', ip: '访问最多的 IP' };
 
 // 网站统计: EdgeOne analytics for one site or domain.
 const LEVEL_ICON = { ok: 'check', warn: 'warn', crit: 'alert', info: 'info' };
@@ -1142,44 +1458,97 @@ const CertPage = {
   </div>`,
 };
 
+const EO_SECTIONS = [{ id: 'overview', text: '概览' }, { id: 'visitors', text: '访客' }, { id: 'content', text: '内容' }];
+const EO_SERIES = {
+  requests: { text: '请求', key: 'series', label: '次请求', format: fmtCount },
+  flux: { text: '流量', key: 'flux', label: '流量', format: fmtBytes },
+  bandwidth: { text: '带宽', key: 'bandwidth', label: '带宽', format: fmtBits },
+  resp: { text: '响应时间', key: 'resp', label: '平均响应', format: v => Math.round(v) + ' ms' },
+};
+
+// EdgeOne 实时: EdgeOne's own analytics (a few minutes behind) for a site
+// or one of its domains, in the same sections as 访问分析.
 const EoStats = {
   props: { configured: Boolean, active: Boolean },
   emits: ['ask', 'settings'],
   setup(props, { emit }) {
     const sites = ref([]);
-    const domain = ref('');
-    const hours = ref(24);
+    const domain = ref(pref('miao.eoDomain', ''));
+    const hours = ref(Number(pref('miao.eoHours', '24')) || 24);
+    const section = ref(pref('miao.eoSection', 'overview'));
+    const series = ref('requests');
     const data = ref(null);
     const loading = ref(false);    // nothing to show yet
     const refreshing = ref(false); // updating what is shown, quietly
     const error = ref('');
     const updatedAt = ref(0);
     let seq = 0;
+    watch(hours, v => setPref('miao.eoHours', String(v)));
+    watch(section, v => setPref('miao.eoSection', v));
+    watch(domain, v => { if (v) setPref('miao.eoDomain', v); });
+
     async function loadSites() {
       if (!props.configured) return;
       try {
         sites.value = await api('GET', '/api/eo/sites');
-        if (!domain.value && sites.value.length) domain.value = sites.value[0];
+        if (!sites.value.includes(domain.value)) domain.value = sites.value.length ? sites.value[0] : '';
       } catch (e) { error.value = e.message; }
     }
-    // load shows the remembered report for this view at once, then fetches
-    // a fresh one unless it is only seconds old; force skips every cache.
+    const url = (d, h, extra) => `/api/eo/analytics?domain=${encodeURIComponent(d)}&hours=${h}${extra || ''}`;
+    function remember(d, h, r) {
+      const at = Date.parse(r.checkedAt) || Date.now();
+      eoMemo.set(d + '|' + h, { data: r, at });
+      return at;
+    }
+    // load shows what is remembered for this view at once (or the copy the
+    // server keeps warm), then fetches a fresh one unless it is only
+    // seconds old; force skips every cache.
     async function load(force) {
       if (!domain.value) return;
-      const key = domain.value + '|' + hours.value;
-      const memo = eoMemo.get(key);
+      const d = domain.value, h = hours.value;
+      let memo = eoMemo.get(d + '|' + h);
       data.value = memo ? memo.data : null;
       updatedAt.value = memo ? memo.at : 0;
-      if (!force && memo && Date.now() - memo.at < EO_FRESH_MS) return;
       const mine = ++seq;
-      (data.value ? refreshing : loading).value = true;
       error.value = '';
+      if (!memo && !force) {
+        loading.value = true;
+        try {
+          const r = await api('GET', url(d, h, '&cached=1'));
+          if (mine !== seq) return;
+          updatedAt.value = remember(d, h, r);
+          data.value = r;
+          memo = eoMemo.get(d + '|' + h);
+        } catch (e) {
+          if (mine === seq) { error.value = e.message; loading.value = false; }
+          return;
+        }
+        loading.value = false;
+      }
+      if (!force && memo && Date.now() - memo.at < EO_FRESH_MS) { prefetch(); return; }
+      (data.value ? refreshing : loading).value = true;
       try {
-        const r = await api('GET', `/api/eo/analytics?domain=${encodeURIComponent(domain.value)}&hours=${hours.value}${force ? '&refresh=1' : ''}`);
-        eoMemo.set(key, { data: r, at: Date.now() });
-        if (mine === seq) { data.value = r; updatedAt.value = Date.now(); }
+        const r = await api('GET', url(d, h, force ? '&refresh=1' : ''));
+        const at = remember(d, h, r);
+        if (mine === seq) { data.value = r; updatedAt.value = at; }
       } catch (e) { if (mine === seq) error.value = e.message; }
       finally { if (mine === seq) { loading.value = false; refreshing.value = false; } }
+      prefetch();
+    }
+    // The other ranges load one after another in the background, so
+    // switching between them is instant.
+    let prefetching = false;
+    async function prefetch() {
+      if (prefetching || !domain.value) return;
+      prefetching = true;
+      const d = domain.value;
+      try {
+        for (const r of EO_RANGES) {
+          const m = eoMemo.get(d + '|' + r.h);
+          if (r.h === hours.value || (m && Date.now() - m.at < 5 * 60 * 1000)) continue;
+          try { remember(d, r.h, await api('GET', url(d, r.h, '&cached=1'))); } catch { break; }
+        }
+      } finally { prefetching = false; }
     }
     // While the page is open it keeps itself up to date.
     const every = computed(() => hours.value <= 1 ? 30000 : 60000);
@@ -1190,79 +1559,186 @@ const EoStats = {
     watch(every, () => { if (props.active) start(); });
     watch(() => props.active, on => { if (on) { load(false); start(); } else stop(); });
     watch(() => props.configured, v => { if (v) loadSites(); });
-    onMounted(() => { loadSites(); if (props.active) start(); });
+    onMounted(async () => { await loadSites(); if (props.active) { load(false); start(); } });
     onUnmounted(stop);
+
     const rangeText = computed(() => (EO_RANGES.find(r => r.h === hours.value) || {}).text || '');
-    function ask() {
-      emit('ask', `分析一下 ${domain.value} 最近${rangeText.value}的访问情况：访问量有没有异常变化，主要是谁在访问、访问了什么，有没有需要处理的问题？`);
+    const tops = k => (data.value && data.value.tops && data.value.tops[k]) || [];
+    // Rankings as rank-list rows: codes read in words (US is 美国, 404 is 找不到).
+    function rank(k) {
+      return tops(k).map(t => {
+        if (k === 'country' || k === 'device') return { value: t.label || t.key, count: t.value, note: t.label && k === 'country' ? t.key : '' };
+        if (k === 'referer' && (t.key === '' || t.key === '-')) return { value: '（直接访问）', count: t.value, note: '' };
+        return { value: t.key, count: t.value, note: t.label || '' };
+      });
     }
+    const errors = computed(() => {
+      let e4 = 0, e5 = 0;
+      for (const t of tops('status')) { const c = Number(t.key); if (c >= 400 && c < 500) e4 += t.value; else if (c >= 500) e5 += t.value; }
+      return { e4, e5 };
+    });
     const hit = computed(() => data.value && data.value.hitRatio >= 0 ? Math.round(data.value.hitRatio * 1000) / 10 : null);
+    // Against the same length of time just before.
+    function change(key, prevKey) {
+      const d = data.value;
+      if (!d || !(d[prevKey] > 0)) return null;
+      return Math.round((d[key] - d[prevKey]) / d[prevKey] * 100);
+    }
+    const pct = (a, b) => b > 0 ? (a / b * 100).toFixed(1) + '%' : '—';
+    const alerts = computed(() => {
+      const d = data.value, out = [];
+      if (!d || !d.requests) return out;
+      const { e5 } = errors.value;
+      if (d.requests > 100 && e5 / d.requests > 0.01) out.push({ level: 'warn', text: `源站出错（5xx）${fmtCount(e5)} 次，占请求的 ${pct(e5, d.requests)}，看看源站是不是有问题`, go: 'content' });
+      const up = change('requests', 'prevRequests');
+      if (up !== null && up >= 200 && d.requests > 1000) out.push({ level: 'warn', text: `请求数比前 ${rangeText.value}多了 ${up}%，看看是不是被刷或者被攻击`, go: 'visitors' });
+      if (d.avgRespMs > 1500) out.push({ level: 'warn', text: `平均响应 ${d.avgRespMs} ms，访问偏慢` });
+      if (hit.value !== null && hit.value < 30 && d.bytes > 100 * 1024 * 1024) out.push({ level: 'info', text: `缓存命中率只有 ${hit.value}%：网页等动态内容不缓存是正常的；如果流量主要是图片、脚本，可以检查 EdgeOne 的缓存规则` });
+      return out;
+    });
+    const chart = computed(() => {
+      const d = data.value, s = EO_SERIES[series.value];
+      if (!d) return { points: [], more: [] };
+      return {
+        points: d[s.key] || [], label: s.label, format: s.format,
+        more: Object.entries(EO_SERIES).filter(([k]) => k !== series.value).map(([, o]) => ({ label: o.label, points: d[o.key] || [], format: o.format })),
+      };
+    });
+    const rows = computed(() => {
+      const d = data.value;
+      if (!d || !d.series) return [];
+      return d.series.map((p, i) => ({ t: p.t, requests: p.v, flux: d.flux && d.flux[i] ? d.flux[i].v : null,
+        bandwidth: d.bandwidth && d.bandwidth[i] ? d.bandwidth[i].v : null, resp: d.resp && d.resp[i] ? d.resp[i].v : null })).reverse();
+    });
+    const pickDomain = v => { if (sites.value.includes(v)) domain.value = v; else notify(v + ' 不在站点列表里', 'ok'); };
+    function ask() {
+      emit('ask', `分析一下 ${domain.value} 最近${rangeText.value}的 EdgeOne 访问情况：请求和流量有没有异常变化，缓存命中率和响应时间怎么样，出错多不多，主要是谁在访问、访问了什么，有没有需要处理的问题？`);
+    }
+    const askIP = ip => emit('ask', `IP ${ip} 最近${rangeText.value}访问 ${domain.value} 很多，帮我看看它在做什么，是正常访问还是爬虫、攻击，要不要封禁？`);
     const timeText = t => new Date(t * 1000).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-    return { sites, domain, hours, data, loading, refreshing, error, updatedAt, every, load, ask, hit, EO_RANGES, TOP_NAMES, fmtCount, fmtBytes, fmtBits, timeText, clockText };
+    return { sites, domain, hours, section, series, data, loading, refreshing, error, updatedAt, every, load, ask, askIP, hit, errors, change, pct,
+      alerts, chart, rows, rank, tops, pickDomain, rangeText, EO_RANGES, EO_SECTIONS, EO_SERIES, fmtCount, fmtBytes, fmtBits, timeText, clockText };
   },
   template: `
-  <div>
+  <div class="vs">
     <div class="group" v-if="!configured">
-      <div class="row"><ui-icon name="info" class="lg" style="color: var(--accent)"></ui-icon><div class="grow">网站统计来自腾讯云 EdgeOne，需要先填写腾讯云密钥。</div><button @click="$emit('settings')">去设置</button></div>
+      <div class="row"><ui-icon name="info" class="lg" style="color: var(--accent)"></ui-icon><div class="grow">EdgeOne 实时统计来自腾讯云，需要先填写腾讯云密钥。</div><button @click="$emit('settings')">去设置</button></div>
     </div>
     <template v-else>
-      <div class="filter-row">
-        <select v-model="domain" aria-label="站点或域名" :disabled="!sites.length">
-          <option v-for="s in sites" :key="s" :value="s">{{ s }}</option>
-        </select>
-        <span class="segmented">
-          <button v-for="r in EO_RANGES" :key="r.h" :class="{on: hours === r.h}" @click="hours = r.h">{{ r.text }}</button>
+      <div class="stat-bar">
+        <label class="field"><span>站点</span>
+          <select v-model="domain" aria-label="站点或域名" :disabled="!sites.length"><option v-for="s in sites" :key="s" :value="s">{{ s }}</option></select></label>
+        <span class="segmented" role="tablist" aria-label="时间">
+          <button v-for="r in EO_RANGES" :key="r.h" role="tab" :aria-selected="hours === r.h" :class="{ on: hours === r.h }" @click="hours = r.h">{{ r.text }}</button>
         </span>
-        <button class="plain" @click="load(true)" :disabled="loading || refreshing || !domain"><ui-icon name="refresh"></ui-icon>刷新</button>
+        <span class="grow"></span>
         <span class="small tertiary live-note" v-if="updatedAt">
           <span class="spinner inline" v-if="refreshing"></span>更新于 {{ clockText(updatedAt) }} · {{ every === 30000 ? '每 30 秒' : '每分钟' }}自动更新
         </span>
-        <span class="grow"></span>
+        <button class="plain" @click="load(true)" :disabled="loading || refreshing || !domain" title="重新读取"><ui-icon name="refresh"></ui-icon>刷新</button>
         <button class="primary" @click="ask" :disabled="!domain"><ui-icon name="sparkles"></ui-icon>让 AI 分析</button>
       </div>
-      <div class="group" v-if="!sites.length && !error"><div class="row secondary">EdgeOne 里还没有站点。</div></div>
-      <div class="group" v-if="error"><div class="row st-crit"><ui-icon name="alert"></ui-icon>{{ error }}</div></div>
-      <p class="small tertiary" v-if="hours === 1" style="margin: -8px 4px 14px">最近 1 小时按分钟统计。EdgeOne 的统计一般有几分钟延迟，最右边的几个点可能还在补齐。</p>
-      <div v-if="data">
-        <div class="tiles five">
-          <div class="tile"><div class="label">请求数</div><div class="value">{{ fmtCount(data.requests) }}</div><div class="sub">{{ data.domain }}</div></div>
-          <div class="tile"><div class="label">流量</div><div class="value">{{ fmtBytes(data.bytes) }}</div><div class="sub">EdgeOne 响应</div></div>
-          <div class="tile"><div class="label">峰值带宽</div><div class="value">{{ fmtBits(data.peakBps) }}</div><div class="sub">这段时间最高</div></div>
-          <div class="tile"><div class="label">缓存命中率</div><div class="value">{{ hit === null ? '—' : hit + '%' }}</div>
-            <div class="meter" v-if="hit !== null" role="meter" :aria-valuenow="hit" aria-valuemin="0" aria-valuemax="100" aria-label="缓存命中率"><div :style="{width: hit + '%'}"></div></div>
-            <div class="sub">按流量计算</div></div>
-          <div class="tile"><div class="label">平均响应</div><div class="value">{{ data.avgRespMs }} ms</div><div class="sub">EdgeOne 到访客</div></div>
-        </div>
+      <p class="source-note small tertiary">腾讯云 EdgeOne 自己的统计，有几分钟延迟{{ hours === 1 ? '（最近 1 小时按分钟统计，最右边几分钟可能还在补齐）' : '' }}。访客地区、IP 行为和风险在「访问分析」里。</p>
 
-        <div class="group-title">请求数</div>
-        <div class="group chart-card">
-          <line-chart v-if="data.series && data.series.length" :points="data.series" :extra="data.flux || []" label="次请求" extra-label="流量" :span="hours"></line-chart>
-          <div class="row secondary" v-else>这段时间没有访问数据</div>
-          <details class="raw-box" v-if="data.series && data.series.length">
-            <summary><ui-icon name="chevron"></ui-icon>数据表</summary>
-            <table class="table">
-              <thead><tr><th>时间</th><th class="num">请求数</th><th class="num">流量</th></tr></thead>
-              <tbody><tr v-for="(p, i) in data.series" :key="p.t"><td class="num">{{ timeText(p.t) }}</td><td class="num">{{ fmtCount(p.v) }}</td><td class="num">{{ data.flux && data.flux[i] ? fmtBytes(data.flux[i].v) : '—' }}</td></tr></tbody>
-            </table>
-          </details>
-        </div>
+      <nav class="subtabs" role="tablist">
+        <button v-for="s in EO_SECTIONS" :key="s.id" role="tab" :aria-selected="section === s.id" :class="{ on: section === s.id }" @click="section = s.id">{{ s.text }}</button>
+      </nav>
 
-        <div class="top-grid">
-          <div v-for="(name, key) in TOP_NAMES" :key="key">
-            <div class="group-title">{{ name }}</div>
-            <div class="group">
-              <div class="row top-row" v-for="t in (data.tops && data.tops[key]) || []" :key="t.key">
-                <div class="grow">
-                  <div class="top-line"><span class="top-key" :title="t.key">{{ t.key }}</span><span class="num">{{ fmtCount(t.value) }}</span><span class="top-share">{{ (t.share * 100).toFixed(1) }}%</span></div>
-                  <div class="share-bar"><div :style="{width: Math.max(1, t.share * 100) + '%'}"></div></div>
-                </div>
-              </div>
-              <div class="row secondary" v-if="!data.tops || !(data.tops[key] || []).length">没有数据</div>
+      <div class="notice" v-if="error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ error }}</div>
+      <div class="group" v-if="!sites.length && !error && !loading"><div class="row secondary">EdgeOne 里还没有站点。</div></div>
+      <div class="notice" v-if="!data && loading"><span class="spinner"></span>正在读取 EdgeOne 数据……</div>
+
+      <template v-if="data">
+        <template v-if="section === 'overview'">
+          <div class="alerts" v-if="alerts.length">
+            <div class="alert" v-for="(a, i) in alerts" :key="i" :class="'al-' + a.level">
+              <ui-icon :name="a.level === 'warn' ? 'warn' : 'info'"></ui-icon><span class="grow">{{ a.text }}</span>
+              <button class="link small" v-if="a.go" @click="section = a.go">查看</button>
             </div>
           </div>
+          <div class="kpi-group">
+            <div class="kpi-title">访问量</div>
+            <div class="tiles three">
+              <div class="tile"><div class="label">请求数</div><div class="value">{{ fmtCount(data.requests) }}</div>
+                <div class="sub" v-if="change('requests', 'prevRequests') !== null" :title="'和再往前 ' + rangeText + '相比'">
+                  <span :class="change('requests', 'prevRequests') >= 0 ? 'up' : 'down'">{{ change('requests', 'prevRequests') >= 0 ? '↑' : '↓' }} {{ Math.abs(change('requests', 'prevRequests')) }}%</span> 较前 {{ rangeText }}</div>
+                <div class="sub" v-else>{{ data.domain }}</div></div>
+              <div class="tile"><div class="label">流量</div><div class="value">{{ fmtBytes(data.bytes) }}</div>
+                <div class="sub" v-if="change('bytes', 'prevBytes') !== null">
+                  <span :class="change('bytes', 'prevBytes') >= 0 ? 'up' : 'down'">{{ change('bytes', 'prevBytes') >= 0 ? '↑' : '↓' }} {{ Math.abs(change('bytes', 'prevBytes')) }}%</span> 较前 {{ rangeText }}</div>
+                <div class="sub" v-else>EdgeOne 发给访客</div></div>
+              <div class="tile"><div class="label">峰值带宽</div><div class="value">{{ fmtBits(data.peakBps) }}</div><div class="sub">这段时间最高</div></div>
+            </div>
+          </div>
+          <div class="kpi-group">
+            <div class="kpi-title">质量</div>
+            <div class="tiles three">
+              <div class="tile"><div class="label">缓存命中率</div><div class="value">{{ hit === null ? '—' : hit + '%' }}</div>
+                <div class="meter" v-if="hit !== null" role="meter" :aria-valuenow="hit" aria-valuemin="0" aria-valuemax="100" aria-label="缓存命中率"><div :style="{ width: hit + '%' }"></div></div>
+                <div class="sub">按流量，越高源站越轻松</div></div>
+              <div class="tile"><div class="label">平均响应</div><div class="value">{{ data.avgRespMs }} ms</div><div class="sub">EdgeOne 回应访客用的时间</div></div>
+              <div class="tile"><div class="label">错误率</div><div class="value">{{ pct(errors.e4 + errors.e5, data.requests) }}</div><div class="sub">4xx {{ fmtCount(errors.e4) }} · 5xx {{ fmtCount(errors.e5) }}</div></div>
+            </div>
+          </div>
+
+          <section class="card">
+            <header class="card-head">
+              <h3>走势</h3>
+              <span class="segmented small">
+                <button v-for="(o, k) in EO_SERIES" :key="k" :class="{ on: series === k }" @click="series = k">{{ o.text }}</button>
+              </span>
+            </header>
+            <line-chart v-if="chart.points.length" :points="chart.points" :more="chart.more" :label="chart.label" :format="chart.format" :span="hours" partial></line-chart>
+            <div class="rank-empty" v-else>这段时间没有访问数据</div>
+            <details class="card-foot" v-if="rows.length">
+              <summary><ui-icon name="chevron"></ui-icon>明细</summary>
+              <div class="table-wrap">
+                <table class="table visit-table">
+                  <thead><tr><th>时间</th><th class="num">请求</th><th class="num">流量</th><th class="num">带宽</th><th class="num">平均响应</th></tr></thead>
+                  <tbody><tr v-for="r in rows" :key="r.t"><td>{{ timeText(r.t) }}</td><td class="num">{{ fmtCount(r.requests) }}</td>
+                    <td class="num">{{ r.flux === null ? '—' : fmtBytes(r.flux) }}</td><td class="num">{{ r.bandwidth === null ? '—' : fmtBits(r.bandwidth) }}</td>
+                    <td class="num">{{ r.resp === null ? '—' : Math.round(r.resp) + ' ms' }}</td></tr></tbody>
+                </table>
+              </div>
+            </details>
+          </section>
+
+          <div class="card-grid three">
+            <section class="card"><header class="card-head"><h3>热门路径</h3><button class="link small" @click="section = 'content'">全部</button></header>
+              <rank-list :items="rank('url')" :total="data.requests" :limit="5" :expandable="false"></rank-list></section>
+            <section class="card"><header class="card-head"><h3>国家/地区</h3><button class="link small" @click="section = 'visitors'">全部</button></header>
+              <rank-list :items="rank('country')" :total="data.requests" :limit="5" :expandable="false"></rank-list></section>
+            <section class="card"><header class="card-head"><h3>状态码</h3><button class="link small" @click="section = 'content'">全部</button></header>
+              <rank-list :items="rank('status')" :total="data.requests" :limit="5" :expandable="false"></rank-list></section>
+          </div>
+          <section class="card" v-if="tops('domain').length > 1">
+            <header class="card-head"><h3>各域名</h3><span class="small tertiary">按请求数，点一行只看这个域名</span></header>
+            <rank-list :items="rank('domain')" :total="data.requests" clickable @pick="pickDomain"></rank-list>
+          </section>
+        </template>
+
+        <div class="card-grid" v-if="section === 'visitors'">
+          <section class="card"><header class="card-head"><h3>国家/地区</h3><span class="small tertiary">按请求数</span></header>
+            <rank-list :items="rank('country')" :total="data.requests"></rank-list></section>
+          <section class="card"><header class="card-head"><h3>访问最多的 IP</h3><span class="small tertiary">点一行让 AI 看看它在做什么</span></header>
+            <rank-list :items="rank('ip')" :total="data.requests" clickable @pick="askIP"></rank-list></section>
+          <section class="card"><header class="card-head"><h3>来源</h3><span class="small tertiary">Referer，按请求数</span></header>
+            <rank-list :items="rank('referer')" :total="data.requests"></rank-list></section>
+          <section class="card"><header class="card-head"><h3>设备</h3></header>
+            <rank-list :items="rank('device')" :total="data.requests"></rank-list></section>
+          <section class="card"><header class="card-head"><h3>浏览器</h3></header>
+            <rank-list :items="rank('browser')" :total="data.requests"></rank-list></section>
         </div>
-      </div>
-      <div class="group" v-else-if="loading"><div class="row secondary"><span class="spinner inline"></span>正在读取 EdgeOne 数据……</div></div>
+
+        <div class="card-grid" v-if="section === 'content'">
+          <section class="card"><header class="card-head"><h3>热门路径</h3><span class="small tertiary">按请求数，含图片和脚本</span></header>
+            <rank-list :items="rank('url')" :total="data.requests"></rank-list></section>
+          <section class="card"><header class="card-head"><h3>状态码</h3><span class="small tertiary">4xx 多半是扫描或死链，5xx 是源站出错</span></header>
+            <rank-list :items="rank('status')" :total="data.requests"></rank-list></section>
+          <section class="card" v-if="tops('domain').length"><header class="card-head"><h3>各域名</h3><span class="small tertiary">点一行只看这个域名</span></header>
+            <rank-list :items="rank('domain')" :total="data.requests" clickable @pick="pickDomain"></rank-list></section>
+        </div>
+      </template>
     </template>
   </div>`,
 };
@@ -1390,6 +1866,7 @@ const app = createApp({
     function loadAudit() { api('GET', '/api/audit').then(v => { audit.value = v; }).catch(e => notify(e.message, 'error')); }
     function openLog(id) { logView.value = 'exec'; logFocus.value = id; tab.value = 'logs'; }
     provide('openLog', openLog);
+    provide('loadSpend', () => loadSpend().catch(() => {}));
 
     function openAdd() {
       Object.assign(addForm, { name: '', host: '', port: 22, username: 'root', authKind: 'password', password: '', keyPath: '', keyPassphrase: '', instanceId: '', region: '' });
@@ -1739,6 +2216,7 @@ app.component('exec-log', ExecLog);
 app.component('line-chart', LineChart);
 app.component('eo-stats', EoStats);
 app.component('visit-stats', VisitStats);
+app.component('rank-list', RankList);
 app.component('terminal-page', TerminalPage);
 app.component('cert-page', CertPage);
 app.component('ui-icon', {

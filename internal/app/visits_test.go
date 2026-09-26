@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,20 +15,23 @@ import (
 	"time"
 
 	"github.com/bocmiao/CloudConsoleWithAI/internal/sshx/sshtest"
+	"github.com/bocmiao/CloudConsoleWithAI/internal/tencent/tencenttest"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/visits"
 )
 
 const (
 	chromeUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36"
 	phoneUA  = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Mobile/15E148 Safari/604.1"
+	googleUA = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
 )
 
 func logLine(t time.Time, ip, req string, status, size int, ref, ua, xff string) string {
 	return fmt.Sprintf("%s - - [%s] %q %d %d %q %q %q\n", ip, t.Format("02/Jan/2006:15:04:05 -0700"), req, status, size, ref, ua, xff)
 }
 
-// fakeSiteLogs lays out a 1Panel server's website logs under dir: two
-// sites, and yesterday's log in one of 1Panel's log-cutting archives.
+// fakeSiteLogs lays out a 1Panel server's website logs under dir: a blog
+// whose visitors' IPs are forwarded, a shop whose log only has EdgeOne's
+// node, and yesterday's blog log in one of 1Panel's log-cutting archives.
 func fakeSiteLogs(t *testing.T, dir string) {
 	t.Helper()
 	now := time.Now()
@@ -40,21 +44,24 @@ func fakeSiteLogs(t *testing.T, dir string) {
 		}
 	}
 	write(filepath.Join(dir, "1pctl"), "BASE_DIR="+dir+"\n")
-	blog := logLine(now, "10.0.0.1", "GET /index.html?x=1 HTTP/1.1", 200, 5000, "https://www.google.com/search?q=a", chromeUA, "1.1.1.1, 10.0.0.1") +
-		logLine(now, "10.0.0.1", "GET /style.css HTTP/1.1", 200, 800, "https://blog.example.com/", chromeUA, "1.1.1.1") +
-		logLine(now, "10.0.0.1", "GET /about HTTP/1.1", 200, 3000, "https://blog.example.com/index.html", chromeUA, "1.1.1.1") +
-		logLine(now, "10.0.0.2", "GET /about HTTP/1.1", 304, 0, "-", phoneUA, "2.2.2.2") +
-		logLine(now, "10.0.0.3", "GET / HTTP/1.1", 200, 4000, "-", "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)", "66.249.1.1") +
+	blog := logLine(now, "10.0.0.1", "GET /index.html?x=1 HTTP/1.1", 200, 5000, "https://www.google.com/search?q=a", chromeUA, "61.135.211.75, 10.0.0.1") +
+		logLine(now, "10.0.0.1", "GET /style.css HTTP/1.1", 200, 800, "https://blog.example.com/", chromeUA, "61.135.211.75") +
+		logLine(now, "10.0.0.1", "GET /about HTTP/1.1", 200, 3000, "https://blog.example.com/index.html", chromeUA, "61.135.211.75") +
+		logLine(now, "10.0.0.2", "GET /about HTTP/1.1", 304, 0, "-", phoneUA, "223.5.5.5") +
+		logLine(now, "66.249.66.1", "GET / HTTP/1.1", 200, 4000, "-", googleUA, "-") +
+		logLine(now, "5.6.7.8", "GET /posts/1 HTTP/1.1", 200, 4000, "-", googleUA, "-") +
 		logLine(now, "10.0.0.4", "GET /wp-login.php HTTP/1.1", 404, 100, "-", "curl/8.0", "-") +
-		logLine(now, "10.0.0.5", "POST /api/login HTTP/1.1", 500, 100, "-", chromeUA, "3.3.3.3") +
+		logLine(now, "10.0.0.5", "POST /api/login HTTP/1.1", 500, 100, "-", chromeUA, "8.8.8.8") +
 		logLine(now.AddDate(0, 0, -40), "9.9.9.9", "GET / HTTP/1.1", 200, 1, "-", chromeUA, "-") +
 		"not a log line\n"
 	write(filepath.Join(dir, "1panel/www/sites/blog.example.com/log/access.log"), blog)
-	write(filepath.Join(dir, "1panel/www/sites/shop.example.com/log/access.log"), logLine(now, "1.1.1.1", "GET / HTTP/1.1", 200, 1000, "-", chromeUA, "-"))
+	shop := logLine(now, "43.157.9.9", "GET / HTTP/1.1", 200, 1000, "-", chromeUA, "-") +
+		logLine(now, "43.157.9.9", "GET /cart HTTP/1.1", 200, 1000, "-", phoneUA, "-")
+	write(filepath.Join(dir, "1panel/www/sites/shop.example.com/log/access.log"), shop)
 
 	y := now.AddDate(0, 0, -1)
-	old := logLine(y, "10.0.0.1", "GET / HTTP/1.1", 200, 5000, "-", chromeUA, "1.1.1.1") +
-		logLine(y, "10.0.0.1", "GET /post/1 HTTP/1.1", 200, 5000, "https://blog.example.com/", chromeUA, "4.4.4.4")
+	old := logLine(y, "10.0.0.1", "GET / HTTP/1.1", 200, 5000, "-", chromeUA, "61.135.211.75") +
+		logLine(y, "10.0.0.1", "GET /post/1 HTTP/1.1", 200, 5000, "https://blog.example.com/", chromeUA, "1.1.1.1")
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
@@ -67,83 +74,303 @@ func fakeSiteLogs(t *testing.T, dir string) {
 	write(filepath.Join(dir, "1panel/backup/log/website/blog.example.com/blog.example.com_log_20260101000000.gz"), buf.String())
 }
 
-func TestSiteVisits(t *testing.T) {
+// fakeDNS answers reverse lookups for the real Googlebot only.
+func fakeDNS(t *testing.T) {
+	oldAddr, oldHost := lookupAddr, lookupHost
+	t.Cleanup(func() { lookupAddr, lookupHost = oldAddr, oldHost })
+	lookupAddr = func(_ context.Context, ip string) ([]string, error) {
+		if ip == "66.249.66.1" {
+			return []string{"crawl-66-249-66-1.googlebot.com."}, nil
+		}
+		return nil, &net.DNSError{Err: "no such host", Name: ip, IsNotFound: true}
+	}
+	lookupHost = func(_ context.Context, host string) ([]string, error) {
+		if host == "crawl-66-249-66-1.googlebot.com" {
+			return []string{"66.249.66.1"}, nil
+		}
+		return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+	}
+}
+
+func TestServerVisits(t *testing.T) {
 	dir := t.TempDir()
 	fakeSiteLogs(t, dir)
+	fakeDNS(t)
 	t.Setenv("ONEPANEL_CTL", filepath.Join(dir, "1pctl"))
 	a := newApp(t)
+	f := tencenttest.Start(t)
+	f.EdgeOneNodes = map[string]bool{"43.157.9.9": true}
+	a.TencentEndpoint = f.Endpoint
+	if _, err := a.SaveTencent(tencenttest.SecretID, tencenttest.SecretKey); err != nil {
+		t.Fatal(err)
+	}
 	srv := sshtest.Start(t, "root", "pw")
 	sv := addTestServer(t, a, srv, "pw")
 	ctx := context.Background()
+	source := fmt.Sprintf("server:%d", sv.ID)
 
-	v, err := a.SiteVisits(ctx, sv.ID, 7, false)
+	sources, err := a.VisitSources()
+	if err != nil || len(sources) != 2 || sources[0].Key != "edgeone" || sources[1].Key != source {
+		t.Fatalf("sources = %+v %v", sources, err)
+	}
+	v, err := a.Visits(ctx, source, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	all, _ := v.Site(visits.All)
-	blog, _ := v.Site("blog.example.com")
-	want := visits.Counts{Requests: 10, PV: 6, UV: 3, IP: 3, Bots: 2, Bytes: 24000, E4xx: 1, E5xx: 1}
-	if all.Total != want {
-		t.Fatalf("all sites = %+v, want %+v", all.Total, want)
+	week := v.Range(7)
+	all, blog := week.Sites[visits.All].Total, week.Sites["blog.example.com"].Total
+	if blog.PV != 5 || blog.UV != 3 || blog.IP != 3 || blog.Bots != 3 || all.PV != 7 || v.Range(1).Sites["blog.example.com"].Total.PV != 3 {
+		t.Fatalf("blog week %+v, all %+v", blog, all)
 	}
-	if blog.Total.PV != 5 || blog.Total.UV != 3 || blog.Total.IP != 3 || blog.Lines != 11 || blog.Unparsed != 1 || len(blog.Files) != 2 {
-		t.Fatalf("blog = %+v", blog)
+	byIP := map[string]visits.IPProfile{}
+	for _, p := range week.IPs {
+		byIP[p.IP] = p
 	}
-	today := blog.Days[len(blog.Days)-1]
-	yesterday := blog.Days[len(blog.Days)-2]
-	if len(blog.Days) != 7 || today.Date != v.Today || today.PV != 3 || today.UV != 2 || yesterday.PV != 2 || len(blog.Hours) != 24 {
-		t.Fatalf("days = %+v", blog.Days)
+	if p := byIP["66.249.66.1"]; p.Crawler != "Googlebot" || p.Risk != visits.RiskNone {
+		t.Fatalf("real Googlebot: %+v", p)
 	}
-	top := func(s visits.Site, kind string) string {
-		var parts []string
-		for _, it := range s.Top[kind] {
-			parts = append(parts, fmt.Sprintf("%s=%d", it.Value, it.Count))
+	if p := byIP["5.6.7.8"]; !p.FakeCrawler || p.Risk != visits.RiskMedium {
+		t.Fatalf("fake Googlebot: %+v", p)
+	}
+	if p := byIP["61.135.211.75"]; p.Place != "北京" || p.ISP != "联通" {
+		t.Fatalf("placed visitor: %+v", p)
+	}
+	if p := byIP["43.157.9.9"]; !p.EdgeOne || p.Risk != visits.RiskNone {
+		t.Fatalf("EdgeOne node: %+v", p)
+	}
+	var shopWarning string
+	for _, s := range v.Sites {
+		if s.Name == "shop.example.com" {
+			shopWarning = s.Warning
 		}
-		return strings.Join(parts, " ")
 	}
-	if got := top(blog, "page"); got != "/about=2 /=1 /index.html=1 /post/1=1" {
-		t.Fatalf("pages = %s", got)
+	if !strings.Contains(shopWarning, "EdgeOne 的节点") {
+		t.Fatalf("shop warning = %q", shopWarning)
 	}
-	if got := top(blog, "bot"); !strings.Contains(got, "Googlebot=1") || !strings.Contains(got, "curl=1") {
-		t.Fatalf("bots = %s", got)
-	}
-	if got := top(all, "page"); !strings.Contains(got, "shop.example.com/=1") {
-		t.Fatalf("all pages = %s", got)
-	}
-	if v.Sites[0].Name != visits.All || v.Sites[1].Name != "blog.example.com" {
-		t.Fatalf("order = %s, %s", v.Sites[0].Name, v.Sites[1].Name)
+	if regions := week.Sites[visits.All].Top["region"]; len(regions) == 0 {
+		t.Fatal("no regions")
 	}
 	logs, _ := a.Store.ListExec(false, 10)
-	if len(logs) == 0 || logs[0].Title != "统计网站访问日志（7 天）" || logs[0].ScriptName != "sitelogs.sh" {
+	if len(logs) == 0 || logs[0].Title != "统计网站访问日志" || logs[0].ScriptName != "sitelogs.sh" {
 		t.Fatalf("exec log = %+v", logs)
 	}
 
-	text, err := a.toolSiteVisits(ctx, json.RawMessage(fmt.Sprintf(`{"server_id":%d,"site":"blog"}`, sv.ID)))
-	if err != nil || !strings.Contains(text, "blog.example.com合计：PV 5，UV 3，IP 3") || !strings.Contains(text, "受访页面：/about 2") {
+	text, err := a.toolSiteVisits(ctx, json.RawMessage(fmt.Sprintf(`{"server_id":%d,"site":"blog","days":7}`, sv.ID)))
+	if err != nil || !strings.Contains(text, "blog.example.com合计：PV 5，UV 3，IP 3") || !strings.Contains(text, "冒充爬虫") || !strings.Contains(text, "访客地区") {
 		t.Fatalf("tool = %s %v", text, err)
 	}
 	if _, err := a.toolSiteVisits(ctx, json.RawMessage(fmt.Sprintf(`{"server_id":%d,"site":"nope.org"}`, sv.ID))); err == nil || !strings.Contains(err.Error(), "shop.example.com") {
 		t.Fatalf("unknown site: %v", err)
 	}
-	if one, err := a.SiteVisits(ctx, sv.ID, 1, false); err != nil || len(one.Sites[0].Days) != 1 || one.Sites[0].Total.PV != 4 {
-		t.Fatalf("today only = %+v %v", one, err)
-	}
-	if _, err := a.SiteVisits(ctx, sv.ID, 40, false); err == nil {
-		t.Fatal("40 days accepted")
+	if _, err := a.toolSiteVisits(ctx, json.RawMessage(fmt.Sprintf(`{"server_id":%d,"days":3}`, sv.ID))); err == nil {
+		t.Fatal("3 days accepted")
 	}
 
 	// The page gets the last report at once, even after a restart.
-	if latest, err := a.LatestSiteVisits(ctx, sv.ID, 7); err != nil || latest.Refreshing || latest.CheckedAt != v.CheckedAt {
+	if latest, err := a.LatestVisits(ctx, source); err != nil || latest.Refreshing || latest.CheckedAt != v.CheckedAt {
 		t.Fatalf("latest while current = %+v %v", latest.Refreshing, err)
 	}
 	b := New(a.Store, a.Secrets)
-	b.Dial = a.Dial
-	latest, err := b.LatestSiteVisits(ctx, sv.ID, 7)
-	if err != nil || !latest.Refreshing || latest.Sites[0].Total != want {
+	b.Dial, b.TencentEndpoint = a.Dial, a.TencentEndpoint
+	latest, err := b.LatestVisits(ctx, source)
+	if err != nil || !latest.Refreshing || latest.Range(7).Sites[visits.All].Total != all {
 		t.Fatalf("after restart = %+v %v", latest.Refreshing, err)
 	}
-	fresh, err := b.SiteVisits(ctx, sv.ID, 7, false)
-	if err != nil || fresh.Refreshing || fresh.Sites[0].Total != want {
+	if fresh, err := b.Visits(ctx, source, false); err != nil || fresh.Refreshing || fresh.Range(7).Sites[visits.All].Total != all {
 		t.Fatalf("fresh = %+v %v", fresh, err)
+	}
+	if _, err := a.Visits(ctx, "server:999", false); err == nil {
+		t.Fatal("unknown server accepted")
+	}
+}
+
+func eoRecord(t time.Time, ip, host, method, url, query string, status int, ua, ref string) string {
+	data, _ := json.Marshal(map[string]any{
+		"RequestTime": t.UTC().Format(time.RFC3339), "ClientIP": ip, "ClientRegion": "CN", "RequestHost": host, "RequestMethod": method,
+		"RequestUrl": url, "RequestUrlQueryString": query, "EdgeResponseStatusCode": status, "EdgeResponseBytes": 1000,
+		"RequestUA": ua, "RequestReferer": ref, "EdgeCacheStatus": "hit",
+	})
+	return string(data) + "\n"
+}
+
+func TestEdgeOneVisits(t *testing.T) {
+	a := newApp(t)
+	a.CacheDir = t.TempDir()
+	f := tencenttest.Start(t)
+	a.TencentEndpoint = f.Endpoint
+	if _, err := a.SaveTencent(tencenttest.SecretID, tencenttest.SecretKey); err != nil {
+		t.Fatal(err)
+	}
+	fakeDNS(t)
+	now := time.Now()
+	hour := now.Truncate(time.Hour).Add(-time.Hour)
+	f.L7Logs = map[string][]tencenttest.LogPackage{"zone-abc": {
+		{Domain: "blog.example.com", Name: "blog-today.gz", Start: hour, Lines: eoRecord(hour.Add(time.Minute), "61.135.211.75", "blog.example.com", "GET", "/posts/1", "-", 200, chromeUA, "-") +
+			eoRecord(hour.Add(2*time.Minute), "61.135.211.75", "blog.example.com", "GET", "/posts/2", "utm=x", 200, chromeUA, "https://www.baidu.com/s") +
+			eoRecord(hour.Add(3*time.Minute), "223.5.5.5", "blog.example.com", "GET", "/", "-", 200, phoneUA, "-") +
+			eoRecord(hour.Add(4*time.Minute), "45.148.10.2", "blog.example.com", "GET", "/search", "q=1 union select 2", 404, chromeUA, "-") +
+			"{broken json\n"},
+		{Domain: "blog.example.com", Name: "blog-last-week.gz", Start: hour.AddDate(0, 0, -5), Lines: eoRecord(hour.AddDate(0, 0, -5), "1.1.1.1", "blog.example.com", "GET", "/", "-", 200, chromeUA, "-")},
+		{Domain: "blog.example.com", Name: "too-old.gz", Start: hour.AddDate(0, 0, -40), Lines: eoRecord(hour.AddDate(0, 0, -40), "9.9.9.9", "blog.example.com", "GET", "/", "-", 200, chromeUA, "-")},
+	}}
+	ctx := context.Background()
+	v, err := a.Visits(ctx, "edgeone", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	today, month := v.Range(1).Sites["blog.example.com"], v.Range(30).Sites["blog.example.com"]
+	if v.Source != "edgeone" || today.Total.PV != 3 || today.Total.UV != 2 || month.Total.PV != 4 || month.Total.IP != 3 {
+		t.Fatalf("today %+v month %+v", today.Total, month.Total)
+	}
+	if got := today.Top["region"]; len(got) != 2 {
+		t.Fatalf("regions = %+v", got)
+	}
+	var scanner visits.IPProfile
+	for _, p := range v.Range(1).IPs {
+		if p.IP == "45.148.10.2" {
+			scanner = p
+		}
+	}
+	if scanner.Inject != 1 || scanner.Risk != visits.RiskHigh {
+		t.Fatalf("scanner = %+v", scanner)
+	}
+	var info visits.SiteInfo
+	for _, s := range v.Sites {
+		if s.Name == "blog.example.com" {
+			info = s
+		}
+	}
+	if info.Unparsed != 1 || info.Warning != "" {
+		t.Fatalf("site info = %+v", info)
+	}
+	for _, c := range f.Calls {
+		if c == "teo DescribeIPRegion" {
+			t.Fatal("EdgeOne's own logs need no node check")
+		}
+	}
+	// Downloaded packages are kept: counting again fetches nothing.
+	gets := func() int {
+		n := 0
+		for _, c := range f.Calls {
+			if strings.HasPrefix(c, "GET ") {
+				n++
+			}
+		}
+		return n
+	}
+	before := gets()
+	if _, err := a.Visits(ctx, "edgeone", true); err != nil || gets() != before || before != 2 {
+		t.Fatalf("downloads: %d then %d (%v)", before, gets(), err)
+	}
+}
+
+func TestKeepWarm(t *testing.T) {
+	dir := t.TempDir()
+	fakeSiteLogs(t, dir)
+	fakeDNS(t)
+	t.Setenv("ONEPANEL_CTL", filepath.Join(dir, "1pctl"))
+	a := newApp(t)
+	srv := sshtest.Start(t, "root", "pw")
+	sv := addTestServer(t, a, srv, "pw")
+	source := fmt.Sprintf("server:%d", sv.ID)
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	go a.KeepWarm(ctx, time.Hour)
+	// Wait for the background count, without asking for the page (which
+	// would start a count of its own).
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		a.visits.mu.Lock()
+		e := a.visits.entries[visitsKey(source)]
+		ready := e != nil && !e.at.IsZero()
+		a.visits.mu.Unlock()
+		if ready {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("not warmed")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	v, err := a.LatestVisits(context.Background(), source)
+	if err != nil || v.Refreshing || v.Range(7).Sites[visits.All].Total.PV == 0 {
+		t.Fatalf("page after warming: refreshing=%v %v", v.Refreshing, err)
+	}
+	logs, _ := a.Store.ListExec(false, 10)
+	if len(logs) != 1 || logs[0].Origin != OriginAuto {
+		t.Fatalf("background run logged as %+v", logs)
+	}
+}
+
+func TestJudgeAndBlock(t *testing.T) {
+	a := newApp(t)
+	a.CacheDir = t.TempDir()
+	f := tencenttest.Start(t)
+	a.TencentEndpoint = f.Endpoint
+	if _, err := a.SaveTencent(tencenttest.SecretID, tencenttest.SecretKey); err != nil {
+		t.Fatal(err)
+	}
+	fakeDNS(t)
+	hour := time.Now().Truncate(time.Hour).Add(-time.Hour)
+	var lines string
+	for i, p := range []string{"/.env", "/.git/config", "/wp-login.php", "/phpmyadmin/"} {
+		lines += eoRecord(hour.Add(time.Duration(i)*time.Second), "45.148.10.2", "blog.example.com", "GET", p, "-", 404, "Mozilla/5.0 zgrab/0.x", "-")
+	}
+	lines += eoRecord(hour, "66.249.66.1", "blog.example.com", "GET", "/", "-", 200, googleUA, "-") +
+		eoRecord(hour, "61.135.211.75", "blog.example.com", "GET", "/", "-", 200, chromeUA, "-")
+	f.L7Logs = map[string][]tencenttest.LogPackage{"zone-abc": {{Domain: "blog.example.com", Name: "p1.gz", Start: hour, Lines: lines}}}
+	ctx := context.Background()
+
+	var asked string
+	a.Analyst = func(_ context.Context, prompt string) (string, error) {
+		asked = prompt
+		return `结论如下：{"summary": "有一个扫描器", "ips": [
+			{"ip": "45.148.10.2", "action": "block", "reason": "4 次探测 /.env、/.git 等"},
+			{"ip": "66.249.66.1", "action": "block", "reason": "爬得太多"},
+			{"ip": "9.9.9.9", "action": "block", "reason": "not asked"}]}`, nil
+	}
+	j, err := a.JudgeIPs(ctx, "edgeone", 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(asked, "45.148.10.2") || strings.Contains(asked, "61.135.211.75") {
+		t.Fatalf("asked about the wrong IPs:\n%s", asked)
+	}
+	if j.Summary != "有一个扫描器" || len(j.Verdicts) != 2 || j.Verdicts[0].Action != "block" || j.Verdicts[1].Action != "ignore" {
+		t.Fatalf("judgement = %+v", j)
+	}
+
+	plan, err := a.ProposeBlock(ctx, "edgeone", []string{"45.148.10.2", "66.249.66.1", "10.0.0.1", "nonsense"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.StepList) != 1 || plan.StepList[0].Capability != "eo.ip.block" || plan.StepList[0].Params["ips"] != "45.148.10.2" ||
+		plan.StepList[0].Params["domain"] != "example.com" || !plan.StepList[0].Executable ||
+		!strings.Contains(plan.Reason, "Googlebot") || !strings.Contains(plan.Reason, "内网地址") || !strings.Contains(plan.Reason, "探测后台") {
+		t.Fatalf("plan = %+v / %s", plan.StepList, plan.Reason)
+	}
+	if _, err := a.ProposeBlock(ctx, "edgeone", []string{"66.249.66.1"}); err == nil || !strings.Contains(err.Error(), "没有可以封禁的 IP") {
+		t.Fatalf("only a crawler: %v", err)
+	}
+	if _, err := a.ExecutePlan(plan.ID, []int{0}); err != nil {
+		t.Fatal(err)
+	}
+	if st := waitPlan(t, a, plan.ID).StepList[0]; st.Status != "done" {
+		t.Fatalf("block step = %+v", st)
+	}
+	blocked, err := a.Blocked(ctx)
+	if err != nil || len(blocked) != 1 || blocked[0].Zone != "example.com" || strings.Join(blocked[0].IPs, ",") != "45.148.10.2" {
+		t.Fatalf("blocked = %+v %v", blocked, err)
+	}
+	un, err := a.ProposeUnblock(ctx, "example.com", []string{"45.148.10.2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.ExecutePlan(un.ID, []int{0}); err != nil {
+		t.Fatal(err)
+	}
+	waitPlan(t, a, un.ID)
+	if blocked, _ := a.Blocked(ctx); len(blocked) != 0 {
+		t.Fatalf("still blocked: %+v", blocked)
 	}
 }

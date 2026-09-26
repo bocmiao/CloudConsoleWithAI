@@ -710,6 +710,24 @@ func TestTencentServersAndAnalyticsTools(t *testing.T) {
 	if live, err := a.EOAnalytics(context.Background(), "blog.example.com", 1, false); err != nil || live.Interval != "min" {
 		t.Fatalf("last hour = %+v, %v", live, err)
 	}
+	// The page's extras: more curves, the period before, and the site's
+	// report ranking its domains.
+	if len(r.Bandwidth) == 0 || len(r.Resp) == 0 || r.PrevRequests <= 0 || r.CheckedAt == "" || len(r.Tops["referer"]) == 0 || r.Tops["domain"] != nil {
+		t.Fatalf("domain report extras = %+v", r)
+	}
+	site, err := a.EOAnalytics(context.Background(), "example.com", 24, false)
+	if err != nil || len(site.Tops["domain"]) == 0 {
+		t.Fatalf("site report = %+v, %v", site, err)
+	}
+	if got, ok := a.LatestEOAnalytics("Example.com", 24); !ok || got.CheckedAt != site.CheckedAt {
+		t.Fatalf("latest = %+v %v", got, ok)
+	}
+	if _, ok := a.LatestEOAnalytics("example.com", 720); ok {
+		t.Fatal("no 30-day report was made")
+	}
+	if eoLabel("status", "404") != "找不到" || eoLabel("country", "us") != "美国" || eoLabel("device", "Mobile") != "手机" || eoLabel("url", "/") != "" {
+		t.Fatal("labels")
+	}
 	if sites, err := a.EOSites(context.Background()); err != nil || len(sites) == 0 || sites[0] != "example.com" {
 		t.Fatalf("sites = %v, %v", sites, err)
 	}

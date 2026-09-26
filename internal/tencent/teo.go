@@ -3,6 +3,7 @@ package tencent
 import (
 	"context"
 	"strings"
+	"time"
 )
 
 const teoVersion = "2022-09-01"
@@ -192,4 +193,56 @@ func (c *Client) SetCertificate(ctx context.Context, zoneID, host, mode string, 
 		in["ServerCertInfo"] = infos
 	}
 	return c.Call(ctx, "teo", teoVersion, "ModifyHostsCertificate", in, nil)
+}
+
+// EdgeOneIPs says which of the IPs (at most 100) are EdgeOne's own nodes.
+func (c *Client) EdgeOneIPs(ctx context.Context, ips []string) (map[string]bool, error) {
+	var out struct {
+		IPRegionInfo []struct {
+			IP          string `json:"IP"`
+			IsEdgeOneIP string `json:"IsEdgeOneIP"`
+		} `json:"IPRegionInfo"`
+	}
+	if err := c.Call(ctx, "teo", teoVersion, "DescribeIPRegion", map[string]any{"IPs": ips}, &out); err != nil {
+		return nil, err
+	}
+	res := make(map[string]bool, len(ips))
+	for _, r := range out.IPRegionInfo {
+		res[r.IP] = r.IsEdgeOneIP == "yes"
+	}
+	return res, nil
+}
+
+// L7Log is one EdgeOne offline log package: an hour of a domain's access
+// log, gzipped JSON lines.
+type L7Log struct {
+	Domain    string `json:"Domain"`
+	Area      string `json:"Area"` // mainland, overseas
+	Name      string `json:"LogPacketName"`
+	URL       string `json:"Url"`
+	StartTime string `json:"LogStartTime"`
+	EndTime   string `json:"LogEndTime"`
+	Size      int64  `json:"Size"`
+}
+
+// L7Logs lists a site's offline access log packages between start and end.
+func (c *Client) L7Logs(ctx context.Context, zoneID string, start, end time.Time) ([]L7Log, error) {
+	var all []L7Log
+	for offset := 0; ; offset += 300 {
+		var out struct {
+			TotalCount int     `json:"TotalCount"`
+			Data       []L7Log `json:"Data"`
+		}
+		err := c.Call(ctx, "teo", teoVersion, "DownloadL7Logs", map[string]any{
+			"StartTime": start.Format(time.RFC3339), "EndTime": end.Format(time.RFC3339),
+			"ZoneIds": []string{zoneID}, "Limit": 300, "Offset": offset,
+		}, &out)
+		if err != nil {
+			return all, err
+		}
+		all = append(all, out.Data...)
+		if len(out.Data) == 0 || offset+len(out.Data) >= out.TotalCount {
+			return all, nil
+		}
+	}
 }

@@ -34,6 +34,11 @@ type App struct {
 	// PollInterval, when set, is how often running actions check on
 	// progress; tests shorten it.
 	PollInterval time.Duration
+	// Analyst, when set, stands in for the model that reads suspicious IPs
+	// on the statistics page; tests set it.
+	Analyst func(ctx context.Context, prompt string) (string, error)
+	// CacheDir keeps downloaded files such as EdgeOne's offline logs.
+	CacheDir string
 	// Reviewer, when set, stands in for the model that independently
 	// reviews AI-written commands; tests set it.
 	Reviewer func(ctx context.Context, prompt string) (string, error)
@@ -44,7 +49,8 @@ type App struct {
 	locks     serverLocks
 	cloud     cloudCache
 	certs     certCache
-	visits    visitsCache
+	visits    snapshots[VisitsView]
+	ipf       ipFacts
 	terms     terminals
 	eoReports eoReportCache
 }

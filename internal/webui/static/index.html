@@ -300,15 +300,14 @@
     <!-- Kept alive once opened, so switching back shows it at once. -->
     <div class="tab-pane" v-if="seen.stats" v-show="tab === 'stats'">
       <header class="toolbar"><h1>网站统计</h1>
-        <span class="segmented" role="tablist" aria-label="数据来源">
-          <button role="tab" :aria-selected="statsView === 'logs'" :class="{on: statsView === 'logs'}" @click="statsView = 'logs'">访问日志</button>
-          <button role="tab" :aria-selected="statsView === 'eo'" :class="{on: statsView === 'eo'}" @click="statsView = 'eo'">EdgeOne</button>
+        <span class="segmented" role="tablist" aria-label="统计类型">
+          <button role="tab" :aria-selected="statsView === 'logs'" :class="{on: statsView === 'logs'}" @click="statsView = 'logs'">访问分析</button>
+          <button role="tab" :aria-selected="statsView === 'eo'" :class="{on: statsView === 'eo'}" @click="statsView = 'eo'">EdgeOne 实时</button>
         </span>
       </header>
-      <div class="page">
+      <div class="page wide">
         <div v-if="statsSeen.logs" v-show="statsView === 'logs'">
-          <div class="page-head"><p>从服务器上网站的访问日志统计：每天的 PV、UV、IP，访客看了哪些页面、从哪里来、爬虫多少。可以看全部网站，也可以只看一个。</p></div>
-          <visit-stats :servers="servers" :active="tab === 'stats' && statsView === 'logs'" @ask="askAI"></visit-stats>
+          <visit-stats :servers="servers" :tencent="tc.configured" :active="tab === 'stats' && statsView === 'logs'" @ask="askAI"></visit-stats>
         </div>
         <div v-if="statsSeen.eo" v-show="statsView === 'eo'">
           <eo-stats :configured="tc.configured" :active="tab === 'stats' && statsView === 'eo'" @ask="askAI" @settings="go('settings')"></eo-stats>

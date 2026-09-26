@@ -10,7 +10,6 @@ import (
 	"github.com/bocmiao/CloudConsoleWithAI/internal/actions"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/ai"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/core"
-	"github.com/bocmiao/CloudConsoleWithAI/internal/store"
 	"github.com/bocmiao/CloudConsoleWithAI/scripts"
 )
 
@@ -48,8 +47,12 @@ const systemPrompt = `你是 Miao Panel（喵面板）里的服务器运维助�
   清单的 server_id 填对应的 Miao Panel 服务器编号，没有就填 0；
 - 重启、关机或其他大改动前，建议先加一步 cloud.snapshot.create；到期不足 15 天、流量包用量超过 80% 要主动提醒用户。
 
-网站访问量（每天的 PV、UV、独立 IP，访问了哪些页面、从哪里来、哪些 IP、爬虫、状态码、手机还是电脑）：用 site_visits，它统计服务器上网站的访问日志，可以看全部网站合计，也可以用 site 只看一个网站。
-经过 EdgeOne 的网站，被 EdgeOne 缓存的请求（主要是图片、脚本等静态文件）不会到服务器，所以请求数、流量以 EdgeOne 为准，PV、UV、IP 以访问日志为准。
+网站访问量（PV、UV、独立 IP、地区、访问的页面和目录、来源、爬虫、状态码、设备）和可疑 IP：用 site_visits，可以看全部网站合计，也可以用 site 只看一个网站。
+- 经过 EdgeOne 的网站用 source=edgeone（EdgeOne 离线日志：每个请求都在，访客 IP 真实）；没有经过 EdgeOne 的网站给 server_id 看服务器日志。
+  服务器日志里访客 IP 是 EdgeOne 节点时（结果里会提示），那台服务器的 UV、IP、地区和风险 IP 都不准，不要据此封禁；
+- 风险 IP：看评分和理由（扫描敏感路径、攻击代码、猜密码、频率过高、冒充搜索引擎），结合它访问了什么、归属地和时间段判断；
+  已验证的搜索引擎爬虫、EdgeOne 节点、内网地址不要封禁。要封禁时用 eo.ip.block（网站经过 EdgeOne 时），把同一批 IP 一次写进 ips；
+- 有「不该能访问却返回了 200 的敏感文件」（如 /.env、/.git/、备份 .sql）要立即提醒用户：密钥或代码可能已经泄露，需要删除或禁止访问这些文件并更换密钥。
 网站访问分析（EdgeOne）：用 tencent_eo_analytics。
 - 先用 overview 看整体数据和请求最多的时段；要解释变化（例如「流量为什么涨了」）时，在变化的时段和之前正常的时段分别用 top 查 url、ip、country、ua、referer、status，
   对比找出增长来自哪里，判断是真实访客增长、搜索引擎或爬虫、热点内容，还是刷量/攻击；结论要引用具体的数字、时间和占比；
@@ -162,14 +165,18 @@ func (a *App) tools() map[string]ai.Tool {
 		}, Run: a.toolCertificates},
 		{Def: ai.ToolDef{
 			Name: "site_visits",
-			Description: "统计一台服务器上网站的访问日志（只读，1Panel、宝塔或 Nginx）：每个网站和全部网站合计的每天 PV、UV、独立 IP、请求数、爬虫、流量、4xx/5xx，" +
-				"以及受访页面、来源、访客 IP、状态码、爬虫、设备的排行。days 是天数（1 表示今天，默认 7，最多 31）；site 只看一个网站；结果缓存 3 分钟，refresh=true 重新统计。",
+			Description: "统计网站访问日志（只读）：每个网站和全部网站合计的 PV、UV、独立 IP、请求数、爬虫、流量、4xx/5xx，每天和今天每小时的数字，" +
+				"受访页面、访问目录、来源、访客 IP（带归属地）、地区、运营商、状态码、爬虫、设备、出错的地址、敏感文件泄露的排行，" +
+				"以及值得注意的 IP：归属地、访问了什么、频率、扫描/注入/猜密码等迹象和风险评分。" +
+				"source=edgeone 用 EdgeOne 离线日志（经过 EdgeOne 的网站，最准，有约一小时延迟）；给 server_id 用那台服务器上的日志（实时，所有网站）。" +
+				"days 是 1（今天）、7 或 30；site 只看一个网站；结果几分钟内会复用，refresh=true 重新统计。",
 			Schema: obj(map[string]any{
+				"source":    map[string]any{"type": "string", "description": "edgeone，或者不填、给 server_id"},
 				"server_id": serverIDProp,
-				"days":      map[string]any{"type": "integer", "minimum": 1, "maximum": 31},
+				"days":      map[string]any{"type": "integer", "enum": []int{1, 7, 30}},
 				"site":      map[string]any{"type": "string", "description": "网站域名，不填就是全部网站"},
 				"refresh":   map[string]any{"type": "boolean"},
-			}, "server_id"),
+			}),
 		}, Run: a.toolSiteVisits},
 		{Def: ai.ToolDef{
 			Name:        "tencent_eo_security",
@@ -344,28 +351,11 @@ func (a *App) toolProposePlan(ctx context.Context, raw json.RawMessage) (string,
 	if strings.TrimSpace(arg.Title) == "" || len(arg.Steps) == 0 {
 		return "", errors.New("建议需要标题和至少一个步骤")
 	}
-	sv, err := a.planServer(arg.ServerID)
-	if err != nil {
-		return "", fmt.Errorf("找不到服务器 %d", arg.ServerID)
-	}
-	for i := range arg.Steps {
-		arg.Steps[i].Free = nil // only Miao Panel's own checks may fill this in
-		if arg.Steps[i].Capability == freeCapability {
-			a.vetFree(ctx, sv, arg.Steps, i)
-		}
-	}
-	arg.Steps = prepareSteps(arg.Steps, sv.Adapter)
-	steps, err := json.Marshal(arg.Steps)
+	p, steps, err := a.proposePlan(ctx, "ai", arg.ServerID, arg.Title, arg.Reason, arg.Steps)
 	if err != nil {
 		return "", err
 	}
-	p, err := a.Store.AddPlan(store.Plan{
-		ServerID: arg.ServerID, Title: arg.Title, Reason: arg.Reason, Steps: string(steps), Status: core.PlanProposed,
-	})
-	if err != nil {
-		return "", err
-	}
-	_ = a.Store.Audit("ai", "plan.propose", arg.Title, fmt.Sprintf("服务器 %d，%d 步", arg.ServerID, len(arg.Steps)))
+	arg.Steps = steps
 	if c, ok := ctx.Value(planCollectorKey{}).(*planCollector); ok {
 		c.ids = append(c.ids, p.ID)
 	}

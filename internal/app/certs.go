@@ -129,7 +129,7 @@ func (a *App) Certificates(ctx context.Context, refresh bool) (CertOverview, err
 	}
 	want := a.certs.gen
 	for {
-		done := a.refreshCertsLocked()
+		done := a.refreshCertsLocked(originOf(ctx))
 		a.certs.mu.Unlock()
 		select {
 		case <-done:
@@ -166,7 +166,7 @@ func (a *App) LatestCertificates(ctx context.Context) (CertOverview, error) {
 	defer a.certs.mu.Unlock()
 	ov := a.certs.ov
 	if a.certs.running != nil || a.certs.at.IsZero() || time.Since(a.certs.at) >= certCacheTTL {
-		a.refreshCertsLocked()
+		a.refreshCertsLocked(originOf(ctx))
 		ov.Refreshing = true
 	}
 	return ov, nil
@@ -174,7 +174,7 @@ func (a *App) LatestCertificates(ctx context.Context) (CertOverview, error) {
 
 // refreshCertsLocked starts gathering a new overview unless one is
 // already under way, and returns a channel closed when it is done.
-func (a *App) refreshCertsLocked() chan struct{} {
+func (a *App) refreshCertsLocked(origin string) chan struct{} {
 	if a.certs.running != nil {
 		return a.certs.running
 	}
@@ -182,7 +182,7 @@ func (a *App) refreshCertsLocked() chan struct{} {
 	a.certs.running = done
 	gen := a.certs.gen
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		ctx, cancel := context.WithTimeout(withOrigin(context.Background(), origin), 3*time.Minute)
 		defer cancel()
 		started := time.Now()
 		ov, err := a.gatherCertificates(ctx)

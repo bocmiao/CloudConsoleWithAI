@@ -18,6 +18,7 @@ const (
 	OriginUser = "user" // the user clicked a button
 	OriginAI   = "ai"   // the AI ran a read-only check while answering
 	OriginPlan = "plan" // a checklist the user approved
+	OriginAuto = "auto" // Miao Panel keeping statistics up to date in the background
 )
 
 type originKey struct{}
