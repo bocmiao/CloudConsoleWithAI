@@ -68,6 +68,7 @@ a { color: var(--accent); text-decoration: none; cursor: pointer; }
 .small { font-size: 12.5px; }
 .nowrap { white-space: nowrap; }
 .pre-line { white-space: pre-line; }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .icon.lg { width: 20px; height: 20px; }
 
@@ -460,6 +461,8 @@ details.free-more[open] summary .icon { transform: rotate(90deg); }
 .cert-st { display: inline-flex; align-items: flex-start; gap: 5px; }
 .cert-bar { margin-bottom: 18px; }
 .cert-bar .cert-search input { width: 220px; }
+.cert-result { display: flex; align-items: baseline; gap: 10px; }
+.cert-result.on { margin: -8px 4px 14px; }
 .cert-hint { margin-bottom: 18px; }
 .cert-row.cert-rest { padding-top: 8px; padding-bottom: 10px; }
 .cert-table th { color: var(--text-2); }
@@ -610,6 +613,7 @@ button.th-sort:focus-visible { outline: 2px solid var(--accent); outline-offset:
   .cert-bar .segmented { width: 100%; }
   .cert-bar .segmented button { flex: 1; justify-content: center; padding: 0 6px; }
   .cert-bar .cert-search input { width: auto; flex: 1; min-width: 0; }
+  .cert-bar > .grow { display: none; }
   .kv-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .subtabs { gap: 16px; overflow-x: auto; }
 }

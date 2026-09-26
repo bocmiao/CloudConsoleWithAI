@@ -1472,9 +1472,12 @@ const CertPage = {
       }
       return { attention: attention + live.value.filter(l => liveOnly(l) && liveMatch(l)).length, manual };
     });
+    // A revealed card shows its hidden rows only while it is drawn at all
+    // (a refresh can leave it with nothing that matches).
+    const shownOpen = g => reveal.value.has(g.domain) && g.certs.some(x => pass(g, x));
     const hiddenProblems = computed(() => {
       let n = 0;
-      for (const g of groups.value) for (const c of g.certs) if (isProblem(g, c) && !pass(g, c) && !reveal.value.has(g.domain)) n++;
+      for (const g of groups.value) for (const c of g.certs) if (isProblem(g, c) && !pass(g, c) && !shownOpen(g)) n++;
       return n + live.value.filter(l => liveOnly(l) && !livePass(l)).length;
     });
     const totalCount = computed(() => groups.value.reduce((s, g) => s + g.certs.length, 0));
@@ -1533,10 +1536,14 @@ const CertPage = {
         <label class="field cert-search"><span>搜索</span>
           <input type="search" v-model="q" placeholder="域名或服务器名" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" @keydown.esc="q = ''"></label>
         <span class="grow"></span>
-        <span class="small secondary cert-count" role="status">{{ filtered ? '显示 ' + shownCount + ' / ' + totalCount + ' 张证书' : '' }}</span>
-        <button class="link small" v-if="filtered" @click="clearFilters">清除筛选</button>
         <label class="field" title="需要处理的始终排在最上面"><span>排序</span>
           <select v-model="sort"><option v-for="s in CERT_SORTS" :key="s.id" :value="s.id">{{ s.text }}</option></select></label>
+      </div>
+      <!-- Its own line, so the bar does not rewrap while typing; the status
+           stays mounted so screen readers hear each change. -->
+      <div class="cert-result" :class="{ on: filtered }" v-if="groups.length || live.length || noHttps.length">
+        <span class="small secondary" role="status">{{ filtered ? '显示 ' + shownCount + ' / ' + totalCount + ' 张证书' : '' }}<span class="sr-only" v-if="filtered && hiddenProblems">，还有 {{ hiddenProblems }} 个需要处理的问题被筛选隐藏了</span></span>
+        <button class="link small" v-if="filtered" @click="clearFilters">清除筛选</button>
       </div>
       <div class="alert al-warn cert-hint" v-if="hiddenProblems">
         <ui-icon name="warn"></ui-icon><span class="grow">还有 {{ hiddenProblems }} 个需要处理的问题被筛选隐藏了</span>
