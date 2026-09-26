@@ -247,6 +247,12 @@ func (a *App) discoverWith(ctx context.Context, sv store.Server, c sshx.Conn, ti
 // ExecutePlan starts running the selected steps in the background; poll
 // Plan to follow progress.
 func (a *App) ExecutePlan(id int64, selected []int) (PlanView, error) {
+	return a.executePlan(id, selected, "user")
+}
+
+// executePlan starts the selected steps; who is recorded in the audit log
+// (the user, or auto for the rules the user turned on).
+func (a *App) executePlan(id int64, selected []int, who string) (PlanView, error) {
 	v, err := a.Plan(id)
 	if err != nil {
 		return v, err
@@ -297,7 +303,7 @@ func (a *App) ExecutePlan(id int64, selected []int) (PlanView, error) {
 		a.locks.release(sv.ID)
 		return v, err
 	}
-	_ = a.Store.Audit("user", "plan.execute", v.Title, fmt.Sprintf("服务器 %s，%d 项", sv.Name, len(selected)))
+	_ = a.Store.Audit(who, "plan.execute", v.Title, fmt.Sprintf("服务器 %s，%d 项", sv.Name, len(selected)))
 	go a.runPlan(v.ID, sv.ID)
 	return v, nil
 }

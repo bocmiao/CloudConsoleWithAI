@@ -78,6 +78,9 @@ func New(a *app.App, token string, port int, version string) *Server {
 	api("POST /api/terminals/{tid}/input", s.terminalInput)
 	api("POST /api/terminals/{tid}/resize", s.resizeTerminal)
 	api("DELETE /api/terminals/{tid}", s.closeTerminal)
+	api("GET /api/autoblock", s.autoBlock)
+	api("PUT /api/autoblock", s.saveAutoBlock)
+	api("POST /api/autoblock/run", s.runAutoBlock)
 	api("GET /api/eo/sites", s.eoSites)
 	api("GET /api/eo/analytics", s.eoAnalytics)
 	api("POST /api/chat", s.chat)
@@ -455,6 +458,28 @@ func (s *Server) serverCloud(_ http.ResponseWriter, r *http.Request) (any, error
 
 func (s *Server) eoSites(_ http.ResponseWriter, r *http.Request) (any, error) {
 	return s.app.EOSites(r.Context())
+}
+
+func (s *Server) autoBlock(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return s.app.AutoBlock(), nil
+}
+
+func (s *Server) saveAutoBlock(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req app.AutoBlockSettings
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.SaveAutoBlock(req)
+}
+
+// runAutoBlock applies the rule now instead of at the next refresh.
+func (s *Server) runAutoBlock(_ http.ResponseWriter, r *http.Request) (any, error) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+	defer cancel()
+	note := s.app.RunAutoBlock(ctx)
+	st := s.app.AutoBlock()
+	st.LastNote = note
+	return st, nil
 }
 
 // eoAnalytics answers with=cached from the last report, however old, when

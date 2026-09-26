@@ -8,7 +8,8 @@ import (
 // KeepWarm has the slow pages' data ready before they are opened: when
 // Miao Panel starts and then every interval, it refreshes website visits
 // (EdgeOne logs and every server's logs), certificates that are out of
-// date and each EdgeOne site's last 24 hours. It returns when ctx ends.
+// date and each EdgeOne site's last 24 hours, and applies the automatic
+// block rule. It returns when ctx ends.
 func (a *App) KeepWarm(ctx context.Context, interval time.Duration) {
 	ctx = withOrigin(ctx, OriginAuto)
 	for {
@@ -29,6 +30,8 @@ func (a *App) warm(ctx context.Context) {
 			}
 		}
 	}
+	// With fresh statistics, the automatic block rule (when turned on).
+	a.RunAutoBlock(ctx)
 	a.certs.mu.Lock()
 	if a.certs.running == nil && (a.certs.at.IsZero() || time.Since(a.certs.at) >= certCacheTTL) {
 		a.refreshCertsLocked(originOf(ctx))

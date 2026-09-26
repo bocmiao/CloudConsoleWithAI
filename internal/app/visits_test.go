@@ -374,3 +374,98 @@ func TestJudgeAndBlock(t *testing.T) {
 		t.Fatalf("still blocked: %+v", blocked)
 	}
 }
+
+func TestAutoBlock(t *testing.T) {
+	a := newApp(t)
+	a.CacheDir = t.TempDir()
+	f := tencenttest.Start(t)
+	a.TencentEndpoint = f.Endpoint
+	if _, err := a.SaveTencent(tencenttest.SecretID, tencenttest.SecretKey); err != nil {
+		t.Fatal(err)
+	}
+	fakeDNS(t)
+	hour := time.Now().Truncate(time.Hour).Add(-time.Hour)
+	var lines string
+	// A scanner (blocked), an attacker the AI only wants watched, one on the
+	// allow list, and a verified crawler.
+	for i := 0; i < 35; i++ {
+		lines += eoRecord(hour.Add(time.Duration(i)*time.Second), "45.148.10.2", "blog.example.com", "GET", []string{"/.env", "/.git/config", "/wp-login.php"}[i%3], "-", 404, "Mozilla/5.0 zgrab/0.x", "-")
+	}
+	lines += eoRecord(hour, "185.220.101.47", "blog.example.com", "GET", "/search", "q=1 union select 2", 400, chromeUA, "-") +
+		eoRecord(hour, "91.234.56.12", "blog.example.com", "GET", "/search", "q=1 union select 2", 400, chromeUA, "-") +
+		eoRecord(hour, "66.249.66.1", "blog.example.com", "GET", "/", "-", 200, googleUA, "-")
+	f.L7Logs = map[string][]tencenttest.LogPackage{"zone-abc": {{Domain: "blog.example.com", Name: "p1.gz", Start: hour, Lines: lines}}}
+	ctx := context.Background()
+	if _, err := a.Visits(ctx, "edgeone", false); err != nil {
+		t.Fatal(err)
+	}
+
+	if note := a.RunAutoBlock(ctx); note != "自动封禁没有开启" {
+		t.Fatalf("off: %q", note)
+	}
+	if _, err := a.SaveAutoBlock(AutoBlockSettings{Enabled: true, Level: "high", RequireAI: true, Hours: 24, Allow: []string{"bad"}}); err == nil {
+		t.Fatal("accepted a bad allow list")
+	}
+	if _, err := a.SaveAutoBlock(AutoBlockSettings{Enabled: true, Level: "high", RequireAI: true, Hours: 24, Allow: []string{"91.234.56.0/24"}}); err != nil {
+		t.Fatal(err)
+	}
+	asked := 0
+	a.Analyst = func(_ context.Context, prompt string) (string, error) {
+		asked++
+		if strings.Contains(prompt, "91.234.56.12") || strings.Contains(prompt, "66.249.66.1") {
+			t.Errorf("asked about an allowed IP or a crawler:\n%s", prompt)
+		}
+		return `{"summary": "x", "ips": [{"ip": "45.148.10.2", "action": "block", "reason": "扫描"}, {"ip": "185.220.101.47", "action": "watch", "reason": "只有一次"}]}`, nil
+	}
+	note := a.RunAutoBlock(ctx)
+	blocked, _ := a.Blocked(ctx)
+	if !strings.Contains(note, "封禁了 1 个 IP") || len(blocked) != 1 || strings.Join(blocked[0].IPs, ",") != "45.148.10.2" || asked != 1 {
+		t.Fatalf("first run: %q, blocked %+v, asked %d", note, blocked, asked)
+	}
+	st := a.AutoBlock()
+	if len(st.Blocked) != 1 || st.Blocked[0].IP != "45.148.10.2" || st.Blocked[0].Zone != "example.com" || st.Blocked[0].Until == "" ||
+		!strings.Contains(st.Blocked[0].Reason, "AI：扫描") || st.LastNote != note {
+		t.Fatalf("state = %+v", st)
+	}
+	if plans, _ := a.Store.ListPlans(10); len(plans) == 0 || !strings.HasPrefix(plans[0].Title, "自动封禁 1 个高风险 IP") {
+		t.Fatalf("plans = %+v", plans)
+	}
+
+	// Nothing new: no checklist, and the AI is not asked again today.
+	if note := a.RunAutoBlock(ctx); note != "没有需要封禁的 IP" || asked != 1 {
+		t.Fatalf("second run: %q, asked %d", note, asked)
+	}
+
+	// The block runs out and is lifted.
+	autoBlockMu.Lock()
+	s := a.loadAutoBlock()
+	s.Blocked[0].Until = time.Now().UTC().Add(-time.Minute).Format(autoBlockUntil)
+	_ = a.saveAutoBlock(s)
+	autoBlockMu.Unlock()
+	note = a.RunAutoBlock(ctx)
+	if blocked, _ := a.Blocked(ctx); len(blocked) != 0 || !strings.Contains(note, "到期解封 1 个 IP") || len(a.AutoBlock().Blocked) != 0 {
+		t.Fatalf("expiry: %q, blocked %+v", note, blocked)
+	}
+
+	if note := a.RunAutoBlock(ctx); note != "没有需要封禁的 IP" {
+		t.Fatalf("blocked again with nothing new since the block ran out: %q", note)
+	}
+
+	// It comes back (seen after the block ran out), is blocked again, then
+	// the user takes it over: kept for good.
+	autoBlockMu.Lock()
+	s = a.loadAutoBlock()
+	s.Lifted["45.148.10.2"] = "2000-01-01 00:00:00"
+	_ = a.saveAutoBlock(s)
+	autoBlockMu.Unlock()
+	a.RunAutoBlock(ctx)
+	if len(a.AutoBlock().Blocked) != 1 {
+		t.Fatal("not blocked again")
+	}
+	if _, err := a.ProposeBlock(ctx, "edgeone", []string{"45.148.10.2"}); err != nil {
+		t.Fatal(err)
+	}
+	if st := a.AutoBlock(); len(st.Blocked) != 0 {
+		t.Fatalf("still the rule's: %+v", st.Blocked)
+	}
+}

@@ -534,7 +534,7 @@ button.th-sort:focus-visible { outline: 2px solid var(--accent); outline-offset:
 
 .card { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); margin-bottom: 18px; overflow: hidden; min-width: 0; }
 .card-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--sep); }
-.card-head h3 { font-size: 14px; font-weight: 600; margin: 0; flex: 1; }
+.card-head h3 { font-size: 14px; font-weight: 600; margin: 0; flex: 1; white-space: nowrap; }
 .card-head .grow { flex: 1; }
 .card-head h3 + .small { flex: none; }
 .card .lchart { padding: 8px 8px 0; }
@@ -577,6 +577,18 @@ button.th-sort:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .ip-chip { display: inline-flex; align-items: center; gap: 2px; padding: 2px 4px 2px 10px; border-radius: 999px; background: var(--hover); font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .ip-chip button { height: 20px; width: 20px; padding: 0; justify-content: center; }
 .ip-chip button .icon { width: 11px; height: 11px; }
+.ip-chip .auto-tag { margin-left: 5px; font-size: 10.5px; padding: 0 5px; }
+.card-head h3 .risk-chip { margin-left: 6px; font-weight: 400; vertical-align: 1px; }
+.risk-chip.on { background: color-mix(in srgb, var(--good) 16%, transparent); color: var(--good); }
+.auto-body { padding: 12px 16px; }
+.auto-body > p { margin: 0 0 10px; line-height: 1.6; }
+.auto-table { font-size: 13px; margin: 4px 0 8px; min-width: 640px; }
+.auto-events summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); }
+.auto-events summary::-webkit-details-marker { display: none; }
+.auto-events[open] summary .icon { transform: rotate(90deg); }
+.auto-events ul { margin: 8px 0 0; padding-left: 18px; line-height: 1.7; }
+.auto-form .row.form .v { max-width: 520px; }
+.auto-form select { width: auto; min-width: 180px; }
 
 /* The IP drawer */
 .drawer-mask { position: fixed; inset: 0; background: rgba(0,0,0,.22); z-index: 20; display: flex; justify-content: flex-end; }

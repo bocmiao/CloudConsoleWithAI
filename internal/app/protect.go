@@ -91,8 +91,16 @@ func (a *App) proposePlan(ctx context.Context, actor string, serverID int64, tit
 
 // ProposeBlock makes a checklist that blocks IPs on the EdgeOne sites
 // they visited. EdgeOne's nodes, private addresses and verified search
-// engine crawlers are refused.
+// engine crawlers are refused. IPs the automatic rule blocked for a while
+// become the user's own, kept until unblocked by hand.
 func (a *App) ProposeBlock(ctx context.Context, source string, ips []string) (PlanView, error) {
+	a.forgetAutoBlocked(ips)
+	return a.blockPlan(ctx, "user", source, ips, "", "根据访问日志：")
+}
+
+// blockPlan stores a block checklist proposed by actor; title is made up
+// when empty, lead starts the reason.
+func (a *App) blockPlan(ctx context.Context, actor, source string, ips []string, title, lead string) (PlanView, error) {
 	c := a.tencentClient()
 	if c == nil {
 		return PlanView{}, userErr("封禁要通过 EdgeOne 进行，请先在「设置 → 腾讯云」填写密钥")
@@ -155,10 +163,8 @@ func (a *App) ProposeBlock(ctx context.Context, source string, ips []string) (Pl
 		return PlanView{}, userErr("没有可以封禁的 IP：%s", strings.Join(skipped, "；"))
 	}
 	names := make([]string, 0, len(byZone))
-	total := 0
-	for z, list := range byZone {
+	for z := range byZone {
 		names = append(names, z)
-		total += len(list)
 	}
 	sort.Strings(names)
 	var steps []core.Step
@@ -166,27 +172,34 @@ func (a *App) ProposeBlock(ctx context.Context, source string, ips []string) (Pl
 		steps = append(steps, core.Step{Capability: "eo.ip.block", Summary: fmt.Sprintf("在 EdgeOne 站点 %s 封禁 %d 个 IP", z, len(byZone[z])),
 			Params: map[string]any{"domain": z, "ips": strings.Join(byZone[z], ",")}})
 	}
-	reason := "根据访问日志：\n" + strings.Join(notes, "\n")
+	reason := lead + "\n" + strings.Join(notes, "\n")
 	if len(skipped) > 0 {
 		reason += "\n没有加入：\n" + strings.Join(skipped, "\n")
 	}
-	p, _, err := a.proposePlan(ctx, "user", v.ServerID, fmt.Sprintf("封禁 %d 个可疑 IP", countUnique(byZone)), reason, steps)
+	if title == "" {
+		title = fmt.Sprintf("封禁 %d 个可疑 IP", countUnique(byZone))
+	}
+	p, _, err := a.proposePlan(ctx, actor, v.ServerID, title, reason, steps)
 	if err != nil {
 		return PlanView{}, err
 	}
-	_ = total
 	return a.Plan(p.ID)
 }
 
 // ProposeUnblock makes a checklist that lifts Miao Panel's block on IPs
 // in an EdgeOne site.
 func (a *App) ProposeUnblock(ctx context.Context, zone string, ips []string) (PlanView, error) {
+	a.forgetAutoBlocked(ips)
+	return a.unblockPlan(ctx, "user", zone, ips, "由你在网站统计页选择解封")
+}
+
+func (a *App) unblockPlan(ctx context.Context, actor, zone string, ips []string, reason string) (PlanView, error) {
 	if a.tencentClient() == nil || zone == "" || len(ips) == 0 {
 		return PlanView{}, userErr("要给出 EdgeOne 站点和要解封的 IP")
 	}
 	step := core.Step{Capability: "eo.ip.unblock", Summary: fmt.Sprintf("在 EdgeOne 站点 %s 解除封禁 %d 个 IP", zone, len(ips)),
 		Params: map[string]any{"domain": zone, "ips": strings.Join(ips, ",")}}
-	p, _, err := a.proposePlan(ctx, "user", 0, fmt.Sprintf("解除封禁 %d 个 IP", len(ips)), "由你在网站统计页选择解封", []core.Step{step})
+	p, _, err := a.proposePlan(ctx, actor, 0, fmt.Sprintf("解除封禁 %d 个 IP", len(ips)), reason, []core.Step{step})
 	if err != nil {
 		return PlanView{}, err
 	}

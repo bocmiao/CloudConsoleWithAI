@@ -662,7 +662,52 @@ const VisitStats = {
     async function loadBlocked() {
       if (!props.tencent) { blocked.value = []; return; }
       try { blocked.value = await api('GET', '/api/visits/blocked'); } catch { blocked.value = []; }
+      loadAuto();
     }
+    // 自动封禁: the rule the user turns on, and what it did.
+    const auto = ref(null);
+    const autoEdit = ref(false);
+    const autoBusy = ref(false);
+    const autoForm = reactive({ enabled: true, level: 'high', requireAI: true, hours: 24, allowText: '' });
+    async function loadAuto() {
+      if (!props.tencent) { auto.value = null; return; }
+      try { auto.value = await api('GET', '/api/autoblock'); } catch { auto.value = null; }
+    }
+    function editAuto() {
+      const st = (auto.value && auto.value.settings) || {};
+      Object.assign(autoForm, { enabled: true, level: st.level || 'high', requireAI: st.requireAI !== false, hours: st.hours ?? 24, allowText: (st.allow || []).join('\n') });
+      autoEdit.value = true;
+    }
+    async function saveAuto(enabled) {
+      autoBusy.value = true;
+      try {
+        auto.value = await api('PUT', '/api/autoblock', { enabled: enabled ?? autoForm.enabled, level: autoForm.level, requireAI: autoForm.requireAI,
+          hours: Number(autoForm.hours), allow: autoForm.allowText.split(/[\s,，]+/).filter(Boolean) });
+        autoEdit.value = false;
+        notify(auto.value.settings.enabled ? '自动封禁已开启' : '自动封禁已关闭', 'ok');
+      } catch (e) { notify(e.message, 'error'); }
+      finally { autoBusy.value = false; }
+    }
+    async function turnOffAuto() {
+      const st = auto.value.settings;
+      Object.assign(autoForm, { level: st.level, requireAI: st.requireAI, hours: st.hours, allowText: (st.allow || []).join('\n') });
+      await saveAuto(false);
+    }
+    async function runAuto() {
+      autoBusy.value = true;
+      try { auto.value = await api('POST', '/api/autoblock/run'); notify(auto.value.lastNote || '检查完了', 'ok'); loadBlocked(); }
+      catch (e) { notify(e.message, 'error'); }
+      finally { autoBusy.value = false; }
+    }
+    const autoRule = computed(() => {
+      const st = auto.value && auto.value.settings;
+      if (!st) return '';
+      const who = (st.level === 'medium' ? '高风险和中风险 IP' : '高风险 IP') + (st.requireAI ? '（AI 也建议封禁的）' : '');
+      const how = !st.hours ? '一直封禁，直到手动解封' : st.hours % 24 === 0 ? `封禁 ${st.hours / 24} 天` : `封禁 ${st.hours} 小时`;
+      return who + '，' + how + ((st.allow || []).length ? `，不封 ${st.allow.length} 个你列出的 IP/网段` : '');
+    });
+    const autoUntil = computed(() => new Map(((auto.value && auto.value.blocked) || []).map(b => [b.ip, b.until])));
+    const untilText = u => { if (!u) return '一直封禁'; const d = new Date(u); return isNaN(d) ? u : `${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')} 解封`; };
     watch(source, v => { setPref('miao.visitSource', v); site.value = '*'; picked.value = new Set(); load(false); });
     watch(() => props.active, on => { if (on) { loadSources().then(() => load(false)); loadBlocked(); } });
     watch(() => props.servers.length, () => loadSources());
@@ -817,7 +862,7 @@ const VisitStats = {
     return { sources, source, days, site, section, series, data, loading, error, load, siteNames, range, cur, total, top, siteInfo, siteRows,
       ips, risky, ipRows, counts, judgement, verdictOf, blockable, blockedSet, picked, togglePick, pickSuggested, judge, judging, showAll,
       block, unblock, plan, planning, planDone, blocked, drawer, openIP, alerts, trend, dayRows, hourRows, delta, yesterday, pct, SERIES, sourceTitle,
-      askAI, askIP, shortUA, deadLinks, askDead, VISIT_RANGES, VISIT_SECTIONS, RISK, VERDICT, fmtCount, fmtBytes, whenText };
+      askAI, askIP, shortUA, deadLinks, askDead, auto, autoEdit, autoBusy, autoForm, editAuto, saveAuto, turnOffAuto, runAuto, autoRule, autoUntil, untilText, VISIT_RANGES, VISIT_SECTIONS, RISK, VERDICT, fmtCount, fmtBytes, whenText };
   },
   template: `
   <div class="vs">
@@ -1013,10 +1058,45 @@ const VisitStats = {
             <div class="blocked" v-if="blocked.length">
               <div v-for="z in blocked" :key="z.zone" class="blocked-zone">
                 <div class="small secondary">站点 {{ z.zone }}</div>
-                <span class="ip-chip" v-for="ip in z.ips" :key="ip">{{ ip }}<button class="plain icon-only" title="解除封禁" :aria-label="'解除封禁 ' + ip" @click="unblock(z.zone, ip)" :disabled="planning"><ui-icon name="close"></ui-icon></button></span>
+                <span class="ip-chip" v-for="ip in z.ips" :key="ip" :title="autoUntil.has(ip) ? '自动封禁，' + untilText(autoUntil.get(ip)) : ''">{{ ip }}<span class="tag auto-tag" v-if="autoUntil.has(ip)">自动</span><button class="plain icon-only" title="解除封禁" :aria-label="'解除封禁 ' + ip" @click="unblock(z.zone, ip)" :disabled="planning"><ui-icon name="close"></ui-icon></button></span>
               </div>
             </div>
             <div class="rank-empty" v-else>还没有封禁的 IP</div>
+          </section>
+          <section class="card" v-if="tencent && auto">
+            <header class="card-head"><h3>自动封禁 <span class="risk-chip" :class="auto.settings.enabled ? 'on' : ''">{{ auto.settings.enabled ? '已开启' : '已关闭' }}</span></h3>
+              <button class="plain small" v-if="auto.settings.enabled && !autoEdit" @click="runAuto" :disabled="autoBusy"><span class="spinner inline" v-if="autoBusy"></span>立即检查一次</button>
+              <button class="small" v-if="!autoEdit" @click="editAuto">{{ auto.settings.enabled ? '修改规则' : '开启…' }}</button>
+            </header>
+            <div class="auto-body" v-if="!autoEdit">
+              <p class="small" v-if="auto.settings.enabled">规则：{{ autoRule }}。随统计每 20 分钟检查一次<template v-if="auto.lastRun">；上次 {{ whenText(auto.lastRun) }}：{{ auto.lastNote }}</template>。</p>
+              <p class="small secondary" v-else>开启后，每次统计更新（每 20 分钟）都会按规则在 EdgeOne 封禁 IP，到期自动解封。每次封禁和解封都会生成清单，留在「建议」和执行日志里，可以撤销。EdgeOne 节点、内网地址、已验证的搜索引擎和你列出的 IP 不会被封。</p>
+              <div class="table-wrap" v-if="auto.blocked.length">
+                <table class="table auto-table">
+                  <thead><tr><th>IP</th><th>站点</th><th>为什么</th><th>到期</th></tr></thead>
+                  <tbody><tr v-for="b in auto.blocked" :key="b.zone + b.ip"><td class="mono-ish">{{ b.ip }}</td><td>{{ b.zone }}</td><td class="small secondary">{{ b.reason || '—' }}</td><td class="small">{{ untilText(b.until) }}</td></tr></tbody>
+                </table>
+              </div>
+              <details class="auto-events" v-if="auto.events.length">
+                <summary><ui-icon name="chevron"></ui-icon>最近的记录（{{ auto.events.length }}）</summary>
+                <ul class="small"><li v-for="(e, i) in auto.events.slice().reverse()" :key="i"><span class="tertiary">{{ whenText(e.at) }}</span> {{ e.text }}</li></ul>
+              </details>
+            </div>
+            <div class="auto-form" v-else>
+              <div class="row form"><span class="k">封禁哪些 IP</span><span class="v">
+                <select v-model="autoForm.level" aria-label="封禁哪些 IP"><option value="high">高风险的</option><option value="medium">高风险和中风险的</option></select></span></div>
+              <div class="row form"><span class="k">AI 把关</span><span class="v"><label class="check"><input type="checkbox" v-model="autoForm.requireAI"> 只封 AI 也建议封禁的</label>
+                <div class="small tertiary">每个 IP 每天最多问一次 AI，会产生少量费用；AI 没配置好时不会封禁。</div></span></div>
+              <div class="row form"><span class="k">封多久</span><span class="v">
+                <select v-model.number="autoForm.hours" aria-label="封多久"><option :value="1">1 小时</option><option :value="24">24 小时</option><option :value="168">7 天</option><option :value="720">30 天</option><option :value="0">一直（手动解封）</option></select>
+                <div class="small tertiary">到期解封后，如果它又来了，会再次封禁。</div></span></div>
+              <div class="row form"><span class="k">不要封的 IP</span><span class="v">
+                <textarea v-model="autoForm.allowText" rows="3" placeholder="每行一个 IP 或网段，例如你自己的 IP、公司网段" aria-label="不要自动封禁的 IP"></textarea></span></div>
+              <div class="row"><span class="grow"></span>
+                <button class="plain" v-if="auto.settings.enabled" @click="turnOffAuto" :disabled="autoBusy">关闭自动封禁</button>
+                <button @click="autoEdit = false">取消</button>
+                <button class="primary" @click="saveAuto(true)" :disabled="autoBusy">{{ auto.settings.enabled ? '保存' : '开启' }}</button></div>
+            </div>
           </section>
         </template>
       </template>
