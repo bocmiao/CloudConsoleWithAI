@@ -1,0 +1,34 @@
+# Miao Panel（喵面板）Web 版的 systemd 服务。安装步骤见 docs/DEPLOY.md：
+#   sudo useradd --system --home /var/lib/miaopanel --shell /usr/sbin/nologin miaopanel
+#   sudo install -m 755 MiaoPanel-linux-amd64 /usr/local/bin/miaopanel
+#   sudo cp miaopanel.service /etc/systemd/system/ && sudo systemctl enable --now miaopanel
+#   sudo journalctl -u miaopanel      （第一次启动时，这里有初始化码）
+[Unit]
+Description=Miao Panel（喵面板）Web 版
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=miaopanel
+Group=miaopanel
+ExecStart=/usr/local/bin/miaopanel serve --data /var/lib/miaopanel --listen 127.0.0.1:18765
+Environment=TZ=Asia/Shanghai
+StateDirectory=miaopanel
+StateDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=3
+# Miao Panel 只需要网络和自己的数据目录。
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

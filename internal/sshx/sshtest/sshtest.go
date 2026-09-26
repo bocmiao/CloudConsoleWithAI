@@ -5,8 +5,10 @@
 package sshtest
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -25,6 +27,9 @@ type Server struct {
 	Host    string
 	Port    int
 	HostKey string // SHA256 fingerprint of the server's host key
+	// ClientKey is a private key (OpenSSH PEM) the server accepts for the
+	// user, for testing key logins.
+	ClientKey string
 	// ShellCommand runs for shell requests; its output goes back as the
 	// terminal's. Default: sh -i. It does not get a real pseudo-terminal.
 	ShellCommand []string
@@ -66,12 +71,27 @@ func Start(t TB, user, password string) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
+	clientPub, clientPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorized, _ := ssh.NewPublicKey(clientPub)
+	block, err := ssh.MarshalPrivateKey(clientPriv, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg := &ssh.ServerConfig{
 		PasswordCallback: func(c ssh.ConnMetadata, p []byte) (*ssh.Permissions, error) {
 			if c.User() == user && string(p) == password {
 				return nil, nil
 			}
 			return nil, fmt.Errorf("password rejected for %q", c.User())
+		},
+		PublicKeyCallback: func(c ssh.ConnMetadata, k ssh.PublicKey) (*ssh.Permissions, error) {
+			if c.User() == user && bytes.Equal(k.Marshal(), authorized.Marshal()) {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("key rejected for %q", c.User())
 		},
 	}
 	cfg.AddHostKey(signer)
@@ -81,7 +101,7 @@ func Start(t TB, user, password string) *Server {
 	}
 	host, port, _ := net.SplitHostPort(ln.Addr().String())
 	p, _ := strconv.Atoi(port)
-	s := &Server{Host: host, Port: p, HostKey: ssh.FingerprintSHA256(signer.PublicKey()), cfg: cfg, ln: ln}
+	s := &Server{Host: host, Port: p, HostKey: ssh.FingerprintSHA256(signer.PublicKey()), ClientKey: string(pem.EncodeToMemory(block)), cfg: cfg, ln: ln}
 	go s.serve()
 	t.Cleanup(func() { ln.Close() })
 	return s

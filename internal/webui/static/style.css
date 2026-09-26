@@ -764,3 +764,38 @@ button.primary.danger { background: var(--crit); }
 /* 安全: IPs that came to the server itself, and notes under card headers */
 .card-note { margin: 10px 18px 0; }
 .tag.direct-tag { display: inline-block; margin-top: 3px; background: var(--warn-track); color: var(--text); }
+
+/* Web edition: the login page */
+.login-page { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px 16px; gap: 18px;
+  background: radial-gradient(1200px 600px at 50% -10%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 70%), var(--bg); }
+.login-card { width: min(400px, 100%); display: flex; flex-direction: column; gap: 14px; padding: 28px 28px 24px; border-radius: 16px;
+  background: var(--surface); box-shadow: var(--shadow-lg); }
+.login-brand { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+.login-brand .app-mark { width: 40px; height: 40px; border-radius: 10px; }
+.login-brand .app-mark .icon { width: 22px; height: 22px; }
+.login-name { font-weight: 600; font-size: 16px; }
+.login-card h1 { font-size: 22px; letter-spacing: -.02em; }
+.login-card p { margin: 0; }
+.login-card code { font-size: 12px; padding: 1px 5px; border-radius: 4px; background: var(--hover); }
+.field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text-2); }
+.field input { height: 38px; font-size: 14px; }
+.login-btn { height: 40px; justify-content: center; font-size: 14px; margin-top: 4px; }
+.login-error, .login-warn { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; padding: 10px 12px; border-radius: 10px; }
+.login-error { background: var(--crit-track); }
+.login-error .icon { color: var(--crit); flex: none; margin-top: 1px; }
+.login-warn { background: var(--warn-track); }
+.login-warn .icon { color: var(--warn); flex: none; margin-top: 1px; }
+.login-foot { margin: 0; }
+
+/* Web edition: account and sign-in in the sidebar */
+.side-user { display: flex; align-items: center; gap: 8px; padding: 6px 10px 0; font-size: 13px; color: var(--text-2); }
+.side-user .icon { color: var(--text-3); }
+.side-user .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-user button { height: 24px; }
+.totp-setup { align-items: flex-start; gap: 18px; flex-wrap: wrap; }
+.totp-setup img { border-radius: 8px; background: #fff; padding: 6px; image-rendering: pixelated; flex: none; }
+.totp-setup p { margin: 0 0 8px; }
+.totp-secret { font-size: 13px; letter-spacing: .08em; word-break: break-all; user-select: all; padding: 6px 10px; border-radius: 8px; background: var(--hover); }
+.totp-confirm { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+.totp-confirm input { width: 120px; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: .15em; }
+textarea.key-text { font: 12px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; resize: vertical; min-height: 96px; }

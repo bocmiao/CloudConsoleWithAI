@@ -732,3 +732,39 @@ func TestTencentServersAndAnalyticsTools(t *testing.T) {
 		t.Fatalf("sites = %v, %v", sites, err)
 	}
 }
+
+func TestPastedKey(t *testing.T) {
+	a := newApp(t)
+	srv := sshtest.Start(t, "root", "pw")
+	ctx := context.Background()
+	req := AddServerRequest{Name: "web", Host: srv.Host, Port: srv.Port, Username: "root", AuthKind: "key"}
+	for _, c := range []struct{ text, want string }{
+		{"", "请粘贴私钥"},
+		{"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB user@pc", "私钥格式不对"},
+	} {
+		req.KeyText = c.text
+		if _, err := a.AddServer(req); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Fatalf("%q: %v", c.text, err)
+		}
+	}
+	req.KeyText = "  " + srv.ClientKey + "\n\n"
+	sv, err := a.AddServer(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sv.KeyPath != "" {
+		t.Fatalf("key path = %q", sv.KeyPath)
+	}
+	if got, _ := a.Secrets.Get(secretKey(sv.ID, "key")); !strings.Contains(got, "OPENSSH PRIVATE KEY") {
+		t.Fatal("key not in the secret store")
+	}
+	if res, err := a.TestConnection(ctx, sv.ID); err != nil || res.Output == "" {
+		t.Fatalf("connect with pasted key: %+v %v", res, err)
+	}
+	if err := a.DeleteServer(sv.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Secrets.Get(secretKey(sv.ID, "key")); err == nil {
+		t.Fatal("key left behind")
+	}
+}

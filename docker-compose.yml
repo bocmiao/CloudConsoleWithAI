@@ -1,0 +1,19 @@
+# Miao Panel（喵面板）Web 版：docker compose up -d
+# 详细说明（HTTPS、反向代理、忘记密码、升级）见 docs/DEPLOY.md
+services:
+  miaopanel:
+    build: .
+    image: miaopanel:latest
+    container_name: miaopanel
+    restart: unless-stopped
+    ports:
+      # 只让本机的反向代理（1Panel、宝塔、Nginx、Caddy）访问，由它提供 HTTPS。
+      # 一定要直接从外面访问的话改成 "18765:18765"，并且只通过 HTTPS 使用。
+      - "127.0.0.1:18765:18765"
+    volumes:
+      - miaopanel-data:/data   # 数据库和密钥都在这里，请定期备份
+    environment:
+      TZ: Asia/Shanghai        # 日报按这个时区生成
+
+volumes:
+  miaopanel-data:

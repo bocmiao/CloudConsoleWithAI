@@ -116,6 +116,23 @@ CREATE TABLE IF NOT EXISTS settings (
 	key   TEXT PRIMARY KEY,
 	value TEXT NOT NULL
 );
+-- Web edition: who may log in, and who is logged in.
+CREATE TABLE IF NOT EXISTS users (
+	id         INTEGER PRIMARY KEY,
+	name       TEXT NOT NULL UNIQUE,
+	password   TEXT NOT NULL,              -- bcrypt hash
+	totp       INTEGER NOT NULL DEFAULT 0, -- two-step login on; the key is in the secret store
+	created_at TEXT NOT NULL,
+	changed_at TEXT NOT NULL               -- when the password was last set
+);
+CREATE TABLE IF NOT EXISTS sessions (
+	id         TEXT PRIMARY KEY,           -- SHA-256 of the cookie, never the cookie itself
+	user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	created_at TEXT NOT NULL,
+	seen_at    TEXT NOT NULL,
+	ip         TEXT NOT NULL DEFAULT '',
+	ua         TEXT NOT NULL DEFAULT ''
+);
 `
 
 // Open opens (and migrates) the database in dir.

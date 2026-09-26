@@ -1,10 +1,15 @@
-// Package api serves the local web UI and its JSON API.
+// Package api serves the web UI and its JSON API.
 //
-// The server only listens on the loopback interface. Every API request must
-// carry the session cookie issued by /auth (the launcher opens that URL with
-// a one-time token) plus an X-Miao header, and a Host header naming the
-// loopback address, so other local programs, web pages and DNS-rebinding
-// tricks cannot drive it.
+// On the desktop the server only listens on the loopback interface. Every
+// API request must carry the session cookie issued by /auth (the launcher
+// opens that URL with a one-time token) plus an X-Miao header, and a Host
+// header naming the loopback address, so other local programs, web pages
+// and DNS-rebinding tricks cannot drive it.
+//
+// The web edition (NewServer) is reached from anywhere: the cookie is a
+// login session from package auth instead, and the X-Miao header, which a
+// page on another site cannot add without the browser asking first, still
+// guards every call.
 package api
 
 import (
@@ -26,6 +31,7 @@ import (
 
 	"github.com/bocmiao/CloudConsoleWithAI/internal/ai"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/app"
+	"github.com/bocmiao/CloudConsoleWithAI/internal/auth"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/webui"
 )
 
@@ -34,8 +40,9 @@ const cookieName = "miao_session"
 // Server is the HTTP handler.
 type Server struct {
 	app     *app.App
-	token   string
-	port    int
+	token   string        // desktop: the one login, made at start
+	port    int           // desktop: the loopback port
+	auth    *auth.Service // web edition: accounts and sessions
 	version string
 	mux     *http.ServeMux
 
@@ -49,12 +56,27 @@ type download struct {
 	expires time.Time
 }
 
-// New builds the handler. port is the port the listener is bound to.
+// New builds the desktop handler. port is the port the listener is bound to.
 func New(a *app.App, token string, port int, version string) *Server {
-	s := &Server{app: a, token: token, port: port, version: version, mux: http.NewServeMux()}
+	s := &Server{app: a, token: token, port: port, version: version}
+	s.routes()
+	s.mux.HandleFunc("GET /auth", s.handleAuth)
+	return s
+}
+
+// NewServer builds the web edition's handler: people log in with the
+// account from package auth.
+func NewServer(a *app.App, au *auth.Service, version string) *Server {
+	s := &Server{app: a, auth: au, version: version}
+	s.routes()
+	return s
+}
+
+func (s *Server) routes() {
+	s.mux = http.NewServeMux()
 	static, _ := fs.Sub(webui.Static, "static")
 	s.mux.Handle("GET /", http.FileServerFS(static))
-	s.mux.HandleFunc("GET /auth", s.handleAuth)
+	s.authRoutes()
 
 	api := func(pattern string, h func(w http.ResponseWriter, r *http.Request) (any, error)) {
 		s.mux.HandleFunc(pattern, s.guard(h))
@@ -134,7 +156,6 @@ func New(a *app.App, token string, port int, version string) *Server {
 	api("POST /api/servers/{id}/onepanel/test", s.testOnePanel)
 	api("GET /api/audit", s.audit)
 	api("GET /api/usage", s.usage)
-	return s
 }
 
 func (s *Server) hostAllowed(host string) bool {
@@ -145,12 +166,17 @@ func (s *Server) hostAllowed(host string) bool {
 	return h == "127.0.0.1" || h == "localhost" || h == "::1"
 }
 
-// ServeHTTP rejects requests whose Host is not our loopback address.
+// ServeHTTP rejects requests whose Host is not our loopback address (on
+// the desktop) and sets the security headers.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if !s.hostAllowed(r.Host) {
+	if s.auth == nil && !s.hostAllowed(r.Host) {
 		http.Error(w, "forbidden host", http.StatusForbidden)
 		return
 	}
+	if s.auth != nil && s.https(r) {
+		w.Header().Set("Strict-Transport-Security", "max-age=31536000")
+	}
+	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Content-Security-Policy",
@@ -187,32 +213,45 @@ func (s *Server) guard(h func(w http.ResponseWriter, r *http.Request) (any, erro
 // guardN is guard with a body limit; 0 means none (uploads are streamed).
 func (s *Server) guardN(limit int64, h func(w http.ResponseWriter, r *http.Request) (any, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		c, err := r.Cookie(cookieName)
-		if err != nil || subtle.ConstantTimeCompare([]byte(c.Value), []byte(s.token)) != 1 || r.Header.Get("X-Miao") != "1" {
-			writeJSON(w, http.StatusUnauthorized, apiError{Error: "登录已失效，请从 Miao Panel 窗口里重新打开页面。"})
-			return
-		}
-		if limit > 0 {
-			r.Body = http.MaxBytesReader(w, r.Body, limit)
-		}
-		v, err := h(w, r)
-		if _, ok := v.(streamed); ok && err == nil {
-			return // the handler wrote the response itself
-		}
-		if err != nil {
-			var ue *app.UserError
-			switch {
-			case errors.As(err, &ue):
-				writeJSON(w, http.StatusBadRequest, apiError{Error: ue.Msg, Code: ue.Code})
-			case errors.Is(err, context.DeadlineExceeded):
-				writeJSON(w, http.StatusGatewayTimeout, apiError{Error: "操作超时了，请稍后再试。"})
-			default:
-				writeJSON(w, http.StatusInternalServerError, apiError{Error: "出错了：" + err.Error()})
+		if r.Header.Get("X-Miao") != "1" || !s.loggedIn(r) {
+			if s.auth != nil {
+				writeJSON(w, http.StatusUnauthorized, apiError{Error: "请先登录", Code: "login"})
+			} else {
+				writeJSON(w, http.StatusUnauthorized, apiError{Error: "登录已失效，请从 Miao Panel 窗口里重新打开页面。"})
 			}
 			return
 		}
-		writeJSON(w, http.StatusOK, v)
+		s.respond(w, r, limit, h)
 	}
+}
+
+// respond runs a handler and writes its answer or error.
+func (s *Server) respond(w http.ResponseWriter, r *http.Request, limit int64, h func(w http.ResponseWriter, r *http.Request) (any, error)) {
+	if limit > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, limit)
+	}
+	v, err := h(w, r)
+	if _, ok := v.(streamed); ok && err == nil {
+		return // the handler wrote the response itself
+	}
+	if err != nil {
+		var ue *app.UserError
+		var ae *auth.Error
+		switch {
+		case errors.As(err, &ue):
+			writeJSON(w, http.StatusBadRequest, apiError{Error: ue.Msg, Code: ue.Code})
+		case errors.As(err, &ae) && ae.Code == "locked":
+			writeJSON(w, http.StatusTooManyRequests, apiError{Error: ae.Msg, Code: ae.Code})
+		case errors.As(err, &ae):
+			writeJSON(w, http.StatusBadRequest, apiError{Error: ae.Msg, Code: ae.Code})
+		case errors.Is(err, context.DeadlineExceeded):
+			writeJSON(w, http.StatusGatewayTimeout, apiError{Error: "操作超时了，请稍后再试。"})
+		default:
+			writeJSON(w, http.StatusInternalServerError, apiError{Error: "出错了：" + err.Error()})
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
 }
 
 func decode(r *http.Request, v any) error {
@@ -231,7 +270,7 @@ func pathID(r *http.Request) (int64, error) {
 }
 
 func (s *Server) info(_ http.ResponseWriter, _ *http.Request) (any, error) {
-	return map[string]any{"version": s.version, "secretsKind": s.app.Secrets.Kind()}, nil
+	return map[string]any{"version": s.version, "secretsKind": s.app.Secrets.Kind(), "mode": s.mode()}, nil
 }
 
 func (s *Server) listServers(_ http.ResponseWriter, _ *http.Request) (any, error) {
@@ -893,18 +932,17 @@ func (s *Server) downloadLink(_ http.ResponseWriter, r *http.Request) (any, erro
 }
 
 func (s *Server) downloadFile(w http.ResponseWriter, r *http.Request) {
-	c, err := r.Cookie(cookieName)
 	tok := r.PathValue("token")
 	s.dlMu.Lock()
 	d, ok := s.dl[tok]
 	delete(s.dl, tok)
 	s.dlMu.Unlock()
-	if err != nil || subtle.ConstantTimeCompare([]byte(c.Value), []byte(s.token)) != 1 || !ok || time.Now().After(d.expires) {
+	if !s.loggedIn(r) || !ok || time.Now().After(d.expires) {
 		http.Error(w, "下载链接已失效，请回到 Miao Panel 重新点下载。", http.StatusForbidden)
 		return
 	}
 	started := false
-	err = s.app.DownloadFile(r.Context(), d.server, d.path, func(name string, size int64) {
+	err := s.app.DownloadFile(r.Context(), d.server, d.path, func(name string, size int64) {
 		started = true
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Disposition", "attachment; filename*=UTF-8''"+url.PathEscape(name))

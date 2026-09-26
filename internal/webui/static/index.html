@@ -40,6 +40,8 @@
 
     <div class="sidebar-foot">
       <div class="side-item" :class="{active: tab === 'settings'}" @click="go('settings')"><ui-icon name="sliders"></ui-icon>设置</div>
+      <div class="side-user" v-if="me"><ui-icon name="lock"></ui-icon><span class="grow">{{ me.name }}</span>
+        <button class="plain small" @click="logout" title="退出登录">退出</button></div>
       <div class="spend" title="本月 AI 花费（估算）">本月 AI 花费 {{ spendText }}</div>
     </div>
   </aside>
@@ -443,10 +445,15 @@
           </div>
         </div>
 
+        <template v-if="info.mode === 'server'">
+          <div class="group-title">账号与安全</div>
+          <account-panel></account-panel>
+        </template>
+
         <div class="group-title">安全</div>
         <div class="group">
-          <div class="row"><span class="k">密码和 API Key</span><span class="v">{{ info.secretsKind === 'keychain' ? '保存在系统钥匙串（Windows 凭据管理器）' : '保存在数据目录的 secrets.json（仅当前用户可读）' }}</span></div>
-          <div class="row"><span class="k">访问范围</span><span class="v">只在本机打开（127.0.0.1），不会发给 AI</span></div>
+          <div class="row"><span class="k">密码和 API Key</span><span class="v">{{ info.secretsKind === 'keychain' ? '保存在系统钥匙串（Windows 凭据管理器）' : info.mode === 'server' ? '保存在服务器上数据目录的 secrets.json（只有运行 Miao Panel 的用户可读），不会发给 AI' : '保存在数据目录的 secrets.json（仅当前用户可读）' }}</span></div>
+          <div class="row"><span class="k">访问范围</span><span class="v">{{ info.mode === 'server' ? 'Web 版：登录后才能访问，可以开启两步验证' : '只在本机打开（127.0.0.1），不会发给 AI' }}</span></div>
           <div class="row"><span class="k">版本</span><span class="v">{{ info.version }}</span></div>
         </div>
       </div>
@@ -457,7 +464,7 @@
   <div class="sheet-mask" v-if="showAdd" @click.self="showAdd = false">
     <div class="sheet" role="dialog" aria-label="添加服务器">
       <h2>添加服务器</h2>
-      <p>密码只保存在你的电脑上，不会上传，也不会发给 AI。</p>
+      <p>{{ info.mode === 'server' ? '密码和私钥只保存在运行 Miao Panel 的服务器上，不会发给 AI。' : '密码只保存在你的电脑上，不会上传，也不会发给 AI。' }}</p>
       <div class="group" v-if="cloudList.length">
         <div class="row form"><span class="k">从腾讯云选择</span><span class="v"><select v-model="cloudPick" @change="pickCloud" aria-label="从腾讯云选择">
           <option value="">手动填写</option>
@@ -477,11 +484,16 @@
         <div class="row form"><span class="k">登录方式</span><span class="v"><span class="segmented">
           <button v-if="addForm.instanceId" :class="{on: addForm.authKind === 'tat'}" @click="addForm.authKind = 'tat'">自动化助手</button>
           <button :class="{on: addForm.authKind === 'password'}" @click="addForm.authKind = 'password'">密码</button>
-          <button :class="{on: addForm.authKind === 'key'}" @click="addForm.authKind = 'key'">密钥文件</button>
+          <button :class="{on: addForm.authKind === 'key'}" @click="addForm.authKind = 'key'">密钥</button>
         </span></span></div>
         <div class="row form" v-if="addForm.authKind === 'password'"><span class="k">密码</span><span class="v"><input type="password" v-model="addForm.password" autocomplete="off" aria-label="密码"></span></div>
         <template v-else-if="addForm.authKind === 'key'">
-          <div class="row form"><span class="k">密钥文件位置</span><span class="v"><input v-model="addForm.keyPath" placeholder="比如 C:\Users\你\.ssh\id_ed25519" aria-label="密钥文件位置"></span></div>
+          <div class="row form" v-if="info.mode !== 'server'"><span class="k">私钥</span><span class="v"><span class="segmented small">
+            <button :class="{on: addForm.keySource === 'text'}" @click="addForm.keySource = 'text'">粘贴内容</button>
+            <button :class="{on: addForm.keySource === 'path'}" @click="addForm.keySource = 'path'">文件位置</button></span></span></div>
+          <div class="row form" v-if="addForm.keySource === 'text' || info.mode === 'server'"><span class="k">私钥内容</span><span class="v"><textarea v-model="addForm.keyText" rows="5" class="key-text" spellcheck="false" autocomplete="off" aria-label="私钥内容"
+            placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;……&#10;-----END OPENSSH PRIVATE KEY-----"></textarea></span></div>
+          <div class="row form" v-else><span class="k">密钥文件位置</span><span class="v"><input v-model="addForm.keyPath" placeholder="比如 C:\Users\你\.ssh\id_ed25519" aria-label="密钥文件位置"></span></div>
           <div class="row form"><span class="k">密钥密码</span><span class="v"><input type="password" v-model="addForm.keyPassphrase" placeholder="没有就留空" autocomplete="off" aria-label="密钥密码"></span></div>
         </template>
       </div>

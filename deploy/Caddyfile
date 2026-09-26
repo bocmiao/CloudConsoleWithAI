@@ -1,0 +1,6 @@
+# Caddy 会自动申请和续签 HTTPS 证书。把域名解析到服务器后：caddy run --config Caddyfile
+panel.example.com {
+	reverse_proxy 127.0.0.1:18765 {
+		flush_interval -1  # AI 的回答、终端输出要实时显示
+	}
+}

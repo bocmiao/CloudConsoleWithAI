@@ -10,6 +10,8 @@ async function api(method, path, body) {
   const res = await fetch(path, opts);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
+    // The web edition's session ran out: back to the login page.
+    if (res.status === 401 && data.code === 'login' && window.MIAO_MODE === 'server' && !/^\/api\/auth\//.test(path)) location.reload();
     const err = new Error(data.error || `请求失败（${res.status}）`);
     err.code = data.code || '';
     throw err;
@@ -415,7 +417,7 @@ const ExecLog = {
               <span v-else class="secondary">{{ detail[e.id].noRollback }}</span>
             </div>
             <div class="kv" v-if="detail[e.id].rollbackFile"><span class="k">服务器上的回滚文件</span>
-              <span><code>{{ detail[e.id].rollbackFile }}</code><br><span class="small secondary">就算这台电脑上的 Miao Panel 不在了，也可以在服务器上用 root 执行 <code>sh {{ detail[e.id].rollbackFile }}</code> 恢复到修改前</span></span>
+              <span><code>{{ detail[e.id].rollbackFile }}</code><br><span class="small secondary">就算 Miao Panel 不在了，也可以在服务器上用 root 执行 <code>sh {{ detail[e.id].rollbackFile }}</code> 恢复到修改前</span></span>
             </div>
             <div class="kv" v-if="detail[e.id].backupDir"><span class="k">备份位置</span><span><code>{{ detail[e.id].backupDir }}</code></span></div>
             <div class="kv" v-if="detail[e.id].planId"><span class="k">来自清单</span><span>#{{ detail[e.id].planId }} 第 {{ detail[e.id].stepIdx + 1 }} 项</span></div>
@@ -1777,7 +1779,7 @@ const CertPage = {
             </tbody>
           </table>
         </div>
-        <p class="small tertiary" style="margin: -16px 4px 22px">从这台电脑直接访问每个网站得到的证书，和访问者看到的一致。</p>
+        <p class="small tertiary" style="margin: -16px 4px 22px">从 Miao Panel 所在的机器直接访问每个网站得到的证书，和访问者看到的一致。</p>
       </template>
       <div class="notice" v-for="n in data.notes || []" :key="n"><ui-icon name="info"></ui-icon>没能读取：{{ n }}</div>
     </template>
@@ -2926,6 +2928,169 @@ const FilePage = {
   </div>`,
 };
 
+// ---- Web edition: logging in, and the account ----
+
+// uaText names a browser from its UA string: 「Chrome · Windows」.
+function uaText(ua) {
+  const s = String(ua || '');
+  const b = /Edg\//.test(s) ? 'Edge' : /Firefox\//.test(s) ? 'Firefox' : /Chrome\//.test(s) ? 'Chrome' : /Safari\//.test(s) ? 'Safari' : '浏览器';
+  const o = /Windows/.test(s) ? 'Windows' : /iPhone|iPad/.test(s) ? 'iOS' : /Android/.test(s) ? 'Android' : /Mac OS X/.test(s) ? 'macOS' : /Linux/.test(s) ? 'Linux' : '';
+  return o ? `${b} · ${o}` : b;
+}
+
+// LoginApp is the whole page until someone logs in to the web edition
+// (or, the first time, makes the account with the setup code).
+const LoginApp = {
+  props: { state: Object },
+  setup(props) {
+    const setup = ref(!!props.state.setup);
+    const f = reactive({ code: '', name: setup.value ? 'admin' : '', password: '', password2: '', totp: '' });
+    const needCode = ref(false), busy = ref(false), error = ref('');
+    const codeEl = ref(null);
+    const local = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+    const insecure = !props.state.https && !local && location.protocol !== 'https:';
+    async function submit() {
+      error.value = '';
+      if (setup.value && f.password !== f.password2) { error.value = '两次输入的密码不一样'; return; }
+      busy.value = true;
+      try {
+        if (setup.value) await api('POST', '/api/auth/setup', { code: f.code, name: f.name, password: f.password });
+        else await api('POST', '/api/auth/login', { name: f.name, password: f.password, code: f.totp });
+        location.reload();
+        return;
+      } catch (e) {
+        if (e.code === 'need_code') {
+          needCode.value = true;
+          nextTick(() => codeEl.value && codeEl.value.focus());
+        } else {
+          error.value = e.message;
+          if (e.code === 'setup_done') setup.value = false;
+          if (e.code === 'bad_code') f.totp = '';
+        }
+      }
+      busy.value = false;
+    }
+    return { setup, f, needCode, busy, error, codeEl, insecure, submit };
+  },
+  template: `
+  <div class="login-page">
+    <form class="login-card" @submit.prevent="submit">
+      <div class="login-brand"><span class="app-mark"><ui-icon name="layers"></ui-icon></span>
+        <div><div class="login-name">Miao Panel</div><div class="small tertiary">喵面板 · Web 版</div></div></div>
+      <h1>{{ setup ? '创建管理员账号' : '登录' }}</h1>
+      <p class="small secondary" v-if="setup">第一次使用，需要服务器上的初始化码：运行 <code>docker logs miaopanel</code> 或 <code>journalctl -u miaopanel</code> 就能看到，也保存在数据目录的 <code>setup-code</code> 文件里。</p>
+      <div class="login-warn" v-if="insecure" role="alert"><ui-icon name="warn"></ui-icon><span>现在是 HTTP 连接，密码会明文传输。请改用 HTTPS 访问（部署说明里有设置方法）。</span></div>
+      <label class="field" v-if="setup"><span>初始化码</span><input v-model="f.code" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX" required></label>
+      <label class="field"><span>用户名</span><input v-model="f.name" autocomplete="username" autocapitalize="off" spellcheck="false" required :autofocus="!setup"></label>
+      <label class="field"><span>密码</span><input type="password" v-model="f.password" :autocomplete="setup ? 'new-password' : 'current-password'" required></label>
+      <label class="field" v-if="setup"><span>再输一次密码</span><input type="password" v-model="f.password2" autocomplete="new-password" required></label>
+      <p class="small tertiary" v-if="setup">至少 10 个字符。这个账号能管理你所有的服务器，请用一个别处没用过的密码，登录后建议开启两步验证。</p>
+      <label class="field" v-if="needCode"><span>验证码</span><input ref="codeEl" v-model="f.totp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="身份验证器 App 里的 6 位数字"></label>
+      <div class="login-error" v-if="error" role="alert"><ui-icon name="alert"></ui-icon><span>{{ error }}</span></div>
+      <button class="primary login-btn" type="submit" :disabled="busy">{{ busy ? '请稍候……' : setup ? '创建并登录' : '登录' }}</button>
+    </form>
+    <p class="small tertiary login-foot">Miao Panel {{ state.version }} · 开源项目（GPL-3.0）</p>
+  </div>`,
+};
+
+// AccountPanel is 设置 → 账号与安全 in the web edition.
+const AccountPanel = {
+  setup() {
+    const acct = ref(null);
+    const pw = reactive({ open: false, old: '', new1: '', new2: '', busy: false, error: '' });
+    const tf = reactive({ setup: null, code: '', password: '', off: false, busy: false, error: '' });
+    async function load() {
+      try { acct.value = await api('GET', '/api/account'); } catch (e) { notify(e.message, 'error'); }
+    }
+    onMounted(load);
+    async function savePassword() {
+      pw.error = '';
+      if (pw.new1 !== pw.new2) { pw.error = '两次输入的新密码不一样'; return; }
+      pw.busy = true;
+      try {
+        await api('PUT', '/api/account/password', { old: pw.old, new: pw.new1 });
+        Object.assign(pw, { open: false, old: '', new1: '', new2: '' });
+        notify('密码已修改，其他地方的登录都已退出');
+        load();
+      } catch (e) { pw.error = e.message; } finally { pw.busy = false; }
+    }
+    async function beginTOTP() {
+      tf.error = ''; tf.busy = true;
+      try { tf.setup = await api('POST', '/api/account/totp'); tf.code = ''; } catch (e) { notify(e.message, 'error'); } finally { tf.busy = false; }
+    }
+    async function enableTOTP() {
+      tf.error = ''; tf.busy = true;
+      try {
+        await api('PUT', '/api/account/totp', { code: tf.code });
+        tf.setup = null;
+        notify('两步验证已开启，以后登录要输入 App 里的验证码');
+        load();
+      } catch (e) { tf.error = e.message; } finally { tf.busy = false; }
+    }
+    async function disableTOTP() {
+      tf.error = ''; tf.busy = true;
+      try {
+        await api('POST', '/api/account/totp/off', { password: tf.password });
+        Object.assign(tf, { off: false, password: '' });
+        notify('两步验证已关闭');
+        load();
+      } catch (e) { tf.error = e.message; } finally { tf.busy = false; }
+    }
+    async function endSession(s) {
+      try { await api('DELETE', `/api/account/sessions/${s.key}`); notify('已让这个设备退出登录'); load(); } catch (e) { notify(e.message, 'error'); }
+    }
+    async function logout() {
+      try { await api('POST', '/api/auth/logout'); } catch { /* logged out anyway */ }
+      location.reload();
+    }
+    const when = t => t ? new Date(t).toLocaleString('zh-CN', { hour12: false }) : '';
+    return { acct, pw, tf, savePassword, beginTOTP, enableTOTP, disableTOTP, endSession, logout, when, uaText };
+  },
+  template: `
+  <div class="group" v-if="acct">
+    <div class="row"><span class="k">用户名</span><span class="v">{{ acct.name }}</span></div>
+    <div class="row"><span class="k">密码</span><span class="grow small tertiary">上次修改：{{ when(acct.changedAt) }}</span>
+      <button class="small" @click="pw.open = !pw.open">{{ pw.open ? '取消' : '修改密码' }}</button></div>
+    <template v-if="pw.open">
+      <div class="row form"><span class="k">原密码</span><span class="v"><input type="password" v-model="pw.old" autocomplete="current-password" aria-label="原密码"></span></div>
+      <div class="row form"><span class="k">新密码</span><span class="v"><input type="password" v-model="pw.new1" autocomplete="new-password" placeholder="至少 10 个字符" aria-label="新密码"></span></div>
+      <div class="row form"><span class="k">再输一次</span><span class="v"><input type="password" v-model="pw.new2" autocomplete="new-password" aria-label="再输一次新密码"></span></div>
+      <div class="row"><span class="grow small st-crit">{{ pw.error }}</span><button class="primary small" @click="savePassword" :disabled="pw.busy || !pw.old || !pw.new1">保存新密码</button></div>
+    </template>
+    <div class="row"><span class="k">两步验证</span>
+      <span class="grow small" :class="acct.totp ? 'st-ok' : 'st-warn'">{{ acct.totp ? '已开启：登录时还要输入手机 App 里的验证码' : '未开启。建议开启：就算密码泄露，别人也登录不了' }}</span>
+      <button class="small" v-if="!acct.totp && !tf.setup" @click="beginTOTP" :disabled="tf.busy">开启两步验证</button>
+      <button class="small" v-if="acct.totp && !tf.off" @click="tf.off = true">关闭</button></div>
+    <div class="row totp-setup" v-if="tf.setup">
+      <img :src="tf.setup.qr" alt="两步验证二维码" width="168" height="168">
+      <div class="grow">
+        <p class="small">1. 用身份验证器 App（如 Google Authenticator、Microsoft Authenticator、腾讯身份验证器）扫描二维码；扫不了就手动输入密钥：</p>
+        <p class="mono totp-secret">{{ tf.setup.secret }}</p>
+        <p class="small">2. 输入 App 显示的 6 位验证码：</p>
+        <div class="totp-confirm"><input v-model="tf.code" inputmode="numeric" maxlength="6" placeholder="123456" aria-label="验证码" @keydown.enter="enableTOTP">
+          <button class="primary small" @click="enableTOTP" :disabled="tf.busy || tf.code.length !== 6">确认开启</button>
+          <button class="plain small" @click="tf.setup = null">取消</button></div>
+        <p class="small st-crit" v-if="tf.error">{{ tf.error }}</p>
+      </div>
+    </div>
+    <div class="row" v-if="tf.off"><span class="k">输入密码关闭</span>
+      <span class="v"><input type="password" v-model="tf.password" autocomplete="current-password" aria-label="密码" @keydown.enter="disableTOTP"></span>
+      <button class="small destructive" @click="disableTOTP" :disabled="tf.busy || !tf.password">关闭两步验证</button>
+      <button class="plain small" @click="tf.off = false; tf.error = ''">取消</button></div>
+    <div class="row small st-crit" v-if="tf.off && tf.error">{{ tf.error }}</div>
+  </div>
+  <div class="group-title" v-if="acct">登录的设备</div>
+  <div class="group" v-if="acct">
+    <div class="row" v-for="s in acct.sessions" :key="s.key">
+      <ui-icon name="server"></ui-icon>
+      <div class="grow"><div>{{ uaText(s.ua) }} <span class="tag on" v-if="s.current">当前</span></div>
+        <div class="small tertiary">{{ s.ip }} · 最近使用 {{ when(s.seenAt) }} · 登录于 {{ when(s.createdAt) }}</div></div>
+      <button class="small" v-if="!s.current" @click="endSession(s)">退出</button>
+    </div>
+    <div class="row"><span class="grow small tertiary">3 天没有使用，或者登录满 30 天，会自动退出。</span><button class="small destructive" @click="logout">退出登录</button></div>
+  </div>`,
+};
+
 const app = createApp({
   setup() {
     const tab = ref('servers');
@@ -3035,6 +3200,12 @@ const app = createApp({
     }
     const seen = reactive({}); // pages opened at least once stay mounted
     const termRequest = ref(null);
+    // The web edition's logged-in account.
+    const me = window.MIAO_USER;
+    async function logout() {
+      try { await api('POST', '/api/auth/logout'); } catch { /* logged out anyway */ }
+      location.reload();
+    }
     function openTerminal(serverId) { termRequest.value = { serverId, at: Date.now() }; go('terminal'); }
     const filesRequest = ref(null);
     function openFiles(serverId, path) { filesRequest.value = { serverId, path, at: Date.now() }; go('files'); }
@@ -3054,7 +3225,8 @@ const app = createApp({
     provide('loadSpend', () => loadSpend().catch(() => {}));
 
     function openAdd() {
-      Object.assign(addForm, { name: '', host: '', port: 22, username: 'root', authKind: 'password', password: '', keyPath: '', keyPassphrase: '', instanceId: '', region: '' });
+      Object.assign(addForm, { name: '', host: '', port: 22, username: 'root', authKind: 'password', password: '', keyPath: '', keyText: '',
+        keySource: info.value.mode === 'server' ? 'text' : 'path', keyPassphrase: '', instanceId: '', region: '' });
       showAdd.value = true;
       cloudPick.value = '';
       if (tc.configured) api('GET', '/api/tencent/servers').then(r => { cloudList.value = (r.servers || []).filter(s => s.publicIPs && s.publicIPs.length); }).catch(() => {});
@@ -3072,7 +3244,9 @@ const app = createApp({
     const daysTo = t => t ? Math.floor((new Date(t) - Date.now()) / 86400000) : null;
     async function addServer() {
       await guarded('正在添加并测试连接……', async () => {
-        const sv = await api('POST', '/api/servers', { ...addForm });
+        const body = { ...addForm };
+        if (body.keySource === 'text' || info.value.mode === 'server') body.keyPath = ''; else body.keyText = '';
+        const sv = await api('POST', '/api/servers', body);
         showAdd.value = false;
         await loadServers();
         await select(sv.id);
@@ -3393,7 +3567,7 @@ const app = createApp({
       spendText, plans, audit, logView, logFocus, loadAudit, openLog, showAdd, addForm, messages, draft, chatBusy, msgBox, suggestions,
       select, openAdd, addServer, testConn, discover, removeServer, askAbout, send, onEnter, newChat, applyPreset, saveAI, testAI,
       convs, showConvs, conversationId, openConv, deleteConv, relTime,
-      op, saveOnePanel, testOnePanel, tc, saveTencent, testTencent, clearTencent, freeCmd, setFree, seen, statsView, statsSeen, termRequest, openTerminal, filesRequest, openFiles, unread,
+      op, saveOnePanel, testOnePanel, tc, saveTencent, testTencent, clearTencent, freeCmd, setFree, seen, statsView, statsSeen, termRequest, openTerminal, filesRequest, openFiles, unread, me, logout,
       cloud, cloudList, cloudPick, pickCloud, askAI, daysTo, fmtBytes,
       memPct, rootDisk, envSub, dockerText, money, mb, meterClass, levelClass, levelIcon, levelName, riskName, adapterName,
       fmtTime, serverName, parseSteps, toolName, toolDetail, actorName, actionName, md, live, liveStatus, thinkTail, stopAnswer,
@@ -3411,10 +3585,28 @@ app.component('rank-list', RankList);
 app.component('terminal-page', TerminalPage);
 app.component('cert-page', CertPage);
 app.component('file-page', FilePage);
-app.component('ui-icon', {
+const UiIcon = {
   props: { name: { type: String, required: true } },
   setup(props) { return { d: computed(() => ICONS[props.name] || '') }; },
   template: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path :d="d"></path></svg>',
-});
+};
+app.component('ui-icon', UiIcon);
+app.component('account-panel', AccountPanel);
 
-app.mount('#app');
+// The web edition shows the login page until someone is logged in; the
+// desktop goes straight in.
+(async () => {
+  let state = { mode: 'desktop' };
+  try { state = await api('GET', '/api/auth/state'); } catch { /* an older desktop build */ }
+  window.MIAO_MODE = state.mode;
+  window.MIAO_USER = state.user || null;
+  if (state.mode === 'server' && !state.user) {
+    const el = document.getElementById('app');
+    el.className = '';
+    const login = createApp(LoginApp, { state });
+    login.component('ui-icon', UiIcon);
+    login.mount(el);
+    return;
+  }
+  app.mount('#app');
+})();

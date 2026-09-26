@@ -5,6 +5,7 @@ package app
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 
 	"github.com/bocmiao/CloudConsoleWithAI/internal/actions"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/profile"
@@ -107,6 +110,7 @@ type AddServerRequest struct {
 	AuthKind      string `json:"authKind"` // password | key | tat
 	Password      string `json:"password"`
 	KeyPath       string `json:"keyPath"`
+	KeyText       string `json:"keyText"` // the private key pasted in, instead of a file
 	KeyPassphrase string `json:"keyPassphrase"`
 	// For tat: the Tencent Cloud instance, reached through its automation
 	// agent instead of SSH.
@@ -120,6 +124,26 @@ var (
 )
 
 var hostRe = regexp.MustCompile(`^[A-Za-z0-9.:\-\[\]]+$`)
+
+// checkKey says early, in words, when a pasted private key cannot be used.
+func checkKey(text, passphrase string) error {
+	var err error
+	if passphrase != "" {
+		_, err = ssh.ParsePrivateKeyWithPassphrase([]byte(text+"\n"), []byte(passphrase))
+	} else {
+		_, err = ssh.ParsePrivateKey([]byte(text + "\n"))
+	}
+	var missing *ssh.PassphraseMissingError
+	switch {
+	case err == nil:
+		return nil
+	case errors.As(err, &missing):
+		return userErr("这个私钥有密码保护，请填写密钥密码")
+	case errors.Is(err, x509.IncorrectPasswordError), strings.Contains(err.Error(), "decryption password incorrect"):
+		return userErr("密钥密码不对")
+	}
+	return userErr("私钥格式不对：请粘贴完整的私钥，包括 -----BEGIN … PRIVATE KEY----- 和 -----END … PRIVATE KEY----- 两行（不是 .pub 公钥）")
+}
 
 func secretKey(id int64, what string) string {
 	return "server/" + strconv.FormatInt(id, 10) + "/" + what
@@ -151,8 +175,15 @@ func (a *App) AddServer(req AddServerRequest) (store.Server, error) {
 			return store.Server{}, userErr("请填写登录密码")
 		}
 	case "key":
-		if strings.TrimSpace(req.KeyPath) == "" {
-			return store.Server{}, userErr("请填写密钥文件的位置")
+		req.KeyText = strings.TrimSpace(req.KeyText)
+		switch {
+		case req.KeyText != "":
+			req.KeyPath = ""
+			if err := checkKey(req.KeyText, req.KeyPassphrase); err != nil {
+				return store.Server{}, err
+			}
+		case strings.TrimSpace(req.KeyPath) == "":
+			return store.Server{}, userErr("请粘贴私钥，或者填写密钥文件的位置")
 		}
 	case "tat":
 		if !instanceRe.MatchString(req.InstanceID) || !regionRe.MatchString(req.Region) {
@@ -174,8 +205,13 @@ func (a *App) AddServer(req AddServerRequest) (store.Server, error) {
 	var secErr error
 	if req.AuthKind == "password" {
 		secErr = a.Secrets.Set(secretKey(sv.ID, "password"), req.Password)
-	} else if req.KeyPassphrase != "" {
-		secErr = a.Secrets.Set(secretKey(sv.ID, "passphrase"), req.KeyPassphrase)
+	} else {
+		if req.KeyText != "" {
+			secErr = a.Secrets.Set(secretKey(sv.ID, "key"), req.KeyText+"\n")
+		}
+		if secErr == nil && req.KeyPassphrase != "" {
+			secErr = a.Secrets.Set(secretKey(sv.ID, "passphrase"), req.KeyPassphrase)
+		}
 	}
 	if secErr != nil {
 		_ = a.Store.DeleteServer(sv.ID)
@@ -193,6 +229,7 @@ func (a *App) DeleteServer(id int64) error {
 	}
 	_ = a.Secrets.Delete(secretKey(id, "password"))
 	_ = a.Secrets.Delete(secretKey(id, "passphrase"))
+	_ = a.Secrets.Delete(secretKey(id, "key"))
 	if err := a.Store.DeleteServer(id); err != nil {
 		return err
 	}
@@ -204,6 +241,11 @@ func (a *App) target(sv store.Server) (sshx.Target, error) {
 	t := sshx.Target{Host: sv.Host, Port: sv.Port, User: sv.Username, KnownHostKey: sv.HostKey}
 	if sv.AuthKind == "key" {
 		t.KeyPath = sv.KeyPath
+		if k, err := a.Secrets.Get(secretKey(sv.ID, "key")); err == nil && k != "" {
+			t.KeyPEM = []byte(k)
+		} else if sv.KeyPath == "" {
+			return t, userErr("找不到这台服务器保存的私钥，请删除后重新添加")
+		}
 		if p, err := a.Secrets.Get(secretKey(sv.ID, "passphrase")); err == nil {
 			t.KeyPassphrase = p
 		}

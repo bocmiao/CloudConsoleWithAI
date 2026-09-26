@@ -1,6 +1,6 @@
 # Miao Panel（喵面板）
 
-一个**开源、通用**的 AI 服务器与云管理助手，支持 1Panel、宝塔和纯 Linux。任何 Linux 服务器都能用：装了 1Panel、宝塔，或者什么面板都没装；云产品先支持腾讯云（EdgeOne、DNSPod、轻量、CVM）。先做成 Windows 本地 exe，之后做 Web 版。
+一个**开源、通用**的 AI 服务器与云管理助手，支持 1Panel、宝塔和纯 Linux。任何 Linux 服务器都能用：装了 1Panel、宝塔，或者什么面板都没装；云产品先支持腾讯云（EdgeOne、DNSPod、轻量、CVM）。有 Windows 桌面版（双击运行），也有能部署到自己服务器上、用浏览器从任何地方登录的 **Web 版**，两者是同一套代码、同样的功能。
 
 - **一句话建站**：「把 blog.example.com 上线到我的服务器，走 EO，开 HTTPS」→ 自动完成 EO 站点、加速域名、DNSPod 解析、防火墙、证书和面板建站，并验证结果。
 - **访问统计**：「今天下午流量为什么涨了？」→ 基于 EO 数据分析自动归因（Top IP / URL / UA / 地区）。
@@ -64,6 +64,22 @@
 密码和 API Key 保存在 Windows 凭据管理器里。
 
 少数没有 WebView2 运行库的旧版 Windows 10 会提示安装，并临时改用浏览器打开。想用浏览器的话，可以带参数运行：`MiaoPanel.exe --browser`。macOS 和 Linux 版目前也是在浏览器里打开。
+
+## 部署到自己的服务器（Web 版）
+
+```bash
+git clone https://github.com/bocmiao/CloudConsoleWithAI.git miaopanel && cd miaopanel
+docker compose up -d --build
+docker logs miaopanel   # 里面有创建管理员账号用的「初始化码」
+```
+
+再用 1Panel、宝塔、Nginx 或 Caddy 给它配一个 HTTPS 反向代理（代理到 `http://127.0.0.1:18765`），用浏览器打开你的域名，输入初始化码创建管理员账号。
+也可以不用 Docker，下载 Linux 版程序用 systemd 运行。完整步骤见 **[docs/DEPLOY.md](docs/DEPLOY.md)**。
+
+- 功能和桌面版一样；放在服务器上 7×24 运行，日报、提醒、自动封禁不用等你开电脑；
+- 登录：密码（bcrypt 保存）＋可选的两步验证（身份验证器 App），输错多次自动锁定一段时间，能查看和退出登录的设备；
+- 第一个账号必须用服务器日志里的一次性初始化码创建，别人先打开页面也抢不走；忘记密码在服务器上运行 `miaopanel reset-password`；
+- 密钥保存在服务器的数据目录（只有运行 Miao Panel 的用户可读），不会发给 AI；用密钥登录服务器时直接粘贴私钥内容。
 
 ## 从源码构建
 

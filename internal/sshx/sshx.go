@@ -30,6 +30,7 @@ type Target struct {
 	User          string
 	Password      string // for password or keyboard-interactive login
 	KeyPath       string // private key file; takes precedence over Password
+	KeyPEM        []byte // or the private key itself (pasted in)
 	KeyPassphrase string
 	// KnownHostKey is the SHA256 fingerprint recorded earlier; empty on
 	// first connect, in which case the presented key is trusted and returned.
@@ -96,10 +97,13 @@ func Dial(ctx context.Context, t Target) (*Client, error) {
 }
 
 func authMethods(t Target) ([]ssh.AuthMethod, error) {
-	if t.KeyPath != "" {
-		pem, err := os.ReadFile(t.KeyPath)
-		if err != nil {
-			return nil, fmt.Errorf("read key file: %w", err)
+	if t.KeyPath != "" || len(t.KeyPEM) > 0 {
+		pem := t.KeyPEM
+		var err error
+		if len(pem) == 0 {
+			if pem, err = os.ReadFile(t.KeyPath); err != nil {
+				return nil, fmt.Errorf("read key file: %w", err)
+			}
 		}
 		var signer ssh.Signer
 		if t.KeyPassphrase != "" {

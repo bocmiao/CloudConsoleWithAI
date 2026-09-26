@@ -1,6 +1,7 @@
 // Command miaopanel runs Miao Panel (喵面板) on the local machine: it
 // serves the UI on 127.0.0.1 and shows it in its own window (Windows, via
-// WebView2) or in the default browser.
+// WebView2) or in the default browser. "miaopanel serve" runs the web
+// edition on a server instead (see serve.go).
 package main
 
 import (
@@ -19,6 +20,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"time"
+	_ "time/tzdata" // daily reports need the local zone, also in minimal containers
 
 	"github.com/bocmiao/CloudConsoleWithAI/internal/api"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/app"
@@ -34,6 +36,26 @@ var version = "dev"
 const preferredPort = 18765
 
 func main() {
+	if len(os.Args) > 1 {
+		var err error
+		switch os.Args[1] {
+		case "serve":
+			err = serveMain(os.Args[2:])
+		case "reset-password":
+			err = resetPasswordMain(os.Args[2:])
+		case "version":
+			fmt.Println(version)
+			return
+		default:
+			goto desktop
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "出错了：", err)
+			os.Exit(1)
+		}
+		return
+	}
+desktop:
 	port := flag.Int("port", preferredPort, "local port for the web UI (falls back to a random free port)")
 	dataDir := flag.String("data", "", "data directory (default: the user config dir)")
 	noBrowser := flag.Bool("no-browser", false, "in browser mode, do not open the browser automatically")
