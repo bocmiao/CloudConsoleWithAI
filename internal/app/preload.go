@@ -23,15 +23,25 @@ func (a *App) KeepWarm(ctx context.Context, interval time.Duration) {
 }
 
 func (a *App) warm(ctx context.Context) {
+	var pending []chan struct{}
 	if sources, err := a.VisitSources(); err == nil {
 		for _, s := range sources {
 			if g, err := a.gatherer(s.Key); err == nil {
-				a.visits.warm(ctx, a, visitsKey(s.Key), visitsTTL, g)
+				if ch := a.visits.warm(ctx, a, visitsKey(s.Key), visitsTTL, g); ch != nil {
+					pending = append(pending, ch)
+				}
 			}
 		}
 	}
-	// With fresh statistics, the automatic block rule (when turned on),
-	// then alerts and the daily report.
+	// With fresh statistics (the refreshes above finished), the automatic
+	// block rule (when turned on), then alerts and the daily report.
+	for _, ch := range pending {
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return
+		}
+	}
 	a.RunAutoBlock(ctx)
 	defer a.checkNotices(ctx) // after the certificates below
 	a.certs.mu.Lock()

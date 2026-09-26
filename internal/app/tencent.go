@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bocmiao/CloudConsoleWithAI/internal/actions"
@@ -122,9 +123,16 @@ func (a *App) cloudRead(ctx context.Context, title string, run func(c *tencent.C
 	e := a.startExec(store.ExecLog{ServerName: cloudServer.Name, Adapter: cloudServer.Adapter, Origin: originOf(ctx),
 		Kind: store.ExecRead, Title: title, Via: "腾讯云接口"})
 	var cmds []string
-	c.Trace = func(service, action string, body []byte) { cmds = append(cmds, service+" "+action+" "+string(body)) }
+	var mu sync.Mutex // some reads run several calls at once
+	c.Trace = func(service, action string, body []byte) {
+		mu.Lock()
+		cmds = append(cmds, service+" "+action+" "+string(body))
+		mu.Unlock()
+	}
 	out, err := run(c)
+	mu.Lock()
 	e.Commands = strings.Join(append([]string{"# 调用腾讯云 API 3.0（只读查询，请求带 TC3 签名，密钥不记录）"}, cmds...), "\n")
+	mu.Unlock()
 	if err != nil {
 		a.finishExec(&e, actions.StatusFailed, err.Error())
 		return "", err

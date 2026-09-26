@@ -132,15 +132,20 @@ func (a *App) checkCrawlers(ctx context.Context, ips map[string]string) map[stri
 		if !ok {
 			continue
 		}
+		// out is also written by the checks running below.
 		if in, _ := visits.PublishedCrawler(name, ip); in {
+			mu.Lock()
 			out[ip] = crawlerCheck{name: name}
+			mu.Unlock()
 			continue
 		}
 		a.ipf.mu.Lock()
 		f, cached := a.ipf.crawler[ip]
 		a.ipf.mu.Unlock()
 		if cached && time.Since(f.at) < factTTL {
+			mu.Lock()
 			out[ip] = f.v
+			mu.Unlock()
 			continue
 		}
 		wg.Add(1)

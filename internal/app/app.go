@@ -231,6 +231,8 @@ func (a *App) DeleteServer(id int64) error {
 	_ = a.Secrets.Delete(secretKey(id, "password"))
 	_ = a.Secrets.Delete(secretKey(id, "passphrase"))
 	_ = a.Secrets.Delete(secretKey(id, "key"))
+	_ = a.Secrets.Delete(secretKey(id, "1panel_key"))
+	_ = a.Store.DeleteSetting(onePanelKey(id))
 	if err := a.Store.DeleteServer(id); err != nil {
 		return err
 	}

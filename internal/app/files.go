@@ -75,6 +75,7 @@ type fileConn struct {
 	user   string
 	home   string
 	used   time.Time
+	busy   int // operations running on it; the idle reaper leaves it alone
 	users  map[uint32]string
 	groups map[uint32]string
 }
@@ -95,6 +96,7 @@ func (a *App) fileConnFor(ctx context.Context, id int64) (*fileConn, store.Serve
 	a.fpool.mu.Lock()
 	if fc := a.fpool.conns[id]; fc != nil {
 		fc.used = time.Now()
+		fc.busy++
 		a.fpool.mu.Unlock()
 		sv, err := a.Store.GetServer(id)
 		return fc, sv, err
@@ -126,10 +128,12 @@ func (a *App) fileConnFor(ctx context.Context, id int64) (*fileConn, store.Serve
 		a.fpool.conns = map[int64]*fileConn{}
 	}
 	if old := a.fpool.conns[id]; old != nil { // opened meanwhile
+		old.busy++
 		a.fpool.mu.Unlock()
 		fc.close()
 		return old, sv, nil
 	}
+	fc.busy = 1
 	a.fpool.conns[id] = fc
 	a.fpool.mu.Unlock()
 	a.fpool.once.Do(func() { go a.closeIdleFiles() })
@@ -140,7 +144,7 @@ func (a *App) closeIdleFiles() {
 	for range time.Tick(time.Minute) {
 		a.fpool.mu.Lock()
 		for id, fc := range a.fpool.conns {
-			if time.Since(fc.used) > fileIdle {
+			if fc.busy == 0 && time.Since(fc.used) > fileIdle {
 				fc.close()
 				delete(a.fpool.conns, id)
 			}
@@ -159,20 +163,46 @@ func (a *App) dropFileConn(id int64, fc *fileConn) {
 }
 
 // withFiles runs op on the server's file connection, reconnecting once
-// when the old connection turns out to be gone.
-func (a *App) withFiles(ctx context.Context, id int64, op func(*fileConn, store.Server) error) error {
+// when the old connection turns out to be gone. An op that streams passes
+// untouched, which says whether nothing was read or written yet: once
+// something was, running it again would save or send only part.
+func (a *App) withFiles(ctx context.Context, id int64, op func(*fileConn, store.Server) error, untouched ...func() bool) error {
 	for try := 0; ; try++ {
 		fc, sv, err := a.fileConnFor(ctx, id)
 		if err != nil {
 			return err
 		}
 		err = op(fc, sv)
-		if err != nil && try == 0 && lostConn(err) {
+		a.fpool.mu.Lock()
+		fc.busy--
+		fc.used = time.Now()
+		a.fpool.mu.Unlock()
+		again := try == 0 && err != nil && lostConn(err)
+		for _, u := range untouched {
+			again = again && u()
+		}
+		if again {
 			a.dropFileConn(id, fc)
 			continue
 		}
+		if err != nil && lostConn(err) && try == 0 {
+			a.dropFileConn(id, fc)
+			return userErr("和服务器的连接断了，传了一半，请重新操作")
+		}
 		return err
 	}
+}
+
+// countingReader tells withFiles whether an upload was read from.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
 }
 
 func lostConn(err error) bool {
@@ -534,6 +564,7 @@ func (a *App) UploadFile(ctx context.Context, id int64, dir, name string, r io.R
 	}
 	p := path.Join(dir, name)
 	var server string
+	cr := &countingReader{r: r}
 	err = a.withFiles(ctx, id, func(fc *fileConn, sv store.Server) error {
 		server = sv.Name
 		mode := os.FileMode(0o644)
@@ -543,7 +574,7 @@ func (a *App) UploadFile(ctx context.Context, id int64, dir, name string, r io.R
 			}
 			mode = st.Mode().Perm()
 		}
-		if err := fc.writeAtomic(p, r, mode); err != nil {
+		if err := fc.writeAtomic(p, cr, mode); err != nil {
 			return err
 		}
 		st, err := fc.sftp.Lstat(p)
@@ -552,7 +583,7 @@ func (a *App) UploadFile(ctx context.Context, id int64, dir, name string, r io.R
 		}
 		out = fc.entry(dir, st)
 		return nil
-	})
+	}, func() bool { return cr.n == 0 })
 	if err != nil {
 		return out, err
 	}
@@ -567,6 +598,9 @@ func (a *App) DownloadFile(ctx context.Context, id int64, p string, start func(n
 	if err != nil {
 		return err
 	}
+	// Once the answer has started, a lost connection cannot be retried.
+	started := false
+	begin := func(name string, size int64) { started = true; start(name, size) }
 	return a.withFiles(ctx, id, func(fc *fileConn, _ store.Server) error {
 		st, err := fc.sftp.Stat(p)
 		if err != nil {
@@ -576,7 +610,7 @@ func (a *App) DownloadFile(ctx context.Context, id int64, p string, start func(n
 			if p == "/" {
 				return userErr("不能下载整个根目录")
 			}
-			start(path.Base(p)+".tar.gz", -1)
+			begin(path.Base(p)+".tar.gz", -1)
 			return fc.ssh.Stream(ctx, "tar -czf - -C "+shq(path.Dir(p))+" -- "+shq(path.Base(p)), w)
 		}
 		if !st.Mode().IsRegular() {
@@ -587,10 +621,10 @@ func (a *App) DownloadFile(ctx context.Context, id int64, p string, start func(n
 			return friendlyFileErr(err, p)
 		}
 		defer f.Close()
-		start(path.Base(p), st.Size())
+		begin(path.Base(p), st.Size())
 		_, err = io.Copy(w, f)
 		return err
-	})
+	}, func() bool { return !started })
 }
 
 // FileOp is a change the page asks for.

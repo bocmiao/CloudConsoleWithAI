@@ -798,10 +798,19 @@ func (a *App) COSRename(ctx context.Context, bucket, region, from, to string) er
 			return fmt.Errorf("复制 %s 失败（已经复制的文件在新文件夹里，原来的都还在）：%w", k, err)
 		}
 	}
-	if _, err := c.DeleteObjects(ctx, bucket, region, keys); err != nil {
+	bad, err := c.DeleteObjects(ctx, bucket, region, keys)
+	if err != nil {
 		return fmt.Errorf("已经复制到 %s，但删除原来的文件失败：%w", to, err)
 	}
 	_ = a.Store.Audit("user", "cos.rename", bucket+"/"+from, fmt.Sprintf("%s，共 %d 个文件", to, len(keys)))
+	if len(bad) > 0 {
+		var left []string
+		for k := range bad {
+			left = append(left, k)
+		}
+		sort.Strings(left)
+		return userErr("已经复制到 %s，但原来的文件夹里有 %d 个文件没删掉（比如 %s），两边都有", to, len(left), left[0])
+	}
 	return nil
 }
 

@@ -87,13 +87,16 @@ func (s *snapshots[T]) latest(ctx context.Context, a *App, key string, ttl time.
 }
 
 // warm starts a refresh if the result is older than ttl, without waiting.
-func (s *snapshots[T]) warm(ctx context.Context, a *App, key string, ttl time.Duration, gather func(context.Context) (T, error)) {
+// warm starts a refresh when the copy is older than ttl; the channel
+// closes when the refresh running (if any) ends.
+func (s *snapshots[T]) warm(ctx context.Context, a *App, key string, ttl time.Duration, gather func(context.Context) (T, error)) chan struct{} {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e := s.entry(a, key)
 	if e.running == nil && (e.at.IsZero() || time.Since(e.at) >= ttl) {
 		s.refreshLocked(ctx, a, key, e, gather)
 	}
+	return e.running
 }
 
 func (s *snapshots[T]) refreshLocked(ctx context.Context, a *App, key string, e *snapEntry[T], gather func(context.Context) (T, error)) chan struct{} {

@@ -234,8 +234,18 @@ func (a *App) planServer(id int64) (store.Server, error) {
 // discoverWith refreshes the saved profile over an open connection.
 func (a *App) discoverWith(ctx context.Context, sv store.Server, c sshx.Conn, title string) (*profile.Profile, error) {
 	res, err := a.runDiscover(ctx, sv, c, nil, title)
-	if err != nil || strings.TrimSpace(res.Stdout) == "" {
-		return nil, fmt.Errorf("识别失败：%v", err)
+	if err != nil {
+		return nil, fmt.Errorf("识别失败：%w", err)
+	}
+	if strings.TrimSpace(res.Stdout) == "" {
+		why := strings.TrimSpace(res.Stderr)
+		if i := strings.LastIndex(why, "\n"); i >= 0 {
+			why = why[i+1:]
+		}
+		if why == "" {
+			why = "识别脚本没有输出"
+		}
+		return nil, fmt.Errorf("识别失败：%s", why)
 	}
 	prof := profile.Parse(res.Stdout)
 	if err := a.Store.SaveProfile(sv.ID, res.Stdout, prof.Adapter); err != nil {
@@ -289,7 +299,23 @@ func (a *App) executePlan(id int64, selected []int, who string) (PlanView, error
 		}
 	}
 	if !a.locks.try(sv.ID) {
+		if sv.ID == 0 {
+			return v, userErr("正在执行另一份腾讯云清单，请等它完成")
+		}
 		return v, userErr("这台服务器上正在执行其他清单，请等它完成")
+	}
+	// Read again now that it is ours: a click a moment earlier may have
+	// just run the same steps.
+	if cur, err := a.Plan(id); err != nil || cur.Status == core.PlanRunning {
+		a.locks.release(sv.ID)
+		return v, userErr("这个清单正在执行中")
+	} else {
+		for i := range selected {
+			if cur.StepList[selected[i]].Status == actions.StatusDone {
+				a.locks.release(sv.ID)
+				return cur, userErr("第 %d 步已经执行过了", selected[i]+1)
+			}
+		}
 	}
 	for i := range v.StepList {
 		if seen[i] {

@@ -255,6 +255,9 @@ func (a *App) reviewFree(ctx context.Context, fc *core.FreeCheck) (verdict, erro
 		if err != nil {
 			return verdict{}, err
 		}
+		if err := a.checkBudget(settings); err != nil {
+			return verdict{}, err
+		}
 		cfg.MaxTokens = 2000
 		sess, err := ai.NewSession(cfg)
 		if err != nil {

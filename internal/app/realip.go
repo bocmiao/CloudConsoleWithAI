@@ -133,7 +133,9 @@ func (a *App) ProposeRealIP(ctx context.Context, serverID int64) (PlanView, erro
 // realIPSince is when the server's Nginx started taking visitors' IPs
 // from EdgeOne, or "" if it does not.
 func (a *App) realIPSince(serverID int64) string {
-	plans, err := a.Store.ListPlans(500)
+	// Only plans with the step: automatic blocks make many plans, which
+	// would push it out of a list of the latest ones.
+	plans, err := a.Store.PlansWithCapability(serverID, "nginx.realip")
 	if err != nil {
 		return ""
 	}

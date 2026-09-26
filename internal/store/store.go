@@ -373,6 +373,26 @@ func (s *Store) ListPlans(limit int) ([]Plan, error) {
 	return out, rows.Err()
 }
 
+// PlansWithCapability returns a server's plans that have a step of this
+// capability, newest first, however many other plans came after them.
+func (s *Store) PlansWithCapability(serverID int64, capability string) ([]Plan, error) {
+	rows, err := s.db.Query(`SELECT `+planCols+` FROM plans WHERE server_id = ? AND steps LIKE ? ORDER BY id DESC LIMIT 50`,
+		serverID, `%"`+capability+`"%`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Plan{}
+	for rows.Next() {
+		p, err := scanPlan(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 // GetPlan returns one plan.
 func (s *Store) GetPlan(id int64) (Plan, error) {
 	p, err := scanPlan(s.db.QueryRow(`SELECT `+planCols+` FROM plans WHERE id = ?`, id))
@@ -693,7 +713,9 @@ func (s *Store) AddUsage(u Usage) error {
 
 // MonthCost sums AI spending for the current calendar month (UTC), per currency.
 func (s *Store) MonthCost() (map[string]float64, error) {
-	start := time.Now().UTC().Format("2006-01") + "-01"
+	// The month as the user sees it (local time), in the UTC the table uses.
+	t := time.Now()
+	start := time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, t.Location()).UTC().Format(time.RFC3339)
 	rows, err := s.db.Query(`SELECT currency, SUM(cost) FROM ai_usage WHERE at >= ? GROUP BY currency`, start)
 	if err != nil {
 		return nil, err
@@ -725,5 +747,11 @@ func (s *Store) Setting(key string) (string, error) {
 func (s *Store) SetSetting(key, value string) error {
 	_, err := s.db.Exec(`INSERT INTO settings (key, value) VALUES (?, ?)
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value)
+	return err
+}
+
+// DeleteSetting removes a setting.
+func (s *Store) DeleteSetting(key string) error {
+	_, err := s.db.Exec(`DELETE FROM settings WHERE key = ?`, key)
 	return err
 }

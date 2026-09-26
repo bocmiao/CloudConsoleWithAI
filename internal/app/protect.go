@@ -342,6 +342,9 @@ func (a *App) JudgeIPs(ctx context.Context, source string, days int, ips []strin
 		if err != nil {
 			return Judgement{}, err
 		}
+		if err := a.checkBudget(s); err != nil {
+			return Judgement{}, err
+		}
 		settings = s
 		cfg.MaxTokens = 3000
 		sess, err := ai.NewSession(cfg)

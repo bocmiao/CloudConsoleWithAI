@@ -224,6 +224,22 @@ func (a *App) Chat(ctx context.Context, convID, text string) (ChatReply, error) 
 	return a.ChatStream(ctx, convID, text, nil)
 }
 
+// checkBudget refuses a model call once this month's spending reached
+// the limit; background calls (IP verdicts, command reviews) too.
+func (a *App) checkBudget(settings AISettings) error {
+	if settings.MonthlyBudget <= 0 {
+		return nil
+	}
+	spent, err := a.Store.MonthCost()
+	if err != nil {
+		return err
+	}
+	if spent[settings.Currency] >= settings.MonthlyBudget {
+		return userErr("本月 AI 花费已达到你设置的上限（%.2f %s），可以在「设置」里调整", settings.MonthlyBudget, settings.Currency)
+	}
+	return nil
+}
+
 // ChatStream is Chat with the answer streamed to on as it is generated.
 // StopChat ends it early; what was said by then is kept.
 func (a *App) ChatStream(ctx context.Context, convID, text string, on func(ChatEvent)) (ChatReply, error) {
@@ -235,14 +251,8 @@ func (a *App) ChatStream(ctx context.Context, convID, text string, on func(ChatE
 	if err != nil {
 		return ChatReply{}, err
 	}
-	if settings.MonthlyBudget > 0 {
-		spent, err := a.Store.MonthCost()
-		if err != nil {
-			return ChatReply{}, err
-		}
-		if spent[settings.Currency] >= settings.MonthlyBudget {
-			return ChatReply{}, userErr("本月 AI 花费已达到你设置的上限（%.2f %s），可以在「设置」里调整", settings.MonthlyBudget, settings.Currency)
-		}
+	if err := a.checkBudget(settings); err != nil {
+		return ChatReply{}, err
 	}
 	conv, convID, restored, err := a.conversationFor(cfg, convID, text)
 	if err != nil {

@@ -181,6 +181,13 @@ func (a *App) Rollback(ctx context.Context, id int64) (ExecView, error) {
 		return execView(e), userErr("这台服务器上正在执行其他操作，请稍后再试")
 	}
 	defer a.locks.release(e.ServerID)
+	// Read again under the lock: the same rollback may have just run.
+	if e, err = a.Store.GetExec(id); err != nil {
+		return ExecView{}, err
+	}
+	if v := execView(e); !v.CanRollback {
+		return v, userErr("这条记录不能回滚：%s", v.NoRollback)
+	}
 	_, rerr := a.rollback(ctx, &e)
 	v, err := a.ExecEntry(id)
 	if rerr != nil {

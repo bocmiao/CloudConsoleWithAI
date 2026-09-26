@@ -406,12 +406,18 @@ func (a *App) blockPicked(ctx context.Context, s AutoBlockSettings) string {
 		if err != nil || v.Range(1) == nil {
 			continue
 		}
+		// Old statistics (the refresh failed, or the program was off for a
+		// while) would block yesterday's visitors.
+		if at, err := time.Parse(time.RFC3339, v.CheckedAt); err != nil || time.Since(at) > 2*time.Hour {
+			did = append(did, src.Title+"：统计数据太旧（"+orDash(v.CheckedAt)+"），这次没有封禁")
+			continue
+		}
 		var picked []visits.IPProfile
 		for _, p := range v.Range(1).IPs {
 			switch {
 			case blockedNow[p.IP], p.EdgeOne, p.Crawler != "", visits.Private(p.IP), allowed(s.Allow, p.IP):
 				continue
-			case lifted[p.IP] != "" && p.Last <= lifted[p.IP]: // not back since its block ran out
+			case lifted[p.IP] != "" && p.Last <= stampIn(lifted[p.IP], v.Zone): // not back since its block ran out
 				continue
 			case p.Risk == visits.RiskHigh, s.Level == visits.RiskMedium && p.Risk == visits.RiskMedium:
 				picked = append(picked, p)
@@ -446,11 +452,18 @@ func (a *App) blockPicked(ctx context.Context, s AutoBlockSettings) string {
 			continue
 		}
 		plan, err = a.runAuto(ctx, plan)
-		if err != nil {
-			did = append(did, src.Title+"：封禁没有完成："+err.Error())
-			continue
+		// What was blocked is recorded even when not every step made it,
+		// so it is still lifted when due; a checklist still running is
+		// recorded once it ends.
+		n := 0
+		if plan.Status == core.PlanRunning {
+			go a.recordWhenDone(plan.ID, s, why)
+		} else {
+			n = a.recordAutoBlocked(plan, s, why)
 		}
-		n := a.recordAutoBlocked(plan, s, why)
+		if err != nil {
+			did = append(did, src.Title+"：封禁没有全部完成："+err.Error())
+		}
 		for _, ip := range ips {
 			blockedNow[ip] = true
 		}
@@ -463,6 +476,20 @@ func (a *App) blockPicked(ctx context.Context, s AutoBlockSettings) string {
 		return "没有需要封禁的 IP"
 	}
 	return strings.Join(did, "；")
+}
+
+// stampIn turns a local time stamp into the time zone a log is written
+// in (like +0800), so the two compare.
+func stampIn(stamp, zone string) string {
+	t, err := time.ParseInLocation(localStamp, stamp, time.Local)
+	if err != nil || len(zone) != 5 {
+		return stamp
+	}
+	z, err := time.Parse("-0700", zone)
+	if err != nil {
+		return stamp
+	}
+	return t.In(z.Location()).Format(localStamp)
 }
 
 func levelWords(level string) string {
@@ -484,8 +511,18 @@ func (a *App) aiAgrees(ctx context.Context, source string, picked []visits.IPPro
 			ask = append(ask, p.IP)
 		}
 	}
-	if len(ask) > 0 {
-		j, err := a.JudgeIPs(ctx, source, 1, ask)
+	// The AI is shown at most 25 IPs a time; ask in batches, and only
+	// about as many as can be blocked this run.
+	if len(ask) > autoBlockPerRun {
+		ask = ask[:autoBlockPerRun]
+	}
+	for len(ask) > 0 {
+		batch := ask
+		if len(batch) > 25 {
+			batch = batch[:25]
+		}
+		ask = ask[len(batch):]
+		j, err := a.JudgeIPs(ctx, source, 1, batch)
 		if err != nil {
 			return nil, err
 		}
@@ -498,7 +535,7 @@ func (a *App) aiAgrees(ctx context.Context, source string, picked []visits.IPPro
 			st.Judged[v.IP] = judged{Action: v.Action, Reason: v.Reason, At: now()}
 		}
 		// An IP the AI did not answer about is not asked again today.
-		for _, ip := range ask {
+		for _, ip := range batch {
 			if _, ok := st.Judged[ip]; !ok {
 				st.Judged[ip] = judged{Action: "watch", Reason: "AI 没有给出结论", At: now()}
 			}
@@ -547,6 +584,21 @@ func (a *App) runAuto(ctx context.Context, plan PlanView) (PlanView, error) {
 		case <-ctx.Done():
 			return v, ctx.Err()
 		case <-time.After(200 * time.Millisecond):
+		}
+	}
+}
+
+// recordWhenDone waits for a checklist that outran planWait.
+func (a *App) recordWhenDone(id int64, s AutoBlockSettings, why map[string]string) {
+	for i := 0; i < 360; i++ {
+		time.Sleep(10 * time.Second)
+		v, err := a.Plan(id)
+		if err != nil {
+			return
+		}
+		if v.Status != core.PlanRunning {
+			a.recordAutoBlocked(v, s, why)
+			return
 		}
 	}
 }
