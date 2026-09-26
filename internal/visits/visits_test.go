@@ -276,7 +276,8 @@ func TestLocateAndAssess(t *testing.T) {
 		t.Fatalf("visitor: %+v", p)
 	}
 	regions := today.Sites[All].Top["region"]
-	if len(regions) == 0 || !hasItem(regions, "澳大利亚") || !hasItem(regions, "IPv6（未知）") {
+	// The IPv6 visitor (2602:80d:1005::18) is located too.
+	if len(regions) == 0 || !hasItem(regions, "澳大利亚") || !hasItem(regions, "美国") || hasItem(regions, "IPv6（未知）") {
 		t.Fatalf("regions = %+v", regions)
 	}
 	for _, it := range today.Sites["blog.example.com"].Top["ip"] {

@@ -1,11 +1,12 @@
-// Package geoip says where an IPv4 address is, offline, from the
-// ip2region database (github.com/lionsoul2014/ip2region, Apache-2.0 or
-// MIT, see LICENSE-ip2region.md), embedded compressed and read into
-// memory on first use.
+// Package geoip says where an IP address is, offline, from the ip2region
+// databases (github.com/lionsoul2014/ip2region, Apache-2.0 or MIT, see
+// LICENSE-ip2region.md): IPv4 and IPv6, embedded compressed and read into
+// memory the first time an address of that kind is looked up.
 package geoip
 
 import (
 	"bytes"
+	"compress/bzip2"
 	"compress/gzip"
 	_ "embed"
 	"encoding/binary"
@@ -16,7 +17,13 @@ import (
 )
 
 //go:embed ip2region_v4.xdb.gz
-var packed []byte
+var packed4 []byte
+
+// The IPv6 database is bigger (37 MB); bzip2 keeps it at 5.5 MB in the
+// program, and it is only unpacked when an IPv6 visitor is seen.
+//
+//go:embed ip2region_v6.xdb.bz2
+var packed6 []byte
 
 // Location is where an address is registered.
 type Location struct {
@@ -54,66 +61,80 @@ func (l Location) Region() string {
 }
 
 var (
-	once sync.Once
-	db   []byte
+	once4, once6 sync.Once
+	db4, db6     []byte
 )
 
-func load() {
-	r, err := gzip.NewReader(bytes.NewReader(packed))
+func unpack(r io.Reader, err error) []byte {
 	if err != nil {
-		return
+		return nil
 	}
 	data, err := io.ReadAll(r)
-	if err != nil || len(data) < 256+256*256*8 {
-		return
+	if err != nil || len(data) < headerLen+vectorCols*vectorCols*vectorSize {
+		return nil
 	}
-	db = data
+	return data
 }
 
+func load4() { db4 = unpack(gzip.NewReader(bytes.NewReader(packed4))) }
+func load6() { db6 = unpack(bzip2.NewReader(bytes.NewReader(packed6)), nil) }
+
 const (
-	headerLen   = 256
-	vectorCols  = 256
-	vectorSize  = 8
-	segmentSize = 14 // start ip, end ip (little endian), data length, data pointer
+	headerLen  = 256
+	vectorCols = 256
+	vectorSize = 8
 )
 
-// Lookup finds an IPv4 address. Private, reserved and IPv6 addresses
-// are not found.
+// Lookup finds an IPv4 or IPv6 address. Private, loopback, link-local
+// and reserved addresses are not found.
 func Lookup(ip string) (Location, bool) {
 	addr, err := netip.ParseAddr(strings.TrimSpace(ip))
 	if err != nil {
 		return Location{}, false
 	}
 	addr = addr.Unmap()
-	if !addr.Is4() || addr.IsPrivate() || addr.IsLoopback() || addr.IsUnspecified() || addr.IsLinkLocalUnicast() {
+	if addr.IsPrivate() || addr.IsLoopback() || addr.IsUnspecified() || addr.IsLinkLocalUnicast() || addr.IsMulticast() {
 		return Location{}, false
 	}
-	once.Do(load)
+	if addr.Is4() {
+		once4.Do(load4)
+		b := addr.As4()
+		return search(db4, b[:])
+	}
+	once6.Do(load6)
+	b := addr.As16()
+	return search(db6, b[:])
+}
+
+// search finds ip in a database: a vector index by the first two bytes
+// points at a run of segments, searched by halves. A segment is the start
+// and end address, the region's length and where it is. IPv4 segments hold
+// the addresses as little-endian numbers (14 bytes), IPv6 ones in network
+// order (38 bytes).
+func search(db, ip []byte) (Location, bool) {
 	if db == nil {
 		return Location{}, false
 	}
-	b := addr.As4()
-	n := binary.BigEndian.Uint32(b[:])
-	idx := headerLen + (int(b[0])*vectorCols+int(b[1]))*vectorSize
+	n := len(ip)
+	seg := 2*n + 6
+	idx := headerLen + (int(ip[0])*vectorCols+int(ip[1]))*vectorSize
 	start := binary.LittleEndian.Uint32(db[idx:])
 	end := binary.LittleEndian.Uint32(db[idx+4:])
-	if start == 0 || end == 0 || int(end)+segmentSize > len(db) {
+	if start == 0 || end == 0 || int(end)+seg > len(db) {
 		return Location{}, false
 	}
-	lo, hi := 0, int((end-start)/segmentSize)
+	lo, hi := 0, int(end-start)/seg
 	for lo <= hi {
 		m := (lo + hi) / 2
-		p := int(start) + m*segmentSize
-		sip := binary.LittleEndian.Uint32(db[p:])
-		eip := binary.LittleEndian.Uint32(db[p+4:])
+		p := int(start) + m*seg
 		switch {
-		case n < sip:
+		case cmpIP(ip, db[p:p+n]) < 0:
 			hi = m - 1
-		case n > eip:
+		case cmpIP(ip, db[p+n:p+2*n]) > 0:
 			lo = m + 1
 		default:
-			l := int(binary.LittleEndian.Uint16(db[p+8:]))
-			ptr := int(binary.LittleEndian.Uint32(db[p+10:]))
+			l := int(binary.LittleEndian.Uint16(db[p+2*n:]))
+			ptr := int(binary.LittleEndian.Uint32(db[p+2*n+2:]))
 			if ptr+l > len(db) {
 				return Location{}, false
 			}
@@ -121,6 +142,21 @@ func Lookup(ip string) (Location, bool) {
 		}
 	}
 	return Location{}, false
+}
+
+// cmpIP compares an address in network order with one from a segment.
+func cmpIP(ip, seg []byte) int {
+	if len(ip) == 4 {
+		a, b := binary.BigEndian.Uint32(ip), binary.LittleEndian.Uint32(seg)
+		switch {
+		case a < b:
+			return -1
+		case a > b:
+			return 1
+		}
+		return 0
+	}
+	return bytes.Compare(ip, seg)
 }
 
 // parse reads "中国|广东省|深圳市|电信|CN" or "United States|California|0|Google LLC|US".
