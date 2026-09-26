@@ -26,13 +26,13 @@ docker logs miaopanel          # 找到「初始化码」
 
 ## 方式二：直接运行程序（systemd）
 
-从 [Releases](https://github.com/bocmiao/CloudConsoleWithAI/releases) 下载 `MiaoPanel-linux-amd64`（ARM 服务器用 `linux-arm64`），然后：
+从 [Releases](https://github.com/bocmiao/CloudConsoleWithAI/releases)（还没有发布版本时，用 [Actions](https://github.com/bocmiao/CloudConsoleWithAI/actions) 里最新一次构建的产物，下载后先解压）下载 `MiaoPanel-linux-amd64`（ARM 服务器用 `linux-arm64`），然后：
 
 ```bash
 sudo useradd --system --home /var/lib/miaopanel --shell /usr/sbin/nologin miaopanel
 sudo install -m 755 MiaoPanel-linux-amd64 /usr/local/bin/miaopanel
 sudo curl -o /etc/systemd/system/miaopanel.service \
-  https://raw.githubusercontent.com/bocmiao/CloudConsoleWithAI/main/deploy/miaopanel.service
+  https://raw.githubusercontent.com/bocmiao/CloudConsoleWithAI/HEAD/deploy/miaopanel.service
 sudo systemctl daemon-reload && sudo systemctl enable --now miaopanel
 sudo journalctl -u miaopanel   # 找到「初始化码」
 ```
