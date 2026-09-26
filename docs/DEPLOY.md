@@ -61,7 +61,7 @@ client_max_body_size 0;
 **Nginx**：参考 [`deploy/nginx.conf`](../deploy/nginx.conf)。**Caddy**（自动申请证书）：参考 [`deploy/Caddyfile`](../deploy/Caddyfile)。
 
 这几行的作用：`X-Real-IP` 让登录失败按访客 IP 限制；`X-Forwarded-Proto` 让 Miao Panel 知道是 HTTPS；
-关闭缓冲让 AI 的回答和终端输出实时显示；超时时间让终端能长时间开着；`client_max_body_size 0` 让文件管理能上传大文件。
+关闭缓冲让 AI 的回答和终端输出实时显示；超时时间让终端能长时间开着；`client_max_body_size 0` 让「文件」和「存储」页能上传大文件。
 
 不想用反向代理，也可以让 Miao Panel 自己提供 HTTPS：`miaopanel serve --listen 0.0.0.0:443 --tls-cert 证书.pem --tls-key 私钥.pem`。
 
