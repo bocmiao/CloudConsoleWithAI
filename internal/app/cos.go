@@ -377,7 +377,13 @@ func (a *App) cosFindings(ctx context.Context, c *tencent.Client, d COSDetail) [
 				if len(show) > 8 {
 					show = show[:8]
 				}
-				out = append(out, COSFinding{Level: "crit", Fix: "private", Files: show,
+				// Public through the policy only: making the ACL private
+				// changes nothing, the anonymous policy rules must go.
+				fix := "private"
+				if d.ACL.Canned == "private" || d.ACL.Canned == "" {
+					fix = "policy_public_off"
+				}
+				out = append(out, COSFinding{Level: "crit", Fix: fix, Files: show,
 					Text: fmt.Sprintf("公开的桶里有 %d 个看起来是备份、数据库或密钥的文件（例如 %s），任何人都能下载。", len(hits), hits[0])})
 			}
 		}

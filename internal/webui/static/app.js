@@ -232,6 +232,13 @@ const PlanCard = {
     resetPicks();
     if (running.value) poll();
     onUnmounted(stop);
+    // A fresher copy from the page (the 建议 list reloaded) replaces this one.
+    watch(() => props.plan, v => {
+      if (!v || v === p.value) return;
+      p.value = v;
+      resetPicks();
+      if (v.status === 'running') poll();
+    });
 
     const status = s => STEP_STATUS[s.status] || null;
     const hasFree = computed(() => chosenSteps.value.some(s => s.capability === 'free_command'));
@@ -489,12 +496,16 @@ const LineChart = {
     const hover = ref(-1);
     let ro = null;
     onMounted(() => {
-      ro = new ResizeObserver(es => { width.value = Math.max(280, Math.floor(es[0].contentRect.width)); });
+      ro = new ResizeObserver(es => { width.value = Math.max(220, Math.floor(es[0].contentRect.width)); });
       ro.observe(box.value);
     });
     onUnmounted(() => ro && ro.disconnect());
 
-    const scale = computed(() => niceScale(Math.max(0, ...props.points.map(p => p.v))));
+    // Counts are whole: no 0.5 gridline labelled "1".
+    const scale = computed(() => {
+      const sc = niceScale(Math.max(0, ...props.points.map(p => p.v)));
+      return props.format === fmtCount && sc.step < 1 ? { max: 4, step: 1 } : sc;
+    });
     // The left margin fits the widest axis label (10.0 Kbps, 1.5万).
     const labels = computed(() => {
       const out = [];
@@ -614,7 +625,7 @@ const RankList = {
   },
   template: `
   <div class="rank">
-    <div class="rank-row" v-for="t in shown" :key="t.value" :class="{ clickable }" @click="clickable && $emit('pick', t.value)">
+    <div class="rank-row" v-for="(t, i) in shown" :key="i + '|' + t.value" :class="{ clickable }" @click="clickable && $emit('pick', t.value)">
       <div class="rank-line">
         <span class="rank-key" :title="t.value">{{ t.value }}</span>
         <span class="rank-note" v-if="t.note" :title="t.note">{{ t.note }}</span>
@@ -652,7 +663,8 @@ const VisitStats = {
     const planning = ref(false);
     const blocked = ref([]);
     let seq = 0;
-    watch(days, v => setPref('miao.visitDays', String(v)));
+    // Today is counted per hour for PV and requests only.
+    watch(days, v => { setPref('miao.visitDays', String(v)); if (v === 1 && !['pv', 'requests'].includes(series.value)) series.value = 'pv'; }, { immediate: true });
     watch(section, v => setPref('miao.visitSection', v));
 
     async function loadSources() {
@@ -733,6 +745,8 @@ const VisitStats = {
     const autoUntil = computed(() => new Map(((auto.value && auto.value.blocked) || []).map(b => [b.ip, b.until])));
     const untilText = u => { if (!u) return '一直封禁'; const d = new Date(u); return isNaN(d) ? u : `${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')} 解封`; };
     watch(source, v => { setPref('miao.visitSource', v); site.value = '*'; picked.value = new Set(); load(false); });
+    // Picks belong to the list they were made in.
+    watch([site, days], () => { picked.value = new Set(); });
     watch(() => props.active, on => { if (on) { loadSources().then(() => load(false)); loadBlocked(); } });
     watch(() => props.servers.length, () => loadSources());
     watch(() => props.tencent, () => { loadSources(); loadBlocked(); });
@@ -1065,7 +1079,7 @@ const VisitStats = {
             <span class="grow"></span>
             <label class="check small"><input type="checkbox" v-model="showAll"> 显示全部记录的 IP（{{ ips.length }}）</label>
           </div>
-          <div class="alerts" v-if="alerts.some(a => a.level === 'warn' && source !== 'edgeone')">
+          <div class="alerts" v-if="source !== 'edgeone' && alerts.some(a => a.level === 'warn' && !a.go)">
             <div class="alert al-warn" v-for="(a, i) in alerts.filter(a => a.level === 'warn' && !a.go)" :key="i"><ui-icon name="warn"></ui-icon><span class="grow">{{ a.text }}</span>
               <button class="link small" v-if="a.fix === 'realip'" @click="realIP" :disabled="planning">让服务器记录真实 IP</button></div>
           </div>
@@ -1337,13 +1351,30 @@ const TerminalPage = {
       try {
         const l = live.get(key) && live.get(key).term ? live.get(key) : await makeTerm(key);
         const v = await api('POST', `/api/servers/${t.serverId}/terminal`, { cols: l.term.cols, rows: l.term.rows });
+        // Closed while it was connecting: end the new one on the server too.
+        if (!tabOf(key)) { api('DELETE', `/api/terminals/${v.id}`).catch(() => {}); return; }
         t.id = v.id;
         attach(key);
         l.term.focus();
-      } catch (e) { t.state = 'error'; t.error = e.message; }
+      } catch (e) { if (tabOf(key)) { t.state = 'error'; t.error = e.message; } }
     }
-    function reconnect(key) {
-      const l = live.get(key);
+    // After a network hiccup the shell is usually still running on the
+    // server (with whatever command was in it): pick it up again rather
+    // than starting a new one.
+    async function reconnect(key) {
+      const t = tabOf(key), l = live.get(key);
+      if (t && t.id && l && l.term) {
+        try {
+          const alive = (await api('GET', '/api/terminals')).some(v => v.id === t.id && !v.ended);
+          if (alive) {
+            l.term.reset(); // the server sends the recent output again
+            t.error = '';
+            attach(key);
+            l.term.focus();
+            return;
+          }
+        } catch { /* start a new one below */ }
+      }
       if (l && l.term) l.term.write('\r\n\x1b[90m[重新连接……]\x1b[0m\r\n');
       connect(key);
     }
@@ -1358,7 +1389,7 @@ const TerminalPage = {
         if (l.term) l.term.dispose();
         live.delete(key);
       }
-      if (t.id && t.state === 'open') api('DELETE', `/api/terminals/${t.id}`).catch(() => {});
+      if (t.id && t.state !== 'ended') api('DELETE', `/api/terminals/${t.id}`).catch(() => {});
       const i = tabs.value.indexOf(t);
       tabs.value.splice(i, 1);
       if (current.value === key) current.value = tabs.value.length ? tabs.value[Math.max(0, i - 1)].key : '';
@@ -1519,7 +1550,8 @@ const CertPage = {
       total: inUse.value.length,
       auto: inUse.value.filter(c => c.autoRenew).length,
       soon: inUse.value.filter(c => c.daysLeft != null && c.daysLeft >= 0 && c.daysLeft < 30 && !c.autoRenew).length,
-      bad: groups.value.filter(g => g.level === 'crit').length + live.value.filter(l => l.level === 'crit').length,
+      // A site whose bad certificate is already counted is not counted again.
+      bad: groups.value.filter(g => g.level === 'crit').length + live.value.filter(l => l.level === 'crit' && !problemServed.value.has(l.domain)).length,
     }));
 
     // Filters are not remembered, so one left on can never hide a new
@@ -1810,7 +1842,9 @@ const DnsPage = {
   emits: ['settings'],
   setup(props) {
     const domains = ref([]);
-    const eoError = ref('');
+    const eoListError = ref(''); // reading the sites for the domain list
+    // Either call may fail to read EdgeOne; the records call says so too.
+    const eoError = computed(() => eoListError.value || (data.value && data.value.eoError) || '');
     const domain = ref(pref('miao.dnsDomain', ''));
     const data = ref(null);
     const loading = ref(false);
@@ -1824,14 +1858,15 @@ const DnsPage = {
     let seq = 0;
     watch(domain, v => { if (v) setPref('miao.dnsDomain', v); load(); });
 
+    const domainsLoaded = ref(false);
     async function loadDomains() {
       if (!props.configured) return;
       try {
         const r = await api('GET', '/api/dns/domains');
-        domains.value = r.domains; eoError.value = r.eoError || '';
+        domains.value = r.domains; eoListError.value = r.eoError || '';
         if (!r.domains.some(d => d.name === domain.value)) domain.value = r.domains.length ? r.domains[0].name : '';
         else load();
-      } catch (e) { error.value = e.message; }
+      } catch (e) { error.value = e.message; } finally { domainsLoaded.value = true; }
     }
     async function load(fresh) {
       const d = domain.value;
@@ -1934,7 +1969,7 @@ const DnsPage = {
     const canEO = r => r.enabled && !r.edgeone && !r.system && ['A', 'AAAA', 'CNAME'].includes(r.type) && zone.value && zone.value.type === 'partial' && eoUsable.value && !/\.eo\.dnse|\.edgeone\.app/.test(r.value);
     const planServerName = computed(() => '腾讯云');
 
-    return { RECORD_TYPES, EO_AREAS, VALUE_HINT, domains, eoError, domain, data, loading, error, q, typeFilter, plan, planning, lines, formError,
+    return { RECORD_TYPES, EO_AREAS, VALUE_HINT, domains, domainsLoaded, eoError, domain, data, loading, error, q, typeFilter, plan, planning, lines, formError,
       current, zone, eoUsable, shown, load, planDone, closePlan, editor, openEditor, editorTTLs, submitEditor, quick, openQuick, submitQuick, quickName,
       del, toggle, eoPoint, eoOff, eoOn, canEO, ttlText, planServerName };
   },
@@ -1959,7 +1994,8 @@ const DnsPage = {
       </div>
 
       <div class="notice" v-if="error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ error }}</div>
-      <div class="group" v-if="!domains.length && !error && !loading"><div class="row secondary">DNSPod 里还没有域名。</div></div>
+      <div class="group" v-if="domainsLoaded && !domains.length && !error && !loading"><div class="row secondary">DNSPod 里还没有域名。</div></div>
+      <div class="notice" v-if="!domainsLoaded && !error"><span class="spinner"></span>正在读取域名……</div>
       <div class="notice" v-if="loading && !data"><span class="spinner"></span>正在读取解析记录……</div>
 
       <div class="alerts dns-alerts" v-if="data">
@@ -2160,6 +2196,7 @@ const StoragePage = {
       if (b && old && b.name === old.name) return;
       if (b) setPref('miao.cosBucket', b.name);
       detail.value = b ? cosMemo.get(b.name) || null : null;
+      detailError.value = '';
       usage.value = null; prefix.value = ''; files.value = null; picked.value = []; filter.value = '';
       if (b) { loadDetail(); loadFiles(); if (section.value === 'security') loadUsage(); }
     });
@@ -2357,14 +2394,16 @@ const StoragePage = {
 
     // ---- Security and usage ----
     const usage = ref(null), usageLoading = ref(false);
+    let useq = 0;
     async function loadUsage() {
       if (!bucket.value) return;
-      const b = bucket.value.name;
+      const n = ++useq;
       usageLoading.value = true;
       try {
         const u = await api('GET', '/api/cos/usage?' + q());
-        if (bucket.value && bucket.value.name === b) usage.value = u;
-      } catch (e) { usage.value = { available: false, note: e.message, hourly: [] }; } finally { usageLoading.value = false; }
+        if (n === useq) usage.value = u;
+      } catch (e) { if (n === useq) usage.value = { available: false, note: e.message, hourly: [] }; }
+      finally { if (n === useq) usageLoading.value = false; }
     }
     const trafficChange = computed(() => {
       const u = usage.value;
@@ -2683,9 +2722,9 @@ const StoragePage = {
 
           <!-- Settings -->
           <div v-show="section === 'settings'">
-            <div class="notice" v-if="detailError && !detail"><ui-icon name="alert" class="st-crit"></ui-icon><span class="grow">{{ detailError }}</span><button class="small" @click="loadDetail">重试</button></div>
-            <div class="notice" v-else-if="!detail"><span class="spinner"></span>正在读取设置……</div>
-            <template v-else>
+            <div class="notice" v-if="detailError"><ui-icon name="alert" class="st-crit"></ui-icon><span class="grow">{{ detail ? '刷新失败（下面是之前读到的）：' : '' }}{{ detailError }}</span><button class="small" @click="loadDetail">重试</button></div>
+            <div class="notice" v-if="!detail && !detailError"><span class="spinner"></span>正在读取设置……</div>
+            <template v-if="detail">
               <div class="group-title">访问</div>
               <div class="group cos-set">
                 <div class="row"><div class="grow"><div>访问权限</div><div class="small tertiary">{{ errOf('acl') || (COS_ACL[acl] || {}).note }}<template v-if="grants"> 另外单独授权给了 {{ grants }} 个账号。</template></div></div>
@@ -2732,8 +2771,9 @@ const StoragePage = {
             <div class="cos-sec-head"><span class="grow small secondary">按设置检查这个桶有没有被公开的风险，以及最近的用量。</span>
               <button class="plain" @click="loadDetail(); loadUsage()" :disabled="detailLoading || usageLoading"><ui-icon name="refresh"></ui-icon>刷新</button>
               <button class="primary" @click="ask"><ui-icon name="sparkles"></ui-icon>让 AI 检查</button></div>
-            <div class="notice" v-if="!detail"><span class="spinner"></span>正在检查……</div>
-            <div class="alerts" v-else>
+            <div class="notice" v-if="detailError"><ui-icon name="alert" class="st-crit"></ui-icon><span class="grow">{{ detailError }}</span><button class="small" @click="loadDetail">重试</button></div>
+            <div class="notice" v-if="!detail && !detailError"><span class="spinner"></span>正在检查……</div>
+            <div class="alerts" v-if="detail">
               <div class="alert" v-for="(f, i) in detail.findings" :key="i" :class="'al-' + f.level">
                 <ui-icon :name="levelIconOf(f.level)"></ui-icon>
                 <span class="grow">{{ f.text }}
@@ -2980,7 +3020,8 @@ const EoStats = {
       data.value = memo ? memo.data : null;
       updatedAt.value = memo ? memo.at : 0;
       const mine = ++seq;
-      error.value = '';
+      // A request this one replaces never clears its flags: start clean.
+      error.value = ''; loading.value = false; refreshing.value = false;
       if (!memo && !force) {
         loading.value = true;
         try {
@@ -3223,18 +3264,31 @@ const NoticePage = {
     const busy = ref('');
     const form = reactive({ daily: true, dailyAt: '09:00', alertRisk: true, alertLeak: true, alertCert: true, alertBlock: true });
     const hook = reactive({ url: '', secret: '', editing: false });
-    function take(v) {
+    // The form follows what is saved, unless it has changes not saved yet
+    // (coming back to the page reloads the list, not your edits).
+    let saved = '';
+    const formNow = () => JSON.stringify(form);
+    function take(v, force) {
       data.value = v;
-      Object.assign(form, { daily: v.settings.daily, dailyAt: v.settings.dailyAt, alertRisk: v.settings.alertRisk, alertLeak: v.settings.alertLeak,
-        alertCert: v.settings.alertCert, alertBlock: v.settings.alertBlock });
+      if (force || !saved || formNow() === saved) {
+        Object.assign(form, { daily: v.settings.daily, dailyAt: v.settings.dailyAt, alertRisk: v.settings.alertRisk, alertLeak: v.settings.alertLeak,
+          alertCert: v.settings.alertCert, alertBlock: v.settings.alertBlock });
+        saved = formNow();
+      }
       emit('unread', v.unread);
     }
     async function load() {
       try { take(await api('GET', '/api/notices')); error.value = ''; } catch (e) { error.value = e.message; }
     }
+    // Marked read after a moment on the page, if still on it.
     async function markRead() {
-      if (!data.value || !data.value.unread) return;
-      try { await api('POST', '/api/notices/read'); emit('unread', 0); } catch { /* next time */ }
+      if (!props.active || !data.value || !data.value.unread) return;
+      try {
+        await api('POST', '/api/notices/read');
+        emit('unread', 0);
+        data.value.unread = 0;
+        for (const n of data.value.notices || []) n.read = true;
+      } catch { /* next time */ }
     }
     onMounted(async () => { await load(); if (props.active) setTimeout(markRead, 1500); });
     watch(() => props.active, async on => { if (on) { await load(); setTimeout(markRead, 1500); } });
@@ -3242,7 +3296,7 @@ const NoticePage = {
       busy.value = label;
       try { await fn(); } catch (e) { notify(e.message, 'error'); } finally { busy.value = ''; }
     }
-    const saveSettings = () => run('settings', async () => { take(await api('PUT', '/api/notices/settings', { ...form })); notify('已保存', 'ok'); });
+    const saveSettings = () => run('settings', async () => { take(await api('PUT', '/api/notices/settings', { ...form }), true); notify('已保存', 'ok'); });
     const saveHook = () => run('hook', async () => {
       take(await api('PUT', '/api/notices/webhook', { url: hook.url, secret: hook.secret }));
       hook.url = ''; hook.secret = ''; hook.editing = false;
@@ -4315,12 +4369,16 @@ const app = createApp({
       if (tc.configured) {
         api('GET', `/api/servers/${id}/cloud`).then(r => { if (selectedId.value === id) cloud.value = r.instance || null; }).catch(() => {});
       }
+      // Another server may be picked while these load; its page wins.
       try {
-        current.value = await api('GET', `/api/servers/${id}/profile`);
-        if (current.value.server.adapter === '1panel') {
-          Object.assign(op, await api('GET', `/api/servers/${id}/onepanel`), { apiKey: '', info: '' });
+        const prof = await api('GET', `/api/servers/${id}/profile`);
+        if (selectedId.value !== id) return;
+        current.value = prof;
+        if (prof.server.adapter === '1panel') {
+          const o = await api('GET', `/api/servers/${id}/onepanel`);
+          if (selectedId.value === id) Object.assign(op, o, { apiKey: '', info: '' });
         }
-      } catch (e) { notify(e.message, 'error'); }
+      } catch (e) { if (selectedId.value === id) notify(e.message, 'error'); }
     }
     async function saveOnePanel() {
       await guarded('正在保存……', async () => {
@@ -4400,7 +4458,12 @@ const app = createApp({
       Object.assign(addForm, { name: s.name, host: s.publicIPs[0], username: /ubuntu/i.test(s.os) ? 'ubuntu' : 'root',
         instanceId: s.id, region: s.region, authKind: 'tat' });
     }
-    function askAI(text) { draft.value = text; tab.value = 'chat'; newChat(); }
+    // While an answer is still coming, the question waits in the box.
+    function askAI(text) {
+      draft.value = text; tab.value = 'chat';
+      if (chatBusy.value) notify('AI 还在回答上一个问题，这个问题先放在输入框里，答完再发送');
+      else newChat();
+    }
     const daysTo = t => t ? Math.floor((new Date(t) - Date.now()) / 86400000) : null;
     async function addServer() {
       await guarded('正在添加并测试连接……', async () => {
@@ -4426,15 +4489,19 @@ const app = createApp({
     }
     async function discover() {
       await guarded('正在识别服务器环境（只读，大约十几秒）……', async () => {
-        current.value = await api('POST', `/api/servers/${selectedId.value}/discover`);
+        const id = selectedId.value;
+        const prof = await api('POST', `/api/servers/${id}/discover`);
+        if (selectedId.value === id) current.value = prof;
         await loadServers();
         notify('识别完成');
       });
     }
     async function removeServer() {
-      if (!confirm(`确定要从 Miao Panel 里删除「${current.value.server.name}」吗？\n只是不再管理，不会影响服务器本身。`)) return;
+      // The name and the id come from the same place, the selected server.
+      const id = selectedId.value, sv = servers.value.find(x => x.id === id);
+      if (!sv || !confirm(`确定要从 Miao Panel 里删除「${sv.name}」吗？\n只是不再管理，不会影响服务器本身。`)) return;
       await guarded('正在删除……', async () => {
-        await api('DELETE', `/api/servers/${selectedId.value}`);
+        await api('DELETE', `/api/servers/${id}`);
         current.value = null; selectedId.value = null;
         await loadServers();
         if (servers.value.length) await select(servers.value[0].id, tab.value !== 'servers');

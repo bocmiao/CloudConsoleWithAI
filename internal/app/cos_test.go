@@ -250,3 +250,22 @@ func TestCOSSensitiveKeys(t *testing.T) {
 		}
 	}
 }
+
+// Public through the policy alone: the fix offered is the policy, not the
+// access setting, which is private already.
+func TestCOSPublicByPolicy(t *testing.T) {
+	a, f := cosApp(t)
+	name := "pol-" + tencenttest.COSAppID
+	b := f.AddBucket(name, "ap-guangzhou", "private")
+	b.PutFile("db/all.sql", []byte("x"))
+	f.COS[name].Policy = `{"Statement":[{"Principal":{"qcs":["qcs::cam::anyone:anyone"]},"Effect":"Allow","Action":["name/cos:GetObject"],"Resource":["*"]}],"version":"2.0"}`
+	d, err := a.COSBucketDetail(context.Background(), name, "ap-guangzhou")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, x := range d.Findings {
+		if len(x.Files) > 0 && x.Fix != "policy_public_off" {
+			t.Fatalf("sensitive files fix = %q", x.Fix)
+		}
+	}
+}
