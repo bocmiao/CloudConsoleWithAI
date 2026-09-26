@@ -1008,28 +1008,42 @@ const CertPage = {
     }
     onMounted(() => load(false));
     watch(() => props.active, on => { if (on && !loading.value && Date.now() - loadedAt.value > 5 * 60 * 1000) load(false); });
-    const entries = computed(() => (data.value && data.value.entries) || []);
+    const groups = computed(() => (data.value && data.value.groups) || []);
     const live = computed(() => (data.value && data.value.live) || []);
-    const counts = computed(() => {
-      const e = entries.value.filter(x => x.daysLeft != null);
-      return {
-        total: e.length,
-        auto: e.filter(x => x.autoRenew).length,
-        soon: e.filter(x => x.daysLeft >= 0 && x.daysLeft < 30 && !x.autoRenew).length,
-        bad: entries.value.filter(x => x.level === 'crit').length + live.value.filter(x => x.level === 'crit').length,
-      };
-    });
+    const noHttps = computed(() => (data.value && data.value.noHttps) || []);
+    const inUse = computed(() => groups.value.flatMap(g => g.certs).filter(c => c.inUse));
+    const counts = computed(() => ({
+      total: inUse.value.length,
+      auto: inUse.value.filter(c => c.autoRenew).length,
+      soon: inUse.value.filter(c => c.daysLeft != null && c.daysLeft >= 0 && c.daysLeft < 30 && !c.autoRenew).length,
+      bad: groups.value.filter(g => g.level === 'crit').length + live.value.filter(l => l.level === 'crit').length,
+    }));
+    // Problems first, then the rest, then certificates nothing seems to use.
+    const attention = computed(() => groups.value.filter(g => g.level === 'crit' || g.level === 'warn'));
+    const fine = computed(() => groups.value.filter(g => g.level !== 'crit' && g.level !== 'warn' && g.certs.some(c => c.inUse)));
+    const unused = computed(() => groups.value.filter(g => g.level !== 'crit' && g.level !== 'warn' && !g.certs.some(c => c.inUse)));
     const date = t => t ? new Date(t).toLocaleDateString('zh-CN') : '—';
-    const others = e => (e.names || []).filter(n => n !== e.domain).join('、');
-    function action(e) {
-      if (e.source === '1panel' && e.level !== 'ok' && e.canRenew) return ['让 AI 续签', `帮我立即续签 1Panel 里 ${e.domain} 的证书，并看看自动续签为什么没有成功`];
-      if (e.source === '1panel' && !e.autoRenew && e.canRenew) return ['开启自动续签', `帮我开启 1Panel 里 ${e.domain} 证书的自动续签`];
-      if (e.source === 'eo' && e.renew === '—') return ['开启 HTTPS', `帮 ${e.domain} 开启 HTTPS（EdgeOne 免费证书，自动续签）`];
-      if (e.level === 'crit' || e.level === 'warn') return ['让 AI 处理', `${e.domain} 的证书${e.status}，帮我看看怎么处理`];
+    const others = g => (g.names || []).filter(n => n !== g.domain).join('、');
+    const cut = (list, n) => list.length > n ? list.slice(0, n).join('、') + ` 等 ${list.length} 个` : list.join('、');
+    function uses(c) {
+      const out = [];
+      if (c.usedBy && c.usedBy.length) out.push('网站 ' + cut(c.usedBy, 4));
+      if (c.edgeOne && c.edgeOne.length) out.push('EdgeOne ' + cut(c.edgeOne, 4));
+      const served = (c.servedOn || []).filter(d => !(c.usedBy || []).includes(d) && !(c.edgeOne || []).includes(d));
+      if (served.length) out.push('访问 ' + cut(served, 3) + ' 时看到的就是它');
+      return out.join('；');
+    }
+    const copyText = p => p.where + (p.autoRenew ? '（自动续签）' : '');
+    function action(g, c) {
+      const panel = c.copies.find(p => p.source === '1panel' && p.canRenew);
+      if (panel && c.inUse && (c.level === 'crit' || c.level === 'warn')) return ['让 AI 续签', `帮我立即续签 1Panel 里 ${g.domain} 的证书，并看看自动续签为什么没有成功`];
+      if (panel && c.inUse && !c.autoRenew) return ['开启自动续签', `帮我开启 1Panel 里 ${g.domain} 证书的自动续签`];
+      if (c.level === 'crit' || c.level === 'warn') return ['让 AI 处理', `${g.domain} 的证书${c.status}，帮我看看怎么处理`];
       return null;
     }
     const ask = text => emit('ask', text);
-    return { data, loading, error, load, whenText, entries, live, counts, date, others, action, ask, icon: l => LEVEL_ICON[l] || 'info' };
+    return { data, loading, error, load, whenText, groups, live, noHttps, counts, attention, fine, unused, date, others, uses, copyText, action, ask,
+      icon: l => LEVEL_ICON[l] || 'info' };
   },
   template: `
   <div>
@@ -1051,26 +1065,60 @@ const CertPage = {
         <div class="tile"><div class="label"><ui-icon name="alert"></ui-icon>有问题</div><div class="value">{{ counts.bad }}</div><div class="sub">已过期、申请失败或访问异常</div></div>
       </div>
 
-      <div class="group-title">证书</div>
-      <div class="group table-wrap">
-        <table class="table cert-table" v-if="entries.length">
-          <thead><tr><th>域名</th><th>在哪里</th><th>到期</th><th>续签</th><th>状态</th><th></th></tr></thead>
-          <tbody>
-            <tr v-for="(e, i) in entries" :key="i">
-              <td><div class="mono-ish">{{ e.domain }}</div>
-                <div class="small tertiary" v-if="others(e)">也包括 {{ others(e) }}</div>
-                <div class="small tertiary" v-if="e.usedBy && e.usedBy.length">用在网站 {{ e.usedBy.join('、') }}</div></td>
-              <td class="small">{{ e.where }}<div class="tertiary">{{ e.issuer }}</div></td>
-              <td class="num">{{ date(e.notAfter) }}<div class="small tertiary" v-if="e.daysLeft != null">{{ e.daysLeft >= 0 ? '剩 ' + e.daysLeft + ' 天' : '已过期' }}</div></td>
-              <td class="small">{{ e.renew }}</td>
-              <td><span class="cert-st" :class="'st-' + e.level"><ui-icon :name="icon(e.level)"></ui-icon>{{ e.status }}</span>
-                <div class="small tertiary" v-if="e.renewError">{{ e.renewError }}</div></td>
-              <td><button class="link small" v-if="action(e)" @click="ask(action(e)[1])">{{ action(e)[0] }}</button></td>
-            </tr>
-          </tbody>
-        </table>
-        <div class="row small secondary" v-else>还没有找到证书。{{ configured ? '' : '在「设置 → 腾讯云」填好密钥后可以看到 EdgeOne 和腾讯云的证书；' }}配置了 1Panel 接口的服务器会显示 1Panel 里的证书。</div>
-      </div>
+      <template v-for="sec in [{ title: '需要处理', list: attention }, { title: '证书', list: fine }]" :key="sec.title">
+        <template v-if="sec.list.length">
+          <div class="group-title">{{ sec.title }}</div>
+          <div class="cert-group" v-for="g in sec.list" :key="g.domain">
+            <div class="cert-head">
+              <ui-icon name="lock" class="lg"></ui-icon>
+              <div class="grow"><div class="cert-domain">{{ g.domain }}</div><div class="small tertiary" v-if="others(g)">也包括 {{ others(g) }}</div></div>
+              <span class="cert-st" :class="'st-' + g.level"><ui-icon :name="icon(g.level)"></ui-icon>{{ g.status }}</span>
+            </div>
+            <div class="cert-row" v-for="(c, i) in g.certs" :key="i" :class="{ muted: !c.inUse }">
+              <div class="grow">
+                <div class="cert-line"><b>{{ c.issuer || '证书' }}</b><span class="tag" :class="c.inUse ? 'on' : ''">{{ c.inUse ? '在用' : '没发现在用' }}</span></div>
+                <div class="small secondary">到期 {{ date(c.notAfter) }}<template v-if="c.daysLeft != null">（{{ c.daysLeft >= 0 ? '剩 ' + c.daysLeft + ' 天' : '已过期' }}）</template> · {{ c.renew }}</div>
+                <div class="small tertiary" v-if="uses(c)">用在 {{ uses(c) }}</div>
+                <div class="small tertiary">存放在 {{ c.copies.map(copyText).join('、') }}</div>
+                <div class="small st-crit" v-if="c.renewError">{{ c.renewError }}</div>
+              </div>
+              <div class="cert-side">
+                <span class="cert-st small" :class="'st-' + c.level"><ui-icon :name="icon(c.level)"></ui-icon>{{ c.status }}</span>
+                <button class="link small" v-if="action(g, c)" @click="ask(action(g, c)[1])">{{ action(g, c)[0] }}</button>
+              </div>
+            </div>
+          </div>
+        </template>
+      </template>
+      <div class="group" v-if="!groups.length && !loading"><div class="row small secondary">还没有找到证书。{{ configured ? '' : '在「设置 → 腾讯云」填好密钥后可以看到 EdgeOne 和腾讯云的证书；' }}配置了 1Panel 接口的服务器会显示 1Panel 里的证书。</div></div>
+
+      <details class="cert-more" v-if="unused.length">
+        <summary><ui-icon name="chevron"></ui-icon>没发现在用的证书（{{ unused.length }} 个域名）</summary>
+        <p class="small tertiary">没有网站、EdgeOne 域名在用，访问时也没看到。已经过期的可以在腾讯云或 1Panel 里删除；如果它们用在负载均衡、CDN 等别的地方，请忽略这个提示。</p>
+        <div class="cert-group" v-for="g in unused" :key="g.domain">
+          <div class="cert-head">
+            <ui-icon name="lock" class="lg"></ui-icon>
+            <div class="grow"><div class="cert-domain">{{ g.domain }}</div><div class="small tertiary" v-if="others(g)">也包括 {{ others(g) }}</div></div>
+          </div>
+          <div class="cert-row muted" v-for="(c, i) in g.certs" :key="i">
+            <div class="grow">
+              <div class="cert-line"><b>{{ c.issuer || '证书' }}</b></div>
+              <div class="small secondary">到期 {{ date(c.notAfter) }} · 存放在 {{ c.copies.map(copyText).join('、') }}</div>
+            </div>
+            <div class="cert-side"><span class="cert-st small st-info"><ui-icon name="info"></ui-icon>{{ c.status }}</span></div>
+          </div>
+        </div>
+      </details>
+
+      <template v-if="noHttps.length">
+        <div class="group-title">没有开启 HTTPS 的 EdgeOne 域名</div>
+        <div class="group">
+          <div class="row" v-for="e in noHttps" :key="e.domain">
+            <div class="grow"><div>{{ e.domain }}</div><div class="small tertiary">访问只能用 http://</div></div>
+            <button class="link small" @click="ask('帮 ' + e.domain + ' 开启 HTTPS（EdgeOne 免费证书，自动续签）')">开启 HTTPS</button>
+          </div>
+        </div>
+      </template>
 
       <template v-if="live.length">
         <div class="group-title">实际访问到的证书</div>

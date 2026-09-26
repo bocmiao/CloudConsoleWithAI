@@ -438,6 +438,26 @@ details.free-more[open] summary .icon { transform: rotate(90deg); }
 /* Certificates */
 .table-wrap { overflow-x: auto; }
 .cert-table { min-width: 720px; font-size: 13px; }
+/* One card per domain; one row per certificate, with where its copies are */
+.cert-group { background: var(--surface); border-radius: 12px; box-shadow: var(--shadow); margin-bottom: 14px; overflow: hidden; }
+.cert-head { display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--sep); }
+.cert-head > .icon { color: var(--accent); }
+.cert-domain { font-weight: 600; font-size: 15px; }
+.cert-row { display: flex; align-items: flex-start; gap: 16px; padding: 12px 18px 12px 50px; }
+.cert-row + .cert-row { border-top: 1px solid var(--sep); }
+.cert-head > .grow, .cert-row > .grow { flex: 1; min-width: 0; }
+.cert-row.muted .cert-line b { color: var(--text-2); }
+.cert-row .small { margin-top: 3px; }
+.cert-line { display: flex; align-items: center; gap: 8px; }
+.cert-side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: none; max-width: 42%; text-align: right; }
+.tag { font-size: 11.5px; padding: 1px 7px; border-radius: 999px; background: var(--hover); color: var(--text-2); white-space: nowrap; }
+.tag.on { background: color-mix(in srgb, var(--good) 16%, transparent); color: var(--good); }
+.cert-more { margin: 4px 0 22px; }
+.cert-more > summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); margin-bottom: 8px; }
+.cert-more > summary::-webkit-details-marker { display: none; }
+.cert-more[open] > summary .icon { transform: rotate(90deg); }
+.cert-more > p { margin: 0 4px 10px; }
+@media (max-width: 720px) { .cert-row { flex-direction: column; padding-left: 18px; } .cert-side { align-items: flex-start; max-width: none; text-align: left; } }
 .cert-st { display: inline-flex; align-items: flex-start; gap: 5px; }
 .cert-st .icon { flex: none; margin-top: 2px; }
 .filter-row .primary .icon { color: var(--on-accent); }

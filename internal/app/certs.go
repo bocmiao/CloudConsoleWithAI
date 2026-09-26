@@ -54,6 +54,10 @@ type CertOverview struct {
 	Live      []LiveCert  `json:"live"`
 	Notes     []string    `json:"notes,omitempty"` // sources that could not be read
 	CheckedAt string      `json:"checkedAt"`
+	// Groups is Entries with copies of one certificate merged, by domain;
+	// NoHTTPS lists EdgeOne domains without HTTPS.
+	Groups  []CertGroup `json:"groups"`
+	NoHTTPS []CertEntry `json:"noHttps"`
 	// Refreshing: this is an older overview and a new one is on its way.
 	Refreshing bool `json:"refreshing,omitempty"`
 }
@@ -239,6 +243,10 @@ func (a *App) gatherCertificates(ctx context.Context) (CertOverview, error) {
 	wg.Wait()
 
 	ov.Live = probeAll(ctx, liveDomains(ov.Entries))
+	ov.Groups, ov.NoHTTPS = groupCertificates(ov.Entries, ov.Live)
+	if ov.NoHTTPS == nil {
+		ov.NoHTTPS = []CertEntry{}
+	}
 	sort.SliceStable(ov.Entries, func(i, j int) bool {
 		rank := map[string]int{"crit": 0, "warn": 1, "info": 2, "ok": 3}
 		if rank[ov.Entries[i].Level] != rank[ov.Entries[j].Level] {
@@ -458,22 +466,52 @@ func (a *App) toolCertificates(ctx context.Context, raw json.RawMessage) (string
 		return false
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "检查时间 %s\n证书：\n", ov.CheckedAt)
-	for _, e := range ov.Entries {
-		if !match(append(e.Names, e.Domain)...) {
+	fmt.Fprintf(&b, "检查时间 %s\n证书按域名分组；同一张证书放在多个地方（腾讯云 SSL、1Panel）时合并成一张，列出所有存放位置：\n", ov.CheckedAt)
+	for _, g := range ov.Groups {
+		if !match(append(g.Names, g.Domain)...) {
 			continue
 		}
-		fmt.Fprintf(&b, "- [%s] %s（%s）在 %s；签发 %s；到期 %s；续签：%s", e.Level, e.Domain, strings.Join(e.Names, ","), e.Where, orDash(e.Issuer), orDash(e.NotAfter), e.Renew)
-		if e.Source == "1panel" {
-			fmt.Fprintf(&b, "；1Panel 证书编号 %s，服务器 %d，用在 %s", e.ID, e.ServerID, orDash(strings.Join(e.UsedBy, ",")))
+		fmt.Fprintf(&b, "== %s（%s）：[%s] %s\n", g.Domain, strings.Join(g.Names, ","), g.Level, g.Status)
+		for _, c := range g.Certs {
+			fmt.Fprintf(&b, "  - [%s] 签发 %s；到期 %s；续签：%s；%s", c.Level, orDash(c.Issuer), orDash(c.NotAfter), c.Renew, c.Status)
+			if c.InUse {
+				var uses []string
+				if len(c.UsedBy) > 0 {
+					uses = append(uses, "1Panel 网站 "+strings.Join(c.UsedBy, ","))
+				}
+				if len(c.EdgeOne) > 0 {
+					uses = append(uses, "EdgeOne "+strings.Join(c.EdgeOne, ","))
+				}
+				if len(c.ServedOn) > 0 {
+					uses = append(uses, "实际访问 "+strings.Join(c.ServedOn, ",")+" 拿到的就是它")
+				}
+				fmt.Fprintf(&b, "；在用：%s", strings.Join(uses, "；"))
+			} else {
+				b.WriteString("；没发现在用")
+			}
+			var copies []string
+			for _, p := range c.Copies {
+				where := p.Where
+				if p.Source == "1panel" {
+					where += fmt.Sprintf("，1Panel 证书编号 %s，服务器 %d", p.ID, p.ServerID)
+				}
+				if p.AutoRenew {
+					where += "，自动续签"
+				}
+				copies = append(copies, where)
+			}
+			fmt.Fprintf(&b, "；存放在：%s", strings.Join(copies, "；"))
+			if c.RenewError != "" {
+				fmt.Fprintf(&b, "；失败原因：%s", c.RenewError)
+			}
+			b.WriteString("\n")
 		}
-		fmt.Fprintf(&b, "；%s", e.Status)
-		if e.RenewError != "" {
-			fmt.Fprintf(&b, "（%s）", e.RenewError)
-		}
-		b.WriteString("\n")
 	}
-	b.WriteString("实际访问到的证书：\n")
+	for _, e := range ov.NoHTTPS {
+		if match(e.Domain) {
+			fmt.Fprintf(&b, "- EdgeOne 域名 %s 没有开启 HTTPS\n", e.Domain)
+		}
+	}
 	for _, l := range ov.Live {
 		if match(l.Domain) {
 			fmt.Fprintf(&b, "- [%s] https://%s：%s，签发 %s，到期 %s\n", l.Level, l.Domain, l.Status, orDash(l.Issuer), orDash(l.NotAfter))
