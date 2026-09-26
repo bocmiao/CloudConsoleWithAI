@@ -396,9 +396,37 @@ details.guide code { font: 12px ui-monospace, "SF Mono", Menlo, Consolas, monosp
   }
   .two-col { grid-template-columns: 1fr; }
 }
+/* Phones: the sidebar is a drawer opened from a menu button at the top
+   left; the page scrolls, and each page's toolbar stays on top. */
+.phone-menu, .nav-scrim { display: none; }
+.sidebar:focus { outline: none; }
 @media (max-width: 720px) {
   .app { grid-template-columns: 1fr; height: auto; }
-  .sidebar { border-right: none; border-bottom: 1px solid var(--sep); }
+  .main { overflow: visible; overflow-x: clip; }
+  .toolbar { padding: 9px 16px 9px 58px; flex-wrap: wrap; row-gap: 8px; }
+  .toolbar h1 { white-space: nowrap; line-height: 34px; } /* level with the menu button */
+  /* A row of page buttons goes under the title and scrolls sideways. */
+  .toolbar .actions { flex: 1 0 100%; margin-left: -42px; padding: 2px 0; overflow-x: auto; scrollbar-width: none; }
+  .toolbar .actions::-webkit-scrollbar { display: none; }
+  .toolbar .actions > * { flex: none; }
+  .sidebar {
+    position: fixed; z-index: 41; top: 0; bottom: 0; left: 0; width: min(300px, 84vw);
+    box-shadow: var(--shadow-lg); transform: translateX(-100%); visibility: hidden;
+    transition: transform .22s ease, visibility 0s linear .22s;
+  }
+  .sidebar.open { transform: none; visibility: visible; transition: transform .22s ease; }
+  .nav-scrim { display: block; position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,.28); }
+  body.nav-open { overflow: hidden; }
+  .phone-menu {
+    display: grid; place-items: center; position: fixed; z-index: 6; top: 9px; left: 12px;
+    width: 34px; height: 34px; padding: 0; border-radius: 8px; color: var(--text);
+    background: var(--surface); box-shadow: var(--shadow);
+  }
+  .phone-menu .icon { width: 20px; height: 20px; }
+  .phone-dot {
+    position: absolute; top: -5px; right: -7px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px;
+    background: var(--crit); color: #fff; font-size: 10.5px; font-weight: 600; line-height: 17px; text-align: center;
+  }
   .chat-layout { height: auto; }
   .chat { height: auto; min-height: 70vh; }
   .row.form { flex-wrap: wrap; }
@@ -799,3 +827,5 @@ button.primary.danger { background: var(--crit); }
 .totp-confirm { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
 .totp-confirm input { width: 120px; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: .15em; }
 textarea.key-text { font: 12px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; resize: vertical; min-height: 96px; }
+
+@media (prefers-reduced-motion: reduce) { .sidebar { transition: none !important; } }

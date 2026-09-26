@@ -12,8 +12,13 @@
 <body>
 <div id="app" class="app" v-cloak>
 
+  <!-- On a phone the sidebar opens from this button -->
+  <button class="phone-menu" ref="navBtn" @click="navOpen = !navOpen" :aria-expanded="navOpen ? 'true' : 'false'" aria-controls="side-nav"
+    :aria-label="unread ? `菜单（${unread} 条未读通知）` : '菜单'"><ui-icon name="menu"></ui-icon><span class="phone-dot" v-if="unread" aria-hidden="true">{{ unread > 99 ? '99+' : unread }}</span></button>
+  <div class="nav-scrim" v-if="navOpen" @click="closeNav"></div>
+
   <!-- Sidebar -->
-  <aside class="sidebar">
+  <aside class="sidebar" id="side-nav" ref="navEl" tabindex="-1" :class="{open: navOpen}" aria-label="导航">
     <div class="app-title"><span class="app-mark"><ui-icon name="layers"></ui-icon></span>Miao Panel</div>
 
     <div class="side-section">

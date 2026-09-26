@@ -97,6 +97,7 @@ const ICONS = {
   stop: 'M8 8h8v8H8z',
   prompt: 'M4 6l6 6-6 6M12 18h8',
   close: 'M6 6l12 12M18 6L6 18',
+  menu: 'M4 7h16M4 12h16M4 17h16',
   cloud: 'M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 8.6 4.5 4.5 0 0 1 17.5 18z',
   bell: 'M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15zM10 20.5a2 2 0 0 0 4 0',
 };
@@ -3094,6 +3095,19 @@ const AccountPanel = {
 const app = createApp({
   setup() {
     const tab = ref('servers');
+    // On a phone the sidebar is a drawer behind the menu button.
+    const navOpen = ref(false);
+    const navEl = ref(null), navBtn = ref(null);
+    watch(navOpen, open => {
+      document.body.classList.toggle('nav-open', open);
+      nextTick(() => { if (open && navEl.value) navEl.value.focus({ preventScroll: true }); });
+    });
+    function closeNav() {
+      if (!navOpen.value) return;
+      navOpen.value = false;
+      if (navBtn.value && navBtn.value.getClientRects().length) navBtn.value.focus(); // shown only on phones
+    }
+    window.addEventListener('keydown', e => { if (e.key === 'Escape' && navOpen.value) closeNav(); });
     const servers = ref([]);
     const selectedId = ref(null);
     const current = ref(null);
@@ -3150,6 +3164,7 @@ const app = createApp({
       Object.assign(aiForm, ai.value, { apiKey: '' });
     }
     async function select(id) {
+      navOpen.value = false;
       tab.value = 'servers';
       if (selectedId.value !== id) current.value = null;
       selectedId.value = id;
@@ -3214,6 +3229,7 @@ const app = createApp({
     const statsSeen = reactive({ [statsView.value]: true });
     watch(statsView, v => { statsSeen[v] = true; try { localStorage.setItem('miao.statsView', v); } catch { /* not kept */ } });
     function go(id) {
+      navOpen.value = false;
       tab.value = id;
       seen[id] = true;
       if (id === 'plans') api('GET', '/api/plans').then(v => { plans.value = v; }).catch(e => notify(e.message, 'error'));
@@ -3225,6 +3241,7 @@ const app = createApp({
     provide('loadSpend', () => loadSpend().catch(() => {}));
 
     function openAdd() {
+      navOpen.value = false;
       Object.assign(addForm, { name: '', host: '', port: 22, username: 'root', authKind: 'password', password: '', keyPath: '', keyText: '',
         keySource: info.value.mode === 'server' ? 'text' : 'path', keyPassphrase: '', instanceId: '', region: '' });
       showAdd.value = true;
@@ -3563,7 +3580,7 @@ const app = createApp({
     });
 
     return {
-      tab, go, servers, selectedId, current, p, busy, busyText, toast, info, ai, presets, aiForm, presetNote,
+      tab, go, navOpen, navEl, navBtn, closeNav, servers, selectedId, current, p, busy, busyText, toast, info, ai, presets, aiForm, presetNote,
       spendText, plans, audit, logView, logFocus, loadAudit, openLog, showAdd, addForm, messages, draft, chatBusy, msgBox, suggestions,
       select, openAdd, addServer, testConn, discover, removeServer, askAbout, send, onEnter, newChat, applyPreset, saveAI, testAI,
       convs, showConvs, conversationId, openConv, deleteConv, relTime,
