@@ -109,7 +109,15 @@ func fixture(t *testing.T, dir string) map[string][]string {
 		blog = append(blog, line(at(0, fmt.Sprintf("12:00:%02d", i)), "3.3.3.3", "POST /wp-login.php HTTP/1.1", 200, 3000, "-", chrome, "-"))
 	}
 	blog = append(blog, line(at(0, "12:01:00"), "3.3.3.4", "POST /api/login HTTP/1.1", 401, 50, "-", chrome, "-"),
-		line(at(0, "12:02:00"), "3.3.3.5", "GET /search?id=1%20and%20sleep(5) HTTP/1.1", 400, 50, "-", "sqlmap/1.8.3#stable (https://sqlmap.org)", "-"))
+		line(at(0, "12:02:00"), "3.3.3.5", "GET /search?id=1%20and%20sleep(5) HTTP/1.1", 400, 50, "-", "sqlmap/1.8.3#stable (https://sqlmap.org)", "-"),
+		// Dead links: a link on the site's own page, and one elsewhere;
+		// a crawler, a probe and a POST with a referer are not.
+		line(at(0, "12:05:00"), "12.12.12.12", "GET /posts/gone HTTP/1.1", 404, 90, "https://blog.example.com/about?from=menu#top", chrome, "-"),
+		line(at(0, "12:05:30"), "12.12.12.13", "GET /old-guide?utm=1 HTTP/1.1", 410, 90, "https://www.zhihu.com/question/1", phone, "-"),
+		line(at(0, "12:06:00"), "66.249.1.1", "GET /gone-too HTTP/1.1", 404, 90, "https://blog.example.com/", "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)", "-"),
+		line(at(0, "12:06:10"), "12.12.12.14", "GET /.git/config HTTP/1.1", 404, 90, "https://blog.example.com/", chrome, "-"),
+		line(at(0, "12:06:20"), "12.12.12.15", "POST /form HTTP/1.1", 404, 90, "https://blog.example.com/contact", chrome, "-"),
+		line(at(0, "12:06:30"), "12.12.12.16", "GET /x HTTP/1.1", 404, 90, "blog.example.com", chrome, "-"))
 
 	shop := []string{
 		line(at(0, "13:00:00"), "1.1.1.1", "GET / HTTP/1.1", 200, 1000, "-", chrome, "-"),
@@ -210,6 +218,12 @@ func TestScriptMatchesCounter(t *testing.T) {
 		if !hasItem(blog.Top["bot"], name) {
 			t.Errorf("bot %q missing from %+v", name, blog.Top["bot"])
 		}
+	}
+	if got := blog.Top["dead"]; len(got) != 3 || !hasItem(got, "/posts/gone ← /about") || !hasItem(got, "/old-guide ← www.zhihu.com") || !hasItem(got, "/x ← /") {
+		t.Fatalf("dead links = %+v", got)
+	}
+	if got := today.Top["dead"]; !hasItem(got, "blog.example.com/posts/gone ← /about") {
+		t.Fatalf("dead links, all sites = %+v", got)
 	}
 	if got := server.Range(1).Sites[All].Top["leak"]; len(got) != 1 || got[0].Value != "200 blog.example.com/.env" {
 		t.Fatalf("leak = %+v", got)

@@ -84,8 +84,9 @@ type request struct {
 	status                                  int
 	bytes                                   int64
 	bot, page, sensitive, inject, login     bool
-	leak                                    bool
+	leak, dead                              bool
 	botName, refHost, device, dir           string
+	deadFrom                                string // where a dead link was followed from
 }
 
 // classify applies the rules to a request. path has no query; target is
@@ -140,5 +141,26 @@ func classify(site, method, target string, status int, ref, ua string) request {
 	r.sensitive = !r.login && status >= 400 && status < 500 && sensitiveRe.MatchString(lp)
 	r.leak = status == 200 && secretRe.MatchString(lp)
 	r.inject = injectRe.MatchString(lower(target))
+	// A dead link: a person followed a link (there is a referer) to an
+	// address that is gone. Probes and attacks are not links.
+	if !r.bot && method == "GET" && (status == 404 || status == 410) && !r.sensitive && !r.inject && ref != "-" && ref != "" {
+		r.dead = true
+		r.deadFrom = r.refHost
+		if r.refHost == "（站内跳转）" { // the page of this site with the link
+			from := schemeRe.ReplaceAllString(ref, "")
+			if i := strings.IndexAny(from, "/?#"); i >= 0 {
+				from = from[i:]
+			} else {
+				from = ""
+			}
+			if i := strings.IndexAny(from, "?#"); i >= 0 {
+				from = from[:i]
+			}
+			if from == "" {
+				from = "/"
+			}
+			r.deadFrom = from
+		}
+	}
 	return r
 }

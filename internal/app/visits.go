@@ -171,7 +171,7 @@ func (a *App) enrichVisits(ctx context.Context, rep *visits.Report) {
 
 var visitTopNames = map[string]string{
 	"page": "受访页面", "dir": "访问目录", "referer": "来源", "ip": "访客 IP", "status": "状态码", "bot": "爬虫和程序",
-	"device": "设备", "errpage": "出错的地址", "leak": "不该能访问却返回了 200 的敏感文件", "region": "访客地区（按 IP 数）", "isp": "运营商（按 IP 数）",
+	"device": "设备", "errpage": "出错的地址", "dead": "死链（有人点链接打开却是 404，← 后面是链接所在的页面或网站）", "leak": "不该能访问却返回了 200 的敏感文件", "region": "访客地区（按 IP 数）", "isp": "运营商（按 IP 数）",
 }
 
 func countsText(c visits.Counts) string {

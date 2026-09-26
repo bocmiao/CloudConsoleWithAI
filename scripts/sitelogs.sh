@@ -40,7 +40,7 @@
 #   H  网站 小时 请求 PV                              今天每小时
 #   S  R 网站 请求 PV UV IP 爬虫 流量 4xx 5xx         整段时间（UV、IP 按整段去重）
 #   T  R 网站 类别 次数 值                            排行（page dir referer ip status bot
-#                                                     device errpage leak，每类前 20）
+#                                                     device errpage dead leak，每类前 20）
 #   I  R IP 请求 PV 4xx 5xx POST 不同地址 敏感探测 注入 登录失败 每分钟峰值 最早 最晚 爬虫名 浏览器标识
 #   P  R IP path|site 次数 值                         这个 IP 最常访问的地址和网站（前 5）
 #   A  R 网站 visitor PV 访客IP                       有浏览的访客（每个网站前 3000，用来统计地区）
@@ -196,6 +196,15 @@ function classify(   lua, lp, h, rest, i) {
 	sensitive = (!login && status >= 400 && status < 500 && lp ~ /wp-login\.php|xmlrpc\.php|\/wp-admin|\/\.env|\/\.git|\/\.svn|\/\.ds_store|\/\.aws|\/\.vscode|\/\.idea|phpmyadmin|\/pma\/|\/adminer|\/manager\/html|\/cgi-bin\/|\/vendor\/phpunit|\/actuator|\/solr\/|\/hnap1|\/boaform|\/phpinfo|\/server-status|\/druid\/|\/nacos|\/_ignition|\/owa\/|\/autodiscover|\/id_rsa|\/web\.config|\/wp-config|\/config\.php|\/shell|\/eval-stdin|\.sql$|\.bak$|\.swp$/) # rule sensitive
 	leak = (status == 200 && lp ~ /\/\.env|\/\.git\/|\/\.svn\/|\/id_rsa|\.sql$|\.bak$|\/\.aws\/|\/wp-config\.php.|\/phpinfo/) # rule secret
 	inject = (tolower(target) ~ /\.\.\/|\.\.%2f|%2e%2e|union(\+|%20| )+(all(\+|%20| )+)?select|<script|%3cscript|\/etc\/passwd|etc%2fpasswd|\$\{jndi|%24%7bjndi|base64_decode|eval\(|eval%28|\/bin\/(ba)?sh|wget(\+|%20)http|curl(\+|%20)http|information_schema|sleep\([0-9]|sleep%28[0-9]|benchmark\(/) # rule inject
+	dead = (!bot && method == "GET" && (status == 404 || status == 410) && !sensitive && !inject && ref != "-" && ref != "")
+	deadfrom = refhost
+	if (dead && refhost == "（站内跳转）") {
+		deadfrom = ref
+		sub(/^[a-zA-Z]+:\/\//, "", deadfrom)
+		sub(/^[^\/?#]*/, "", deadfrom)
+		sub(/[?#].*/, "", deadfrom)
+		if (deadfrom == "") deadfrom = "/"
+	}
 }
 function dayc(k,   key, u) {
 	key = k SUBSEP day
@@ -221,6 +230,7 @@ function rangec(r, k,   key, pre, u) {
 	T[key, "dir", pre dir]++
 	if (status >= 400) T[key, "errpage", status " " pre path]++
 	if (leak) T[key, "leak", status " " pre path]++
+	if (dead) T[key, "dead", pre path " ← " deadfrom]++
 	if (bot) { RBO[key]++; T[key, "bot", botname]++; return }
 	T[key, "ip", ip]++
 	if (!page) return

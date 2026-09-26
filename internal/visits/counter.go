@@ -166,6 +166,9 @@ func count(a *acc, r request, k string) {
 	if r.leak {
 		a.bump("leak", itoa(r.status)+" "+prefix+r.path)
 	}
+	if r.dead {
+		a.bump("dead", prefix+r.path+" ← "+r.deadFrom)
+	}
 	if r.bot {
 		a.c.Bots++
 		a.bump("bot", r.botName)

@@ -88,7 +88,7 @@ type SiteRange struct {
 }
 
 // Rankings in each SiteRange; region and isp are added by Locate.
-var Kinds = []string{"page", "dir", "referer", "ip", "status", "bot", "device", "errpage", "leak", "region", "isp"}
+var Kinds = []string{"page", "dir", "referer", "ip", "status", "bot", "device", "errpage", "dead", "leak", "region", "isp"}
 
 // IPProfile is what one IP did over a range, across all sites.
 type IPProfile struct {

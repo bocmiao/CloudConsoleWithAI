@@ -751,6 +751,8 @@ const VisitStats = {
       const t = total.value;
       if (t.requests > 50 && t.e5xx / t.requests > 0.01) out.push({ level: 'warn', text: `服务器出错（5xx）${fmtCount(t.e5xx)} 次，占请求的 ${(t.e5xx / t.requests * 100).toFixed(1)}%`, go: 'content' });
       if (t.requests > 50 && t.bots / t.requests > 0.5) out.push({ level: 'info', text: `爬虫和程序占了请求的 ${Math.round(t.bots / t.requests * 100)}%` , go: 'visitors' });
+      const dead = top('dead');
+      if (dead.length) out.push({ level: 'info', text: `发现 ${dead.length >= 20 ? '20 多' : dead.length} 个死链：有人点链接打开却是 404`, go: 'content' });
       for (const n of d.notes || []) out.push({ level: 'info', text: n });
       return out;
     });
@@ -802,10 +804,20 @@ const VisitStats = {
       emit('ask', `分析一下 IP ${p.ip}（${p.place || ''} ${p.isp || ''}）最近${rangeText.value}在我网站上的行为：它访问了什么、频率如何、是不是扫描或攻击，要不要封禁？`);
     }
     const shortUA = ua => (ua || '').length > 90 ? ua.slice(0, 90) + '…' : (ua || '—');
+    // "blog.x.com/old ← /about": the missing address, and the page (or the
+    // other website) whose link led there.
+    const deadLinks = computed(() => top('dead').map(it => {
+      const [to, from] = it.value.split(' ← ');
+      return { value: to, count: it.count, note: from ? (from.startsWith('/') ? '站内 ' + from : '来自 ' + from) : '' };
+    }));
+    function askDead() {
+      const list = top('dead').slice(0, 15).map(it => `${it.value}（${it.count} 次）`).join('\n');
+      emit('ask', `我的网站有这些死链（有人点链接打开却是 404，← 后面是链接所在的页面或网站）：\n${list}\n帮我看看这些地址原来是什么、应该怎么修（改链接、做 301 跳转还是恢复页面）。`);
+    }
     return { sources, source, days, site, section, series, data, loading, error, load, siteNames, range, cur, total, top, siteInfo, siteRows,
       ips, risky, ipRows, counts, judgement, verdictOf, blockable, blockedSet, picked, togglePick, pickSuggested, judge, judging, showAll,
       block, unblock, plan, planning, planDone, blocked, drawer, openIP, alerts, trend, dayRows, hourRows, delta, yesterday, pct, SERIES, sourceTitle,
-      askAI, askIP, shortUA, VISIT_RANGES, VISIT_SECTIONS, RISK, VERDICT, fmtCount, fmtBytes, whenText };
+      askAI, askIP, shortUA, deadLinks, askDead, VISIT_RANGES, VISIT_SECTIONS, RISK, VERDICT, fmtCount, fmtBytes, whenText };
   },
   template: `
   <div class="vs">
@@ -945,6 +957,10 @@ const VisitStats = {
             <rank-list :items="top('dir')" :total="total.requests"></rank-list></section>
           <section class="card"><header class="card-head"><h3>出错的地址</h3><span class="small tertiary">404 多半是扫描或死链</span></header>
             <rank-list :items="top('errpage')" :total="total.e4xx + total.e5xx" empty="没有出错的请求"></rank-list></section>
+          <section class="card"><header class="card-head"><h3>死链</h3>
+              <span class="small tertiary">有人点链接打开却是 404，旁边是链接在哪</span>
+              <button class="link small" v-if="deadLinks.length" @click="askDead">让 AI 看看</button></header>
+            <rank-list :items="deadLinks" empty="没有发现死链"></rank-list></section>
           <section class="card"><header class="card-head"><h3>状态码</h3></header>
             <rank-list :items="top('status')" :total="total.requests"></rank-list></section>
         </div>
