@@ -139,7 +139,15 @@ type COSDetail struct {
 	Errors       map[string]string  `json:"errors,omitempty"` // settings that could not be read
 }
 
-var sensitiveRe = regexp.MustCompile(`(?i)(\.(sql|sql\.gz|sql\.zip|bak|backup|dump|db|sqlite3?|tar|tar\.gz|tgz|zip|7z|rar|pem|key|p12|pfx)$|(^|/)\.env|(^|/)id_rsa|wp-config\.php|(^|/)(backup|backups|dump)/)`)
+var sensitiveRe = regexp.MustCompile(`(?i)(\.(sql|sql\.gz|sql\.zip|bak|backup|dump|db|sqlite3?|pem|key|p12|pfx)$|(^|/)\.env|(^|/)id_rsa|wp-config\.php|(^|/)(backup|backups|dump)/)`)
+
+// Archives are what public buckets are often for (downloads); they count
+// only when the name says they are a backup of a site or a database.
+var sensitiveArchiveRe = regexp.MustCompile(`(?i)(backup|bak|dump|mysql|database|wwwroot|(^|[/_.-])(db|site|www)([/_.-]|$)).*\.(tar|tar\.gz|tgz|zip|7z|rar)$`)
+
+func sensitiveKey(key string) bool {
+	return sensitiveRe.MatchString(key) || sensitiveArchiveRe.MatchString(key)
+}
 
 // policyPublic says what a bucket policy lets anyone (not signed in) do.
 func policyPublic(policy string) string {
@@ -360,7 +368,7 @@ func (a *App) cosFindings(ctx context.Context, c *tencent.Client, d COSDetail) [
 		if err == nil {
 			var hits []string
 			for _, o := range l.Objects {
-				if sensitiveRe.MatchString(o.Key) && !strings.HasSuffix(o.Key, "/") {
+				if sensitiveKey(o.Key) && !strings.HasSuffix(o.Key, "/") {
 					hits = append(hits, o.Key)
 				}
 			}

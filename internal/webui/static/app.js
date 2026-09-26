@@ -101,6 +101,7 @@ const ICONS = {
   globe: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM3.6 9h16.8M3.6 15h16.8M12 3c-2.4 2.6-3.6 5.6-3.6 9s1.2 6.4 3.6 9M12 3c2.4 2.6 3.6 5.6 3.6 9s-1.2 6.4-3.6 9',
   bolt: 'M13 3L5 13.5h6L10 21l8-10.5h-6z',
   cloud: 'M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 8.6 4.5 4.5 0 0 1 17.5 18z',
+  bucket: 'M4 7h16l-1.6 12.2a2 2 0 0 1-2 1.8H7.6a2 2 0 0 1-2-1.8zM4 7c0-1.7 3.6-3 8-3s8 1.3 8 3',
   bell: 'M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15zM10 20.5a2 2 0 0 0 4 0',
 };
 
@@ -2091,6 +2092,842 @@ const DnsPage = {
   </div>`,
 };
 
+// 存储: COS buckets — their files, their settings, and how exposed each
+// one is. Files change at once (and go in the log); a setting saved here
+// runs as a one-step checklist, so it can be undone.
+const COS_REGIONS = [
+  ['ap-beijing', '北京'], ['ap-nanjing', '南京'], ['ap-shanghai', '上海'], ['ap-guangzhou', '广州'], ['ap-chengdu', '成都'], ['ap-chongqing', '重庆'],
+  ['ap-hongkong', '中国香港'], ['ap-singapore', '新加坡'], ['ap-tokyo', '东京'], ['ap-seoul', '首尔'], ['ap-bangkok', '曼谷'], ['ap-jakarta', '雅加达'],
+  ['na-siliconvalley', '硅谷'], ['na-ashburn', '弗吉尼亚'], ['eu-frankfurt', '法兰克福'], ['sa-saopaulo', '圣保罗'],
+];
+const COS_REGION_NAME = Object.fromEntries(COS_REGIONS);
+const regionText = r => COS_REGION_NAME[r] || r;
+const COS_ACL = {
+  private: { text: '私有读写', note: '只有你和你授权的账号能访问；分享文件用临时链接。', cls: 'on' },
+  'public-read': { text: '公有读私有写', note: '任何人都能下载和列出文件，适合放网站图片；建议同时开启防盗链。', cls: 'warn' },
+  'public-read-write': { text: '公有读写', note: '任何人都能上传、覆盖和删除文件，非常危险。', cls: 'crit' },
+};
+const COS_CLASS = { STANDARD: '标准', STANDARD_IA: '低频', ARCHIVE: '归档', DEEP_ARCHIVE: '深度归档', INTELLIGENT_TIERING: '智能分层',
+  MAZ_STANDARD: '多 AZ 标准', MAZ_STANDARD_IA: '多 AZ 低频' };
+const COS_LIFE_TEMPLATES = [
+  { id: 'abort-7d', text: '清理没传完的碎片', note: '上传中断留下的分块 7 天后清理，它们也按存储量收费', rule: { prefix: '', abortDays: 7 } },
+  { id: 'backup-30d', text: '备份只留 30 天', note: 'backup/ 里的文件 30 天后删除', rule: { prefix: 'backup/', expireDays: 30 } },
+  { id: 'logs-archive', text: '日志转归档', note: 'logs/ 里的文件 30 天后转归档存储（便宜很多），180 天后删除', rule: { prefix: 'logs/', archiveDays: 30, expireDays: 180 } },
+  { id: 'cold-ia', text: '不常用的转低频', note: '30 天后转低频存储，适合很少读取的资料', rule: { prefix: '', iaDays: 30 } },
+  { id: 'old-versions', text: '历史版本 30 天后删除', note: '开了版本控制才有用，免得旧版本一直收费', rule: { prefix: '', noncurrentDays: 30 } },
+];
+const COS_LIFE_FIELDS = [
+  ['iaDays', '转低频存储'], ['archiveDays', '转归档存储'], ['deepDays', '转深度归档'], ['expireDays', '删除文件'],
+  ['noncurrentDays', '删除历史版本'], ['abortDays', '清理上传碎片'],
+];
+const COS_METHODS = ['GET', 'PUT', 'POST', 'DELETE', 'HEAD'];
+const COS_SECTIONS = [{ id: 'files', text: '文件' }, { id: 'settings', text: '设置' }, { id: 'security', text: '安全与用量' }];
+const COS_LINK_TIMES = [{ s: 3600, text: '1 小时' }, { s: 86400, text: '1 天' }, { s: 7 * 86400, text: '7 天' }];
+const COS_MAX_UPLOAD = 5 * 1024 * 1024 * 1024;
+const shortBucket = n => String(n).replace(/-\d+$/, '');
+const cosMemo = new Map(); // bucket → detail, shown at once when coming back
+const cosLines = s => String(s || '').split(/[\n,，\s]+/).map(x => x.trim()).filter(Boolean);
+const cosSleep = ms => new Promise(r => setTimeout(r, ms));
+
+const StoragePage = {
+  props: { configured: Boolean, active: Boolean },
+  emits: ['settings', 'ask'],
+  setup(props, { emit }) {
+    const list = ref(null); // {buckets, appId}
+    const listError = ref('');
+    const listLoading = ref(false);
+    const name = ref(pref('miao.cosBucket', ''));
+    const section = ref(pref('miao.cosSection', 'files'));
+    const bucket = computed(() => (list.value && list.value.buckets.find(b => b.name === name.value)) || null);
+    const where = () => ({ bucket: bucket.value.name, region: bucket.value.region });
+    const q = s => `bucket=${encodeURIComponent(bucket.value.name)}&region=${encodeURIComponent(bucket.value.region)}${s || ''}`;
+    watch(section, v => setPref('miao.cosSection', v));
+
+    async function loadBuckets(pick) {
+      if (!props.configured) return;
+      listLoading.value = true;
+      try {
+        const r = await api('GET', '/api/cos/buckets');
+        list.value = r; listError.value = '';
+        const want = pick || name.value;
+        if (r.buckets.some(b => b.name === want)) { if (name.value !== want) name.value = want; }
+        else name.value = r.buckets.length ? r.buckets[0].name : '';
+      } catch (e) { listError.value = e.message; } finally { listLoading.value = false; }
+    }
+    watch(() => props.active, v => { if (v) list.value ? (loadBuckets(), bucket.value && loadDetail()) : loadBuckets(); }, { immediate: true });
+    watch(() => props.configured, v => { if (v) loadBuckets(); });
+    watch(bucket, (b, old) => {
+      if (b && old && b.name === old.name) return;
+      if (b) setPref('miao.cosBucket', b.name);
+      detail.value = b ? cosMemo.get(b.name) || null : null;
+      usage.value = null; prefix.value = ''; files.value = null; picked.value = []; filter.value = '';
+      if (b) { loadDetail(); loadFiles(); if (section.value === 'security') loadUsage(); }
+    });
+    watch(section, v => { if (v === 'security' && bucket.value && !usage.value) loadUsage(); });
+
+    // ---- The bucket's settings ----
+    const detail = ref(null), detailError = ref(''), detailLoading = ref(false);
+    let dseq = 0;
+    async function loadDetail() {
+      if (!bucket.value) return;
+      const n = ++dseq, b = bucket.value.name;
+      detailLoading.value = true;
+      try {
+        const d = await api('GET', '/api/cos/bucket?' + q());
+        if (n !== dseq) return;
+        cosMemo.set(b, d); detail.value = d; detailError.value = '';
+      } catch (e) { if (n === dseq) detailError.value = e.message; } finally { if (n === dseq) detailLoading.value = false; }
+    }
+    const acl = computed(() => (detail.value && detail.value.acl && detail.value.acl.canned) || (bucket.value && bucket.value.acl) || '');
+    const readable = computed(() => /^public-read/.test(acl.value) || !!(detail.value && detail.value.policyPublic));
+    const grants = computed(() => Object.keys((detail.value && detail.value.acl && detail.value.acl.grants) || {}).length);
+    const errOf = k => (detail.value && detail.value.errors && detail.value.errors[k]) || '';
+    const refererText = computed(() => {
+      const r = detail.value && detail.value.referer;
+      if (!r || r.status !== 'Enabled') return '没有开启：任何网站都能引用这个桶的文件';
+      return `${r.type === 'Black-List' ? '黑名单' : '白名单'}：${(r.domains || []).join('、')}；${r.emptyRefer === 'Deny' ? '拒绝' : '允许'}空 Referer`;
+    });
+    const policyCount = computed(() => {
+      const p = detail.value && detail.value.policy;
+      if (!p) return 0;
+      try { const j = JSON.parse(p); return ((j.Statement || j.statement) || []).length; } catch { return 1; }
+    });
+    const levelIconOf = l => l === 'crit' ? 'alert' : l === 'warn' ? 'warn' : 'info';
+
+    // A change runs at once; the last one stays on the page with its undo.
+    const recent = ref(null); // {bucket, plan}
+    const saving = ref(false);
+    const step0 = computed(() => recent.value && recent.value.plan.stepList ? recent.value.plan.stepList[0] : null);
+    async function change(body, opts = {}) {
+      if (!bucket.value && !opts.bucket) return null;
+      if (opts.confirm && !confirm(opts.confirm)) return null;
+      saving.value = true; ed.error = '';
+      try {
+        const target = opts.bucket || where();
+        const p = await api('POST', '/api/cos/plan', { ...target, ...body, run: true });
+        ed.kind = '';
+        recent.value = { bucket: target.bucket, plan: p };
+        return await follow(p, opts.quiet);
+      } catch (e) {
+        if (ed.kind) ed.error = e.message; else notify(e.message, 'error');
+        return null;
+      } finally { saving.value = false; }
+    }
+    async function follow(p, quiet) {
+      for (let i = 0; i < 150 && p.status === 'running'; i++) {
+        await cosSleep(i < 5 ? 400 : 1000);
+        try { p = await api('GET', `/api/plans/${p.id}`); } catch { /* try again */ }
+        if (recent.value && recent.value.plan.id === p.id) recent.value = { ...recent.value, plan: p };
+      }
+      const s = (p.stepList || [])[0] || {};
+      if (!quiet) {
+        if (s.status === 'done') notify('已保存');
+        else {
+          const why = (s.log || []).filter(Boolean).slice(-1)[0];
+          notify(((STEP_STATUS[s.status] || {}).text || '没有完成') + (why ? '：' + why : ''), 'error');
+        }
+      }
+      await refreshAfter();
+      return s.status === 'done' ? p : null;
+    }
+    // After a change: the list (a bucket may be gone, or safer now), then
+    // the open bucket's settings if it is still the one shown.
+    async function refreshAfter() {
+      const before = name.value;
+      await loadBuckets();
+      if (bucket.value && bucket.value.name === before) await loadDetail();
+    }
+    async function undoRecent() {
+      const r = recent.value;
+      if (!r || !confirm(`撤销「${step0.value.summary}」？`)) return;
+      saving.value = true;
+      try {
+        recent.value = { ...r, plan: await api('POST', `/api/plans/${r.plan.id}/steps/0/undo`) };
+        notify('已撤销');
+        await refreshAfter();
+      } catch (e) { notify(e.message, 'error'); } finally { saving.value = false; }
+    }
+
+    // ---- Editors, one sheet each ----
+    const ed = reactive({ kind: '', error: '', acl: 'private', type: 'white', domains: '', allowEmpty: true,
+      cors: [], life: [], keep: [], fixed: [], index: 'index.html', errorPage: '', https: false, policy: '',
+      short: '', region: 'ap-guangzhou', template: '', confirmName: '' });
+    function openEd(kind) {
+      const d = detail.value || {};
+      Object.assign(ed, { kind, error: '' });
+      if (kind === 'acl') ed.acl = acl.value || 'private';
+      if (kind === 'referer') {
+        const r = d.referer || {};
+        Object.assign(ed, { type: r.type === 'Black-List' ? 'black' : 'white', domains: (r.domains || []).join('\n'), allowEmpty: r.emptyRefer !== 'Deny' });
+      }
+      if (kind === 'cors') ed.cors = (d.cors || []).map(r => ({ origins: (r.origins || []).join('\n'), methods: [...(r.methods || [])],
+        headers: (r.headers || []).join('\n'), expose: (r.expose || []).join('\n'), maxAge: r.maxAge || 600 }));
+      if (kind === 'lifecycle') {
+        // Days not set show as empty boxes, not 0.
+        ed.life = (d.lifecycle || []).filter(r => r.editable).map(r => {
+          const o = { ...r };
+          for (const [k] of COS_LIFE_FIELDS) o[k] = r[k] || null;
+          return o;
+        });
+        ed.fixed = (d.lifecycle || []).filter(r => !r.editable);
+        ed.keep = ed.fixed.map(r => r.id);
+      }
+      if (kind === 'website') {
+        const w = d.website || {};
+        Object.assign(ed, { index: w.index || 'index.html', errorPage: w.error || '', https: !!w.https });
+      }
+      if (kind === 'policy') ed.policy = d.policy ? prettyJSON(d.policy) : '';
+      if (kind === 'create') Object.assign(ed, { short: '', region: bucket.value ? bucket.value.region : 'ap-guangzhou', acl: 'private', template: 'abort-7d' });
+      if (kind === 'deleteBucket') ed.confirmName = '';
+    }
+    const closeEd = () => { if (!saving.value) ed.kind = ''; };
+    watch(() => JSON.stringify([ed.acl, ed.domains, ed.cors, ed.life, ed.policy, ed.short]), () => { if (!saving.value) ed.error = ''; });
+    function prettyJSON(s) { try { return JSON.stringify(JSON.parse(s), null, 2); } catch { return s; } }
+
+    function saveACL() {
+      const risky = ed.acl === 'public-read-write' ? '改成「公有读写」后，任何人都能上传、覆盖和删除这个桶里的文件。确定吗？'
+        : ed.acl === 'private' && /^public/.test(acl.value) ? '改成私有后，网站里直接引用这个桶文件的地方会显示不出来。确定吗？' : '';
+      change({ op: 'acl', acl: ed.acl }, { confirm: risky });
+    }
+    function saveReferer(on) {
+      const domains = cosLines(ed.domains);
+      if (on && !domains.length) { ed.error = '至少填一个域名'; return; }
+      change({ op: 'referer', status: on ? 'on' : 'off', refererType: ed.type, domains, allowEmpty: ed.allowEmpty });
+    }
+    const corsTemplate = () => ({ origins: '', methods: ['GET', 'PUT', 'POST', 'HEAD'], headers: '*', expose: 'ETag', maxAge: 600 });
+    function saveCORS() {
+      const rules = ed.cors.map(r => ({ origins: cosLines(r.origins), methods: r.methods, headers: cosLines(r.headers), expose: cosLines(r.expose), maxAge: Number(r.maxAge) || 0 }));
+      if (rules.some(r => !r.origins.length || !r.methods.length)) { ed.error = '每条规则都要填来源和至少一种方法'; return; }
+      change({ op: 'cors', cors: rules });
+    }
+    function addLife(t) {
+      const base = { id: '', prefix: '', enabled: true, iaDays: null, archiveDays: null, deepDays: null, expireDays: null, noncurrentDays: null, abortDays: null };
+      let id = t ? t.id : 'rule';
+      for (let i = 2; ed.life.some(r => r.id === id) || ed.fixed.some(r => r.id === id); i++) id = (t ? t.id : 'rule') + '-' + i;
+      ed.life.push({ ...base, ...(t ? t.rule : {}), id });
+    }
+    function saveLife() {
+      const rules = ed.life.map(r => {
+        const o = { id: r.id.trim(), prefix: r.prefix.trim(), enabled: r.enabled };
+        for (const [k] of COS_LIFE_FIELDS) if (Number(r[k]) > 0) o[k] = Number(r[k]);
+        return o;
+      });
+      if (rules.some(r => Object.keys(r).length === 3)) { ed.error = '每条规则至少设置一项，比如多少天后删除'; return; }
+      const deletes = rules.some(r => r.enabled && (r.expireDays || r.noncurrentDays));
+      change({ op: 'lifecycle', lifecycle: rules, keep: ed.keep },
+        { confirm: deletes ? '有规则会到期删除文件，删掉的文件找不回（撤销只能恢复规则本身）。确定保存吗？' : '' });
+    }
+    const lifeText = r => {
+      const parts = COS_LIFE_FIELDS.filter(([k]) => Number(r[k]) > 0).map(([k, t]) => `${r[k]} 天后${t}`);
+      return (r.prefix ? r.prefix : '整个桶') + '：' + (parts.join('，') || '还没设置');
+    };
+    const setVersioning = on => change({ op: 'versioning', status: on ? 'on' : 'suspend' },
+      { confirm: on ? '' : '暂停后，之后覆盖和删除的文件不再保留历史版本。确定吗？' });
+    const setEncryption = on => change({ op: 'encryption', status: on ? 'on' : 'off' });
+    const saveWebsite = on => change({ op: 'website', status: on ? 'on' : 'off', index: ed.index.trim(), error: ed.errorPage.trim(), https: ed.https });
+    function savePolicy(remove) {
+      const p = remove ? '' : ed.policy.trim();
+      if (p) { try { JSON.parse(p); } catch { ed.error = '存储桶策略要是 JSON，检查一下括号和引号'; return; } }
+      change({ op: 'policy', policy: p }, { confirm: remove ? '删除存储桶策略后，靠它授权访问的账号和程序会访问不了。确定吗？'
+        : '存储桶策略改错可能让文件被公开，或者让你的程序访问不了（可以撤销）。确定保存吗？' });
+    }
+    const fixPolicy = () => change({ op: 'policy_public_off' }, { confirm: '去掉存储桶策略里允许任何人访问的规则？其他规则不变，可以撤销。' });
+
+    // New and deleted buckets.
+    const appId = computed(() => (list.value && list.value.appId) || '');
+    const newName = computed(() => ed.short.trim().toLowerCase() + (appId.value ? '-' + appId.value : ''));
+    async function createBucket() {
+      if (!/^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/.test(ed.short.trim())) { ed.error = '名字只能用小写字母、数字和 -，不能以 - 开头或结尾'; return; }
+      if (!appId.value) { ed.error = '读不到账号的 APPID，请稍后再试'; return; }
+      const target = { bucket: newName.value, region: ed.region };
+      const t = COS_LIFE_TEMPLATES.find(x => x.id === ed.template);
+      const ok = await change({ op: 'create', acl: ed.acl }, { bucket: target });
+      if (!ok) return;
+      await loadBuckets(target.bucket);
+      if (t) {
+        const life = await change({ op: 'lifecycle', lifecycle: [{ id: t.id, enabled: true, ...t.rule }], keep: [] }, { bucket: target, quiet: true });
+        notify(life ? `已新建 ${target.bucket}，并设置了「${t.text}」` : `已新建 ${target.bucket}，但生命周期规则没有设置成功`, life ? 'ok' : 'error');
+      }
+    }
+    async function deleteBucket() {
+      if (ed.confirmName.trim() !== bucket.value.name) { ed.error = '输入的名字不对'; return; }
+      const ok = await change({ op: 'delete' });
+      if (ok) { cosMemo.delete(ed.confirmName.trim()); await loadBuckets(); }
+    }
+
+    // ---- Security and usage ----
+    const usage = ref(null), usageLoading = ref(false);
+    async function loadUsage() {
+      if (!bucket.value) return;
+      const b = bucket.value.name;
+      usageLoading.value = true;
+      try {
+        const u = await api('GET', '/api/cos/usage?' + q());
+        if (bucket.value && bucket.value.name === b) usage.value = u;
+      } catch (e) { usage.value = { available: false, note: e.message, hourly: [] }; } finally { usageLoading.value = false; }
+    }
+    const trafficChange = computed(() => {
+      const u = usage.value;
+      return u && u.trafficPrev > 0 ? Math.round((u.traffic24h - u.trafficPrev) / u.trafficPrev * 100) : null;
+    });
+    function fix(f) {
+      if (f.fix === 'private') { ed.acl = 'private'; saveACL(); }
+      else if (f.fix === 'referer') { openEd('referer'); section.value = 'settings'; }
+      else if (f.fix === 'policy_public_off') fixPolicy();
+      else if (f.fix === 'versioning') setVersioning(true);
+      else if (f.fix === 'cors') { openEd('cors'); section.value = 'settings'; }
+    }
+    const fixText = { private: '改为私有', referer: '设置防盗链', policy_public_off: '去掉公开规则', versioning: '开启版本控制', cors: '修改跨域规则' };
+    function showFile(k) {
+      section.value = 'files';
+      const dir = k.includes('/') ? k.slice(0, k.lastIndexOf('/') + 1) : '';
+      openPrefix(dir, k);
+    }
+    const ask = () => emit('ask', `帮我检查一下 COS 存储桶 ${bucket.value.name}（${regionText(bucket.value.region)}）的安全设置和用量：访问权限、防盗链、存储桶策略、跨域规则、生命周期合不合理，有没有文件被公开的风险，流量有没有异常？需要修改的话给我一份清单。`);
+
+    // ---- Files ----
+    const prefix = ref('');
+    const files = ref(null); // {prefix, entries, next}
+    const filesLoading = ref(false), filesError = ref('');
+    const filter = ref('');
+    const picked = ref([]); // keys
+    let fseq = 0, flash = '';
+    async function loadFiles(more) {
+      if (!bucket.value) return;
+      const n = ++fseq, p = prefix.value;
+      filesLoading.value = true;
+      try {
+        const r = await api('GET', '/api/cos/objects?' + q(`&prefix=${encodeURIComponent(p)}${more && files.value ? '&marker=' + encodeURIComponent(files.value.next) : ''}`));
+        if (n !== fseq) return;
+        if (more && files.value) r.entries = [...files.value.entries, ...r.entries];
+        files.value = r; filesError.value = '';
+        const here = new Set(r.entries.map(e => e.key));
+        picked.value = flash && here.has(flash) ? [flash] : picked.value.filter(k => here.has(k));
+        flash = '';
+      } catch (e) { if (n === fseq) filesError.value = e.message; } finally { if (n === fseq) filesLoading.value = false; }
+    }
+    function openPrefix(p, select) { prefix.value = p; files.value = null; picked.value = []; filter.value = ''; flash = select || ''; loadFiles(); }
+    const crumbs = computed(() => {
+      const parts = prefix.value.split('/').filter(Boolean);
+      return [{ p: '', text: shortBucket(name.value) }, ...parts.map((x, i) => ({ p: parts.slice(0, i + 1).join('/') + '/', text: x }))];
+    });
+    const shown = computed(() => {
+      if (!files.value) return [];
+      const k = filter.value.trim().toLowerCase();
+      return files.value.entries.filter(e => !k || e.name.toLowerCase().includes(k));
+    });
+    const pickSet = computed(() => new Set(picked.value));
+    const pickedEntries = computed(() => shown.value.filter(e => pickSet.value.has(e.key)));
+    const one = computed(() => pickedEntries.value.length === 1 ? pickedEntries.value[0] : null);
+    const allOn = computed(() => shown.value.length > 0 && shown.value.every(e => pickSet.value.has(e.key)));
+    const toggleAll = () => { picked.value = allOn.value ? [] : shown.value.map(e => e.key); };
+    function togglePick(e) { const s = new Set(picked.value); s.has(e.key) ? s.delete(e.key) : s.add(e.key); picked.value = [...s]; }
+    function openEntry(e) { if (e.folder) openPrefix(e.key); else download(e); }
+    // A click on a row picks just that one; with Ctrl or ⌘ it adds to the picks.
+    function clickRow(e, ev) {
+      if (ev.target.closest('button, a, input')) return;
+      if (ev.ctrlKey || ev.metaKey) togglePick(e); else picked.value = [e.key];
+    }
+    const cold = e => /ARCHIVE/.test(e.storageClass || '');
+
+    async function download(e) {
+      if (cold(e)) { notify(`${e.name} 在${COS_CLASS[e.storageClass] || '归档'}存储里，要先在腾讯云控制台「恢复」后才能下载`, 'error'); return; }
+      try {
+        const r = await api('POST', '/api/cos/link', { ...where(), key: e.key, expires: 600, download: true });
+        const a = document.createElement('a');
+        a.href = r.url; a.download = e.name; a.rel = 'noopener';
+        document.body.appendChild(a); a.click(); a.remove();
+        notify('正在下载 ' + e.name);
+      } catch (err) { notify(err.message, 'error'); }
+    }
+    const link = reactive({ open: false, entry: null, expires: 3600, url: '', public: '', busy: false, error: '' });
+    async function makeLink() {
+      link.busy = true; link.error = '';
+      try {
+        const r = await api('POST', '/api/cos/link', { ...where(), key: link.entry.key, expires: link.expires });
+        link.url = r.url; link.public = r.public;
+      } catch (e) { link.error = e.message; } finally { link.busy = false; }
+    }
+    function openLink(e) { Object.assign(link, { open: true, entry: e, url: '', public: '', error: '' }); makeLink(); }
+    watch(() => link.expires, () => { if (link.open) makeLink(); });
+    function copy(text, what) {
+      const done = () => notify('已复制' + what);
+      if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, () => notify(text));
+      else notify(text);
+    }
+
+    const dlg = reactive({ kind: '', name: '', entry: null, busy: false, error: '' });
+    const dlgInput = ref(null);
+    function openDlg(kind, entry) {
+      Object.assign(dlg, { kind, entry: entry || null, name: entry ? entry.name : '', busy: false, error: '' });
+      nextTick(() => { const el = dlgInput.value; if (el) { el.focus(); el.setSelectionRange(0, entry && !entry.folder ? stemOf(el.value).length : el.value.length); } });
+    }
+    async function dlgSubmit() {
+      const n = dlg.name.trim();
+      if (!n) { dlg.error = '请填写名称'; return; }
+      if (n.includes('/')) { dlg.error = '名称里不能有 /'; return; }
+      dlg.busy = true; dlg.error = '';
+      try {
+        if (dlg.kind === 'mkdir') {
+          await api('POST', '/api/cos/folder', { ...where(), key: prefix.value + n + '/' });
+          flash = prefix.value + n + '/';
+        } else {
+          const e = dlg.entry, to = prefix.value + n + (e.folder ? '/' : '');
+          if (to === e.key) { dlg.kind = ''; return; }
+          await api('POST', '/api/cos/rename', { ...where(), from: e.key, to });
+          flash = to;
+        }
+        dlg.kind = '';
+        notify(dlg.entry ? '已改名' : '已新建文件夹');
+        loadFiles();
+      } catch (e) { dlg.error = e.message; } finally { dlg.busy = false; }
+    }
+    async function remove() {
+      const items = pickedEntries.value;
+      if (!items.length) return;
+      const kept = detail.value && detail.value.versioning === 'Enabled';
+      const inside = items.some(e => e.folder) ? '文件夹里的所有文件也会一起删除。' : '';
+      if (!confirm(`删除 ${namesText(items.map(e => e.name))}？\n${inside}${kept ? '这个桶开了版本控制，删掉的文件还能在历史版本里找回。' : '删除后不能恢复。'}`)) return;
+      try {
+        const r = await api('POST', '/api/cos/delete', { ...where(), keys: items.map(e => e.key) });
+        notify(`已删除 ${namesText(items.map(e => e.name))}` + (items.some(e => e.folder) ? `（共 ${r.deleted} 个文件）` : ''));
+      } catch (e) { notify(e.message, 'error'); }
+      loadFiles();
+    }
+
+    // Uploads: one file at a time, straight into the bucket.
+    const uploads = ref([]); // {n, file, name, key, size, loaded, state: wait|up|done|error|cancelled|conflict, error, bucket, region, overwrite, xhr}
+    const fileInput = ref(null);
+    const dragging = ref(false);
+    let dragDepth = 0, upN = 0, pumping = false;
+    const hasFiles = ev => ev.dataTransfer && [...ev.dataTransfer.types].includes('Files');
+    function onDragEnter(ev) { if (hasFiles(ev) && section.value === 'files' && bucket.value) { dragDepth++; dragging.value = true; } }
+    function onDragLeave(ev) { if (hasFiles(ev)) { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) dragging.value = false; } }
+    function onDrop(ev) {
+      dragDepth = 0; dragging.value = false;
+      if (!hasFiles(ev) || section.value !== 'files' || !bucket.value) return;
+      if ([...(ev.dataTransfer.items || [])].some(it => it.webkitGetAsEntry && (it.webkitGetAsEntry() || {}).isDirectory)) {
+        notify('不能直接上传文件夹：先新建文件夹，再把里面的文件拖进去', 'error');
+        return;
+      }
+      queue([...ev.dataTransfer.files]);
+    }
+    function onPicked(ev) { queue([...ev.target.files]); ev.target.value = ''; }
+    function queue(fs) {
+      if (!bucket.value) return;
+      for (const f of fs) {
+        const u = { n: ++upN, file: f, name: f.name, key: prefix.value + f.name, size: f.size, loaded: 0, state: 'wait', error: '',
+          bucket: bucket.value.name, region: bucket.value.region, overwrite: false, xhr: null };
+        if (f.size > COS_MAX_UPLOAD) Object.assign(u, { state: 'error', error: '超过 5 GB，请用腾讯云的 COSBrowser 上传' });
+        uploads.value.push(u);
+      }
+      pump();
+    }
+    async function pump() {
+      if (pumping) return;
+      pumping = true;
+      for (let u; (u = uploads.value.find(x => x.state === 'wait'));) {
+        await sendOne(u);
+        if (bucket.value && bucket.value.name === u.bucket && u.key.startsWith(prefix.value) && section.value === 'files') loadFiles();
+      }
+      pumping = false;
+    }
+    function sendOne(u) {
+      return new Promise(resolve => {
+        const x = new XMLHttpRequest();
+        u.xhr = x; u.state = 'up'; u.loaded = 0;
+        x.open('PUT', `/api/cos/object?bucket=${encodeURIComponent(u.bucket)}&region=${encodeURIComponent(u.region)}&key=${encodeURIComponent(u.key)}${u.overwrite ? '&overwrite=1' : ''}`);
+        x.setRequestHeader('X-Miao', '1');
+        x.setRequestHeader('Content-Type', u.file.type || 'application/octet-stream');
+        x.upload.onprogress = e => { if (e.lengthComputable) u.loaded = e.loaded; };
+        x.onload = () => {
+          if (x.status === 200) { u.state = 'done'; u.loaded = u.size; } else {
+            let m = '', code = '';
+            try { const j = JSON.parse(x.responseText); m = j.error; code = j.code; } catch { /* not JSON */ }
+            u.state = code === 'conflict' ? 'conflict' : 'error'; u.error = m || `上传失败（${x.status}）`;
+          }
+          resolve();
+        };
+        x.onerror = () => { u.state = 'error'; u.error = '上传中断了'; resolve(); };
+        x.onabort = () => { u.state = 'cancelled'; resolve(); };
+        x.send(u.file);
+      });
+    }
+    function overwrite(u) { u.overwrite = true; u.state = 'wait'; u.error = ''; pump(); }
+    function cancelUpload(u) { if (u.state === 'wait' || u.state === 'conflict') u.state = 'cancelled'; else if (u.state === 'up' && u.xhr) u.xhr.abort(); }
+    const clearUploads = () => { uploads.value = uploads.value.filter(u => ['wait', 'up', 'conflict'].includes(u.state)); };
+    const upLeft = computed(() => uploads.value.filter(u => u.state === 'wait' || u.state === 'up').length);
+    const upClash = computed(() => uploads.value.filter(u => u.state === 'conflict').length);
+    const upPct = u => u.size ? Math.min(100, Math.round(u.loaded / u.size * 100)) : 100;
+    const upState = u => ({
+      wait: '等待中', done: '已上传', cancelled: '已取消', error: u.error, conflict: '已经有同名的文件',
+      up: u.loaded >= u.size ? '正在写入存储桶……' : `${fmtBytes(u.loaded)} / ${fmtBytes(u.size)}`,
+    }[u.state]);
+    const warnLeave = ev => { if (upLeft.value) { ev.preventDefault(); ev.returnValue = ''; } };
+    onMounted(() => window.addEventListener('beforeunload', warnLeave));
+    onUnmounted(() => window.removeEventListener('beforeunload', warnLeave));
+
+    return {
+      COS_REGIONS, COS_ACL, COS_CLASS, COS_LIFE_TEMPLATES, COS_LIFE_FIELDS, COS_METHODS, COS_SECTIONS, COS_LINK_TIMES,
+      list, listError, listLoading, name, section, bucket, loadBuckets, detail, detailError, detailLoading, loadDetail, acl, readable, grants, errOf,
+      refererText, policyCount, levelIconOf, recent, saving, step0, undoRecent, STEP_STATUS,
+      ed, openEd, closeEd, saveACL, saveReferer, corsTemplate, saveCORS, addLife, saveLife, lifeText, setVersioning, setEncryption, saveWebsite,
+      savePolicy, fixPolicy, appId, newName, createBucket, deleteBucket,
+      usage, usageLoading, loadUsage, trafficChange, fix, fixText, showFile, ask,
+      prefix, files, filesLoading, filesError, filter, picked, pickSet, pickedEntries, one, allOn, toggleAll, togglePick, clickRow, openEntry, openPrefix, loadFiles, crumbs, shown, cold,
+      download, link, openLink, copy, dlg, dlgInput, openDlg, dlgSubmit, remove,
+      uploads, fileInput, dragging, onDragEnter, onDragLeave, onDrop, onPicked, overwrite, cancelUpload, clearUploads, upLeft, upClash, upPct, upState,
+      regionText, shortBucket, fmtBytes, fileTime,
+    };
+  },
+  template: `
+  <div class="cos" @dragenter="onDragEnter" @dragleave="onDragLeave" @dragover.prevent @drop.prevent="onDrop">
+    <div class="group" v-if="!configured">
+      <div class="row"><ui-icon name="info" class="lg" style="color: var(--accent)"></ui-icon><div class="grow">存储桶在腾讯云 COS，需要先填写腾讯云密钥（子账号要有 COS 的权限）。</div><button @click="$emit('settings')">去设置</button></div>
+    </div>
+    <template v-else>
+      <div class="page-head"><p>腾讯云 COS 里的存储桶。文件的上传、改名和删除直接执行，会记在「日志」里；设置保存后马上生效，可以撤销。</p></div>
+      <div class="notice" v-if="listError"><ui-icon name="alert" class="st-crit"></ui-icon><span class="grow">{{ listError }}</span><button class="small" @click="loadBuckets()">重试</button></div>
+      <div class="notice" v-else-if="!list"><span class="spinner"></span>正在读取存储桶……</div>
+
+      <div class="cos-layout" v-if="list">
+        <!-- Buckets -->
+        <aside class="cos-side">
+          <div class="cos-side-head"><b>存储桶</b><span class="small tertiary">{{ list.buckets.length }} 个</span><span class="grow"></span>
+            <button class="plain icon-only" @click="loadBuckets()" :disabled="listLoading" title="刷新" aria-label="刷新存储桶"><ui-icon name="refresh"></ui-icon></button>
+            <button class="small" @click="openEd('create')"><ui-icon name="plus"></ui-icon>新建</button></div>
+          <select class="cos-pick" v-model="name" aria-label="存储桶" v-if="list.buckets.length">
+            <option v-for="b in list.buckets" :key="b.name" :value="b.name">{{ shortBucket(b.name) }} · {{ regionText(b.region) }}{{ b.level === 'crit' ? ' · 有风险' : '' }}</option></select>
+          <div class="cos-blist" role="listbox" aria-label="存储桶">
+            <button v-for="b in list.buckets" :key="b.name" role="option" :aria-selected="b.name === name" class="cos-bucket" :class="{ on: b.name === name }" @click="name = b.name">
+              <ui-icon name="bucket"></ui-icon>
+              <span class="grow"><span class="cos-bname">{{ shortBucket(b.name) }}</span><span class="small tertiary">{{ regionText(b.region) }}</span></span>
+              <span class="tag" :class="b.level === 'crit' ? 'crit' : b.level === 'warn' ? 'warn' : ''" v-if="b.acl">{{ (COS_ACL[b.acl] || {}).text || b.acl }}</span>
+            </button>
+          </div>
+          <div class="cos-empty small secondary" v-if="!list.buckets.length">还没有存储桶，点「新建」创建一个。</div>
+        </aside>
+
+        <!-- One bucket -->
+        <section class="cos-main" v-if="bucket">
+          <div class="cos-head">
+            <div class="grow"><h2>{{ bucket.name }}</h2>
+              <div class="small secondary">{{ regionText(bucket.region) }}（{{ bucket.region }}）<template v-if="detail"> · <span class="mono">{{ detail.host }}</span></template></div></div>
+            <span class="tag" :class="acl === 'private' ? 'on' : acl === 'public-read-write' ? 'crit' : 'warn'" v-if="acl">{{ (COS_ACL[acl] || {}).text }}</span>
+          </div>
+          <nav class="subtabs cos-tabs" role="tablist">
+            <button v-for="s in COS_SECTIONS" :key="s.id" role="tab" :aria-selected="section === s.id" :class="{ on: section === s.id }" @click="section = s.id">{{ s.text }}
+              <span class="badge crit" v-if="s.id === 'security' && detail && detail.findings.some(f => f.level === 'crit')">!</span></button>
+          </nav>
+
+          <div class="alert cos-recent" v-if="recent && recent.bucket === bucket.name && step0 && section !== 'files'"
+            :class="step0.status === 'done' || step0.status === 'undone' ? 'al-info' : step0.status === 'running' || step0.status === 'queued' ? 'al-info' : 'al-warn'">
+            <span class="spinner" v-if="step0.status === 'running' || step0.status === 'queued'"></span>
+            <ui-icon v-else :name="(STEP_STATUS[step0.status] || {}).icon || 'info'"></ui-icon>
+            <span class="grow">{{ step0.summary }}：{{ (STEP_STATUS[step0.status] || {}).text || step0.status }}
+              <span class="block small secondary" v-for="(l, i) in (step0.status !== 'done' ? step0.log || [] : [])" :key="i">{{ l }}</span></span>
+            <button class="link small" v-if="step0.status === 'done' && step0.reversible" @click="undoRecent" :disabled="saving">撤销</button>
+            <button class="plain icon-only" @click="recent = null" aria-label="关闭"><ui-icon name="close"></ui-icon></button>
+          </div>
+
+          <!-- Files -->
+          <div v-show="section === 'files'" class="cos-files">
+            <div class="cos-fbar">
+              <div class="cos-crumbs">
+                <template v-for="(c, i) in crumbs" :key="c.p"><span class="sep" v-if="i"><ui-icon name="chevron"></ui-icon></span>
+                  <button class="crumb" :class="{ last: i === crumbs.length - 1 }" @click="openPrefix(c.p)">{{ c.text }}</button></template>
+              </div>
+              <input class="cos-filter" type="search" v-model="filter" placeholder="筛选当前文件夹" aria-label="筛选当前文件夹" autocomplete="off" spellcheck="false" @keydown.esc="filter = ''">
+              <button class="plain icon-only" @click="loadFiles()" :disabled="filesLoading" title="刷新" aria-label="刷新文件"><ui-icon name="refresh"></ui-icon></button>
+            </div>
+            <div class="fm-actions cos-actions">
+              <button @click="fileInput.click()" title="上传文件（也可以把文件拖进来）"><ui-icon name="upload"></ui-icon><span class="lbl">上传</span></button>
+              <input type="file" multiple ref="fileInput" class="sr-only" tabindex="-1" aria-hidden="true" @change="onPicked">
+              <button @click="openDlg('mkdir')"><ui-icon name="folder"></ui-icon><span class="lbl">新建文件夹</span></button>
+              <span class="fm-divider"></span>
+              <button class="plain" @click="download(one)" :disabled="!one || one.folder" title="下载到电脑"><ui-icon name="download"></ui-icon><span class="lbl">下载</span></button>
+              <button class="plain" @click="openLink(one)" :disabled="!one || one.folder" title="生成分享链接"><ui-icon name="link"></ui-icon><span class="lbl">链接</span></button>
+              <button class="plain" @click="openDlg('rename', one)" :disabled="!one" title="重命名"><ui-icon name="pencil"></ui-icon><span class="lbl">重命名</span></button>
+              <button class="plain destructive" @click="remove" :disabled="!pickedEntries.length" title="删除"><ui-icon name="trash"></ui-icon><span class="lbl">删除</span></button>
+            </div>
+            <div class="group cos-list">
+              <div class="notice" v-if="filesError"><ui-icon name="alert" class="st-crit"></ui-icon><span class="grow">{{ filesError }}</span><button class="small" @click="loadFiles()">重试</button></div>
+              <div class="fm-msg tertiary" v-else-if="!files">正在读取文件……</div>
+              <div class="table-wrap" v-else>
+                <table class="table cos-table">
+                  <thead><tr>
+                    <th class="ck"><input type="checkbox" :checked="allOn" :indeterminate="picked.length > 0 && !allOn" @change="toggleAll" aria-label="全选"></th>
+                    <th>名称</th><th class="num">大小</th><th class="hide-sm">修改时间</th><th class="hide-sm">存储类型</th><th><span class="sr-only">操作</span></th></tr></thead>
+                  <tbody>
+                    <tr v-for="e in shown" :key="e.key" :class="{ on: pickSet.has(e.key) }" @click="clickRow(e, $event)">
+                      <td class="ck" @click.stop><input type="checkbox" :checked="pickSet.has(e.key)" @change="togglePick(e)" :aria-label="'选择 ' + e.name"></td>
+                      <td class="cos-name"><button class="cos-open" @click="openEntry(e)" :title="e.folder ? '打开' : '下载'"><ui-icon :name="e.folder ? 'folder' : 'file'" :class="{ dir: e.folder }"></ui-icon><span>{{ e.name }}</span></button></td>
+                      <td class="num nowrap">{{ e.folder ? '' : fmtBytes(e.size) }}</td>
+                      <td class="hide-sm nowrap">{{ e.modified ? fileTime(e.modified) : '' }}</td>
+                      <td class="hide-sm nowrap"><span :class="{ 'st-warn': cold(e) }">{{ e.folder ? '' : COS_CLASS[e.storageClass] || e.storageClass || '标准' }}</span></td>
+                      <td class="cos-ops nowrap"><template v-if="!e.folder">
+                        <button class="link small" @click="openLink(e)" :aria-label="'分享 ' + e.name">链接</button></template></td>
+                    </tr>
+                    <tr v-if="!shown.length"><td colspan="6" class="secondary cos-none">
+                      <template v-if="filter">没有名字里带「{{ filter }}」的文件</template>
+                      <template v-else>这里还没有文件，点「上传」或者把文件拖进来</template></td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="cos-more" v-if="files && files.next"><button @click="loadFiles(true)" :disabled="filesLoading">{{ filesLoading ? '正在读取……' : '加载更多' }}</button></div>
+            </div>
+            <div class="small tertiary cos-foot" v-if="files">{{ files.entries.length }}{{ files.next ? '+' : '' }} 项<template v-if="picked.length"> · 已选 {{ picked.length }} 项</template>
+              <template v-if="detail && detail.versioning === 'Enabled'"> · 开了版本控制，覆盖和删除的文件能找回</template></div>
+            <div class="fm-drop cos-drop" v-if="dragging"><ui-icon name="upload" class="lg"></ui-icon>松开鼠标，上传到 {{ shortBucket(name) }}/{{ prefix }}</div>
+          </div>
+
+          <!-- Settings -->
+          <div v-show="section === 'settings'">
+            <div class="notice" v-if="detailError && !detail"><ui-icon name="alert" class="st-crit"></ui-icon><span class="grow">{{ detailError }}</span><button class="small" @click="loadDetail">重试</button></div>
+            <div class="notice" v-else-if="!detail"><span class="spinner"></span>正在读取设置……</div>
+            <template v-else>
+              <div class="group-title">访问</div>
+              <div class="group cos-set">
+                <div class="row"><div class="grow"><div>访问权限</div><div class="small tertiary">{{ errOf('acl') || (COS_ACL[acl] || {}).note }}<template v-if="grants"> 另外单独授权给了 {{ grants }} 个账号。</template></div></div>
+                  <span class="tag" :class="acl === 'private' ? 'on' : acl === 'public-read-write' ? 'crit' : 'warn'">{{ (COS_ACL[acl] || {}).text || '—' }}</span>
+                  <button class="small" @click="openEd('acl')">修改</button></div>
+                <div class="row"><div class="grow"><div>防盗链</div><div class="small tertiary">{{ errOf('referer') || refererText }}</div></div>
+                  <span class="tag" :class="{ on: detail.referer.status === 'Enabled' }">{{ detail.referer.status === 'Enabled' ? '已开启' : '未开启' }}</span>
+                  <button class="small" @click="openEd('referer')">设置</button></div>
+                <div class="row"><div class="grow"><div>存储桶策略</div><div class="small tertiary">{{ errOf('policy') || (policyCount ? policyCount + ' 条规则' : '没有设置，按访问权限生效') }}
+                  <span class="st-crit" v-if="detail.policyPublic">；其中有允许任何人{{ detail.policyPublic === 'write' ? '写入' : '读取' }}的规则</span></div></div>
+                  <button class="small" @click="openEd('policy')">{{ policyCount ? '编辑' : '添加' }}</button></div>
+                <div class="row"><div class="grow"><div>跨域访问（CORS）</div><div class="small tertiary">{{ errOf('cors') || (detail.cors.length ? detail.cors.map(r => (r.origins || []).join('、') + ' 可以 ' + (r.methods || []).join('/')).join('；') : '没有规则：网页脚本不能直接访问这个桶') }}</div></div>
+                  <button class="small" @click="openEd('cors')">设置</button></div>
+              </div>
+              <div class="group-title">文件管理</div>
+              <div class="group cos-set">
+                <div class="row"><div class="grow"><div>生命周期</div>
+                  <div class="small tertiary" v-if="errOf('lifecycle')">{{ errOf('lifecycle') }}</div>
+                  <div class="small tertiary" v-else-if="!detail.lifecycle.length">没有规则：文件一直按原来的存储类型保存</div>
+                  <div class="small secondary" v-for="r in detail.lifecycle" :key="r.id">{{ r.summary }}<span class="tertiary" v-if="!r.enabled">（已停用）</span></div></div>
+                  <button class="small" @click="openEd('lifecycle')">设置</button></div>
+                <div class="row"><div class="grow"><div>版本控制</div><div class="small tertiary">{{ errOf('versioning') || (detail.versioning === 'Enabled' ? '覆盖和删除的文件会保留历史版本，误删能找回' : detail.versioning === 'Suspended' ? '已暂停：之后的改动不再保留历史版本' : '没有开启：覆盖和删除的文件找不回') }}</div></div>
+                  <span class="tag" :class="{ on: detail.versioning === 'Enabled' }">{{ detail.versioning === 'Enabled' ? '已开启' : detail.versioning === 'Suspended' ? '已暂停' : '未开启' }}</span>
+                  <button class="small" @click="setVersioning(detail.versioning !== 'Enabled')" :disabled="saving">{{ detail.versioning === 'Enabled' ? '暂停' : '开启' }}</button></div>
+                <div class="row"><div class="grow"><div>服务端加密</div><div class="small tertiary">{{ errOf('encryption') || '文件在 COS 的磁盘上加密保存（SSE-COS），下载时自动解密；只影响之后上传的文件' }}</div></div>
+                  <span class="tag" :class="{ on: detail.encryption }">{{ detail.encryption ? '已开启' : '未开启' }}</span>
+                  <button class="small" @click="setEncryption(!detail.encryption)" :disabled="saving">{{ detail.encryption ? '关闭' : '开启' }}</button></div>
+                <div class="row"><div class="grow"><div>静态网站</div><div class="small tertiary">
+                  <template v-if="errOf('website')">{{ errOf('website') }}</template>
+                  <template v-else-if="detail.website.enabled">首页 {{ detail.website.index }}<template v-if="detail.website.error">，出错页 {{ detail.website.error }}</template><template v-if="detail.website.endpoint"> · <span class="mono">{{ detail.website.endpoint }}</span></template></template>
+                  <template v-else>没有开启</template></div></div>
+                  <span class="tag" :class="{ on: detail.website.enabled }">{{ detail.website.enabled ? '已开启' : '未开启' }}</span>
+                  <button class="small" @click="openEd('website')">设置</button></div>
+              </div>
+              <div class="group cos-set">
+                <div class="row"><div class="grow"><div>删除存储桶</div><div class="small tertiary">只能删除空的存储桶，删除后找不回</div></div>
+                  <button class="small destructive" @click="openEd('deleteBucket')">删除</button></div>
+              </div>
+            </template>
+          </div>
+
+          <!-- Security and usage -->
+          <div v-show="section === 'security'">
+            <div class="cos-sec-head"><span class="grow small secondary">按设置检查这个桶有没有被公开的风险，以及最近的用量。</span>
+              <button class="plain" @click="loadDetail(); loadUsage()" :disabled="detailLoading || usageLoading"><ui-icon name="refresh"></ui-icon>刷新</button>
+              <button class="primary" @click="ask"><ui-icon name="sparkles"></ui-icon>让 AI 检查</button></div>
+            <div class="notice" v-if="!detail"><span class="spinner"></span>正在检查……</div>
+            <div class="alerts" v-else>
+              <div class="alert" v-for="(f, i) in detail.findings" :key="i" :class="'al-' + f.level">
+                <ui-icon :name="levelIconOf(f.level)"></ui-icon>
+                <span class="grow">{{ f.text }}
+                  <span class="block cos-flist" v-if="f.files && f.files.length"><button class="link small mono" v-for="k in f.files.slice(0, 8)" :key="k" @click="showFile(k)">{{ k }}</button></span></span>
+                <button class="link small" v-if="f.fix && fixText[f.fix]" @click="fix(f)" :disabled="saving">{{ fixText[f.fix] }}</button>
+              </div>
+              <div class="alert al-info" v-if="!detail.findings.length"><ui-icon name="check"></ui-icon><span class="grow">没有发现问题：桶是私有的，也没有允许任何人访问的策略。</span></div>
+            </div>
+
+            <div class="kpi-group" v-if="usage && usage.available">
+              <div class="kpi-title">用量</div>
+              <div class="tiles three">
+                <div class="tile"><div class="label">存储量</div><div class="value">{{ fmtBytes(usage.storageBytes) }}</div><div class="sub">标准存储，按天统计</div></div>
+                <div class="tile"><div class="label">外网下行流量</div><div class="value">{{ fmtBytes(usage.traffic24h) }}</div>
+                  <div class="sub" v-if="trafficChange !== null"><span :class="trafficChange >= 0 ? 'up' : 'down'">{{ trafficChange >= 0 ? '↑' : '↓' }} {{ Math.abs(trafficChange) }}%</span> 较前 24 小时</div>
+                  <div class="sub" v-else>最近 24 小时</div></div>
+                <div class="tile"><div class="label">前 24 小时</div><div class="value">{{ fmtBytes(usage.trafficPrev) }}</div><div class="sub">外网下行流量</div></div>
+              </div>
+            </div>
+            <div class="alert al-warn cos-spike" v-if="usage && usage.spike"><ui-icon name="warn"></ui-icon>
+              <span class="grow">最近 24 小时的外网流量是之前的好几倍。如果不是你自己的访问，可能是文件被盗链或被人刷流量：检查防盗链，或者把桶改成私有。</span></div>
+            <section class="card" v-if="usage && usage.available && usage.hourly.length">
+              <header class="card-head"><h3>外网下行流量</h3><span class="small tertiary">最近 48 小时，每小时</span></header>
+              <line-chart :points="usage.hourly" label="流量" :format="fmtBytes" :span="48"></line-chart>
+            </section>
+            <div class="notice" v-if="usageLoading && !usage"><span class="spinner"></span>正在读取用量……</div>
+            <div class="small tertiary cos-note" v-if="usage && !usage.available">{{ usage.note }}</div>
+          </div>
+        </section>
+      </div>
+    </template>
+
+    <!-- Uploads -->
+    <div class="fm-uploads cos-uploads" v-if="uploads.length" role="status">
+      <div class="fm-up-head"><b>上传到存储桶</b><span class="small tertiary">{{ upLeft ? '还剩 ' + upLeft + ' 个' : upClash ? upClash + ' 个同名，等你决定' : '已完成' }}</span><span class="grow"></span>
+        <button class="plain" v-if="uploads.length > upLeft" @click="clearUploads">清除已完成</button></div>
+      <div class="fm-up" v-for="u in uploads" :key="u.n">
+        <div class="line"><ui-icon :name="u.state === 'done' ? 'check' : u.state === 'error' ? 'alert' : u.state === 'conflict' ? 'warn' : 'file'" :class="{'st-ok': u.state === 'done', 'st-crit': u.state === 'error', 'st-warn': u.state === 'conflict'}"></ui-icon>
+          <span class="grow ellipsis" :title="u.bucket + '/' + u.key">{{ u.name }}</span>
+          <button class="link small" v-if="u.state === 'conflict'" @click="overwrite(u)">覆盖</button>
+          <button class="plain icon-only" v-if="['wait', 'up', 'conflict'].includes(u.state)" title="取消" aria-label="取消上传" @click="cancelUpload(u)"><ui-icon name="close"></ui-icon></button></div>
+        <div class="bar" v-if="u.state === 'up' || u.state === 'wait'"><i :style="{width: upPct(u) + '%'}"></i></div>
+        <div class="small" :class="u.state === 'error' ? 'st-crit' : 'tertiary'">{{ upState(u) }}</div>
+      </div>
+    </div>
+
+    <!-- New folder, rename -->
+    <div class="sheet-mask" v-if="dlg.kind" @click.self="!dlg.busy && (dlg.kind = '')">
+      <div class="sheet" role="dialog" :aria-label="dlg.kind === 'mkdir' ? '新建文件夹' : '重命名'">
+        <h2>{{ dlg.kind === 'mkdir' ? '新建文件夹' : '重命名' }}</h2>
+        <p>位置：{{ shortBucket(name) }}/{{ prefix }}<template v-if="dlg.entry && dlg.entry.folder">。文件夹改名会逐个复制里面的文件，文件多的话要等一会儿。</template></p>
+        <div class="group"><div class="row form"><span class="k">名称</span><span class="v">
+          <input ref="dlgInput" v-model="dlg.name" @keydown.enter="!$event.isComposing && dlgSubmit()" aria-label="名称" spellcheck="false" autocomplete="off" autocapitalize="off"></span></div></div>
+        <div class="notice" v-if="dlg.error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ dlg.error }}</div>
+        <div class="sheet-actions"><button @click="dlg.kind = ''" :disabled="dlg.busy">取消</button>
+          <button class="primary" @click="dlgSubmit" :disabled="dlg.busy">{{ dlg.busy ? '正在处理……' : dlg.kind === 'mkdir' ? '新建' : '改名' }}</button></div>
+      </div>
+    </div>
+
+    <!-- Share link -->
+    <div class="sheet-mask" v-if="link.open" @click.self="link.open = false">
+      <div class="sheet" role="dialog" aria-label="分享链接">
+        <h2>分享链接</h2>
+        <p>{{ link.entry.key }}</p>
+        <div class="group">
+          <div class="row form"><span class="k">有效期</span><span class="v"><span class="segmented">
+            <button v-for="t in COS_LINK_TIMES" :key="t.s" :class="{ on: link.expires === t.s }" @click="link.expires = t.s">{{ t.text }}</button></span></span></div>
+          <div class="row stack"><div class="small secondary">临时链接（到期后失效，桶是私有的也能用）</div>
+            <div class="cos-url"><span class="mono">{{ link.busy ? '正在生成……' : link.url }}</span><button class="small" @click="copy(link.url, '临时链接')" :disabled="!link.url">复制</button></div></div>
+          <div class="row stack" v-if="readable"><div class="small secondary">公开地址（一直有效，因为这个桶允许公开读取）</div>
+            <div class="cos-url"><span class="mono">{{ link.public }}</span><button class="small" @click="copy(link.public, '公开地址')" :disabled="!link.public">复制</button></div></div>
+        </div>
+        <div class="notice" v-if="link.error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ link.error }}</div>
+        <div class="sheet-actions"><button @click="link.open = false">关闭</button></div>
+      </div>
+    </div>
+
+    <!-- Settings editors -->
+    <div class="sheet-mask" v-if="ed.kind" @click.self="closeEd">
+      <div class="sheet cos-ed" role="dialog" :aria-label="{acl: '访问权限', referer: '防盗链', cors: '跨域访问', lifecycle: '生命周期', website: '静态网站', policy: '存储桶策略', create: '新建存储桶', deleteBucket: '删除存储桶'}[ed.kind]">
+        <template v-if="ed.kind === 'acl'">
+          <h2>访问权限</h2><p>{{ bucket.name }}。保存后马上生效，可以撤销。</p>
+          <div class="group">
+            <label class="row form dns-check" v-for="(a, k) in COS_ACL" :key="k"><input type="radio" v-model="ed.acl" :value="k">
+              <span class="grow"><b>{{ a.text }}</b><span class="small secondary block">{{ a.note }}</span></span></label>
+          </div>
+          <div class="hint" v-if="grants">单独授权给其他账号的 {{ grants }} 项会保留。</div>
+        </template>
+
+        <template v-else-if="ed.kind === 'referer'">
+          <h2>防盗链</h2><p>限制哪些网站可以引用这个桶里的文件（按浏览器带的 Referer 判断），防止别人盗用你的图片、刷你的流量。</p>
+          <div class="group">
+            <div class="row form"><span class="k">名单类型</span><span class="v"><span class="segmented">
+              <button :class="{ on: ed.type === 'white' }" @click="ed.type = 'white'">白名单</button>
+              <button :class="{ on: ed.type === 'black' }" @click="ed.type = 'black'">黑名单</button></span>
+              <span class="small secondary block">{{ ed.type === 'white' ? '只有名单里的网站能引用' : '名单里的网站不能引用' }}</span></span></div>
+            <div class="row form"><span class="k">域名</span><span class="v"><textarea v-model="ed.domains" rows="4" placeholder="每行一个，例如&#10;example.com&#10;*.example.com" aria-label="域名" spellcheck="false" autocapitalize="off"></textarea></span></div>
+            <label class="row form dns-check"><input type="checkbox" v-model="ed.allowEmpty"><span class="grow">允许空 Referer<span class="small secondary block">直接在浏览器打开链接、App 和下载工具通常不带 Referer；不允许的话它们会被拒绝。</span></span></label>
+          </div>
+        </template>
+
+        <template v-else-if="ed.kind === 'cors'">
+          <h2>跨域访问（CORS）</h2><p>网页里的脚本直接读写这个桶（比如浏览器直传）时才需要。只放图片、给人下载的桶不用设置。</p>
+          <div class="group" v-for="(r, i) in ed.cors" :key="i">
+            <div class="row"><b class="grow">规则 {{ i + 1 }}</b><button class="link small danger" @click="ed.cors.splice(i, 1)">删除这条</button></div>
+            <div class="row form"><span class="k">来源</span><span class="v"><textarea v-model="r.origins" rows="2" placeholder="每行一个，例如 https://www.example.com；* 表示所有网站" aria-label="来源" spellcheck="false" autocapitalize="off"></textarea></span></div>
+            <div class="row form"><span class="k">方法</span><span class="v cos-methods">
+              <label v-for="m in COS_METHODS" :key="m"><input type="checkbox" :value="m" v-model="r.methods">{{ m }}</label></span></div>
+            <div class="row form"><span class="k">允许的请求头</span><span class="v"><input v-model="r.headers" placeholder="* 表示全部" aria-label="允许的请求头" spellcheck="false" autocapitalize="off"></span></div>
+            <div class="row form"><span class="k">暴露的响应头</span><span class="v"><input v-model="r.expose" placeholder="例如 ETag" aria-label="暴露的响应头" spellcheck="false" autocapitalize="off"></span></div>
+            <div class="row form"><span class="k">缓存（秒）</span><span class="v"><input type="number" min="0" max="86400" v-model.number="r.maxAge" aria-label="缓存秒数"></span></div>
+          </div>
+          <div class="cos-add"><button class="small" @click="ed.cors.push(corsTemplate())"><ui-icon name="plus"></ui-icon>添加规则</button>
+            <span class="small tertiary" v-if="!ed.cors.length">没有规则时保存，会删除这个桶的跨域设置。</span></div>
+        </template>
+
+        <template v-else-if="ed.kind === 'lifecycle'">
+          <h2>生命周期</h2><p>按上传后的天数自动转存储类型或删除文件，每天执行一次。转低频、归档能省存储费，但读取要另外收费、归档的还要先恢复。</p>
+          <div class="cos-templates"><span class="small secondary">常用：</span>
+            <button class="small" v-for="t in COS_LIFE_TEMPLATES" :key="t.id" @click="addLife(t)" :title="t.note"><ui-icon name="plus"></ui-icon>{{ t.text }}</button></div>
+          <div class="group" v-for="(r, i) in ed.life" :key="i">
+            <div class="row"><label class="grow fm-check"><input type="checkbox" v-model="r.enabled"><b>{{ lifeText(r) }}</b></label>
+              <button class="link small danger" @click="ed.life.splice(i, 1)">删除这条</button></div>
+            <div class="row form"><span class="k">名称</span><span class="v"><input v-model="r.id" aria-label="规则名称" spellcheck="false" autocapitalize="off"></span></div>
+            <div class="row form"><span class="k">作用于</span><span class="v"><input v-model="r.prefix" placeholder="文件夹，例如 logs/；不填表示整个桶" aria-label="作用的文件夹" spellcheck="false" autocapitalize="off"></span></div>
+            <div class="row form cos-days"><span class="k">上传后多少天</span><span class="v">
+              <label v-for="f in COS_LIFE_FIELDS" :key="f[0]"><span>{{ f[1] }}</span><input type="number" min="0" max="36500" v-model.number="r[f[0]]" :aria-label="f[1] + '（天）'" placeholder="—"></label></span></div>
+          </div>
+          <div class="group" v-if="ed.fixed.length">
+            <label class="row form dns-check" v-for="r in ed.fixed" :key="r.id"><input type="checkbox" :value="r.id" v-model="ed.keep">
+              <span class="grow">保留「{{ r.id }}」<span class="small secondary block">{{ r.summary }}</span></span></label>
+          </div>
+          <div class="cos-add"><button class="small" @click="addLife()"><ui-icon name="plus"></ui-icon>自定义规则</button>
+            <span class="small tertiary" v-if="!ed.life.length && !ed.keep.length">没有规则时保存，会删除这个桶的生命周期设置。</span></div>
+        </template>
+
+        <template v-else-if="ed.kind === 'website'">
+          <h2>静态网站</h2><p>用 COS 直接托管静态网页（比如 Vue、Hexo 生成的网站）。桶要是公有读，自己的域名建议通过 EdgeOne 接入。</p>
+          <div class="group">
+            <div class="row form"><span class="k">首页</span><span class="v"><input v-model="ed.index" placeholder="index.html" aria-label="首页" spellcheck="false" autocapitalize="off"></span></div>
+            <div class="row form"><span class="k">出错页</span><span class="v"><input v-model="ed.errorPage" placeholder="例如 404.html，可不填" aria-label="出错页" spellcheck="false" autocapitalize="off"></span></div>
+            <label class="row form dns-check"><input type="checkbox" v-model="ed.https"><span class="grow">强制 HTTPS<span class="small secondary block">HTTP 访问会跳转到 HTTPS</span></span></label>
+          </div>
+        </template>
+
+        <template v-else-if="ed.kind === 'policy'">
+          <h2>存储桶策略</h2><p>用 JSON 给其他账号、子账号或所有人授权，比访问权限更细。不熟悉的话，可以让 AI 帮你写好再粘贴进来。</p>
+          <textarea class="cos-policy mono" v-model="ed.policy" rows="14" spellcheck="false" autocapitalize="off" aria-label="存储桶策略" placeholder='{"version": "2.0", "Statement": [...]}'></textarea>
+        </template>
+
+        <template v-else-if="ed.kind === 'create'">
+          <h2>新建存储桶</h2><p>默认私有读写，最安全；要放网站图片可以选公有读，并在设置里开启防盗链。</p>
+          <div class="group">
+            <div class="row form"><span class="k">名字</span><span class="v dns-sub"><input v-model="ed.short" placeholder="例如 backup、img" aria-label="存储桶名字" spellcheck="false" autocapitalize="off"><span class="secondary">-{{ appId || 'APPID' }}</span></span></div>
+            <div class="row form"><span class="k">地域</span><span class="v"><select v-model="ed.region" aria-label="地域"><option v-for="r in COS_REGIONS" :key="r[0]" :value="r[0]">{{ r[1] }}（{{ r[0] }}）</option></select>
+              <span class="small secondary block">选离服务器近的地域；同地域的腾讯云服务器可以走内网，不收流量费。</span></span></div>
+            <div class="row form"><span class="k">访问权限</span><span class="v"><span class="segmented">
+              <button :class="{ on: ed.acl === 'private' }" @click="ed.acl = 'private'">私有读写</button>
+              <button :class="{ on: ed.acl === 'public-read' }" @click="ed.acl = 'public-read'">公有读私有写</button></span></span></div>
+            <div class="row form"><span class="k">生命周期</span><span class="v"><select v-model="ed.template" aria-label="生命周期"><option value="">先不设置</option>
+              <option v-for="t in COS_LIFE_TEMPLATES" :key="t.id" :value="t.id">{{ t.text }}</option></select>
+              <span class="small secondary block" v-if="ed.template">{{ (COS_LIFE_TEMPLATES.find(t => t.id === ed.template) || {}).note }}</span></span></div>
+          </div>
+          <div class="hint">完整名字：{{ newName }}。名字在整个腾讯云里不能重复，建好后不能改。</div>
+        </template>
+
+        <template v-else-if="ed.kind === 'deleteBucket'">
+          <h2>删除存储桶</h2><p>只能删除空的存储桶（先把文件删完）。删除后找不回，名字也可能被别人用掉。</p>
+          <div class="group"><div class="row form"><span class="k">输入名字确认</span><span class="v"><input v-model="ed.confirmName" :placeholder="bucket.name" aria-label="输入存储桶名字确认" spellcheck="false" autocapitalize="off"></span></div></div>
+        </template>
+
+        <div class="notice" v-if="ed.error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ ed.error }}</div>
+        <div class="sheet-actions">
+          <button @click="closeEd" :disabled="saving">取消</button>
+          <template v-if="ed.kind === 'acl'"><button class="primary" @click="saveACL" :disabled="saving || ed.acl === acl">{{ saving ? '正在保存……' : '保存' }}</button></template>
+          <template v-else-if="ed.kind === 'referer'">
+            <button v-if="detail.referer.status === 'Enabled'" @click="saveReferer(false)" :disabled="saving">关闭防盗链</button>
+            <button class="primary" @click="saveReferer(true)" :disabled="saving">{{ saving ? '正在保存……' : '保存并开启' }}</button></template>
+          <template v-else-if="ed.kind === 'cors'"><button class="primary" @click="saveCORS" :disabled="saving">{{ saving ? '正在保存……' : '保存' }}</button></template>
+          <template v-else-if="ed.kind === 'lifecycle'"><button class="primary" @click="saveLife" :disabled="saving">{{ saving ? '正在保存……' : '保存' }}</button></template>
+          <template v-else-if="ed.kind === 'website'">
+            <button v-if="detail.website.enabled" @click="saveWebsite(false)" :disabled="saving">关闭静态网站</button>
+            <button class="primary" @click="saveWebsite(true)" :disabled="saving">{{ saving ? '正在保存……' : '保存并开启' }}</button></template>
+          <template v-else-if="ed.kind === 'policy'">
+            <button class="destructive" v-if="detail.policy" @click="savePolicy(true)" :disabled="saving">删除策略</button>
+            <button class="primary" @click="savePolicy(false)" :disabled="saving || !ed.policy.trim()">{{ saving ? '正在保存……' : '保存' }}</button></template>
+          <template v-else-if="ed.kind === 'create'"><button class="primary" @click="createBucket" :disabled="saving || !ed.short.trim()">{{ saving ? '正在新建……' : '新建' }}</button></template>
+          <template v-else-if="ed.kind === 'deleteBucket'"><button class="primary danger" @click="deleteBucket" :disabled="saving || ed.confirmName.trim() !== bucket.name">{{ saving ? '正在删除……' : '删除' }}</button></template>
+        </div>
+      </div>
+    </div>
+  </div>`,
+};
+
 const EO_SECTIONS = [{ id: 'overview', text: '概览' }, { id: 'visitors', text: '访客' }, { id: 'content', text: '内容' }];
 const EO_SERIES = {
   requests: { text: '请求', key: 'series', label: '次请求', format: fmtCount },
@@ -3467,9 +4304,11 @@ const app = createApp({
       ai.value = await api('GET', '/api/settings/ai');
       Object.assign(aiForm, ai.value, { apiKey: '' });
     }
-    async function select(id) {
+    // select opens a server's page; stay only loads it, for the first one at
+    // startup when you have already gone to another page.
+    async function select(id, stay) {
       navOpen.value = false;
-      tab.value = 'servers';
+      if (!stay) tab.value = 'servers';
       if (selectedId.value !== id) current.value = null;
       selectedId.value = id;
       cloud.value = null;
@@ -3598,7 +4437,7 @@ const app = createApp({
         await api('DELETE', `/api/servers/${selectedId.value}`);
         current.value = null; selectedId.value = null;
         await loadServers();
-        if (servers.value.length) await select(servers.value[0].id);
+        if (servers.value.length) await select(servers.value[0].id, tab.value !== 'servers');
       });
     }
     function askAbout() {
@@ -3867,7 +4706,8 @@ const app = createApp({
       'server.hostkey.recorded': '记录服务器指纹', 'settings.ai': '修改 AI 设置', 'ai.chat': 'AI 对话', 'plan.propose': 'AI 生成清单',
       'plan.execute': '执行清单', 'plan.step': '执行步骤', 'plan.undo': '撤销步骤', 'exec.rollback': '回滚', 'onepanel.settings': '修改 1Panel 接口设置', 'settings.tencent': '修改腾讯云密钥',
       'terminal.open': '打开终端', 'terminal.close': '关闭终端', 'settings.autoblock': '修改自动封禁', 'settings.notices': '修改通知设置',
-      'settings.webhook': '修改推送地址', 'visits.judge': 'AI 研判 IP' }[a] || a);
+      'settings.webhook': '修改推送地址', 'visits.judge': 'AI 研判 IP',
+      'cos.upload': '上传到存储桶', 'cos.mkdir': '存储桶新建文件夹', 'cos.delete': '删除存储桶文件', 'cos.rename': '存储桶文件改名', 'cos.link': '生成存储桶文件链接' }[a] || a);
     // Unread notices, for the sidebar; checked every minute.
     const unread = ref(0);
     const loadUnread = () => api('GET', '/api/notices/unread').then(v => { unread.value = v.unread; }).catch(() => {});
@@ -3879,7 +4719,7 @@ const app = createApp({
         presets.value = await api('GET', '/api/ai/presets');
         await Promise.all([loadServers(), loadAI(), loadSpend(), loadConvs(), loadTencent(), loadFree(), loadUnread()]);
         if (convs.value.length) await openConv(convs.value[0].id);
-        if (servers.value.length) await select(servers.value[0].id);
+        if (servers.value.length) await select(servers.value[0].id, tab.value !== 'servers');
       } catch (e) { notify(e.message, 'error'); }
     });
 
@@ -3906,6 +4746,7 @@ app.component('rank-list', RankList);
 app.component('terminal-page', TerminalPage);
 app.component('cert-page', CertPage);
 app.component('dns-page', DnsPage);
+app.component('storage-page', StoragePage);
 app.component('file-page', FilePage);
 const UiIcon = {
   props: { name: { type: String, required: true } },

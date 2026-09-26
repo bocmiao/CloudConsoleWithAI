@@ -238,3 +238,15 @@ func TestCOSUsage(t *testing.T) {
 		t.Fatalf("usage = %+v %v", u, err)
 	}
 }
+
+func TestCOSSensitiveKeys(t *testing.T) {
+	for key, want := range map[string]bool{
+		"db/2026-09-01.sql.gz": true, "site/.env": true, "wwwroot-2026-09-01.tar.gz": true, "backup/app.zip": true,
+		"mysql_dump.tgz": true, "certs/example.com.key": true, "site-2026.zip": true,
+		"downloads/app-v1.2.zip": false, "images/logo.png": false, "release/tool.tar.gz": false, "fonts.zip": false, "website.zip": false,
+	} {
+		if got := sensitiveKey(key); got != want {
+			t.Errorf("sensitiveKey(%q) = %v", key, got)
+		}
+	}
+}

@@ -38,9 +38,10 @@ type COSBucket struct {
 
 // COSObject is a file held by the fake.
 type COSObject struct {
-	Data        []byte
-	ContentType string
-	Modified    time.Time
+	Data         []byte
+	ContentType  string
+	Modified     time.Time
+	StorageClass string // STANDARD when empty
 }
 
 // AddBucket adds a bucket for a test or a demo.
@@ -569,7 +570,11 @@ func (f *Fake) cosList(w http.ResponseWriter, q url.Values, b *COSBucket) {
 		}
 		o := b.Objects[k]
 		sum := md5.Sum(o.Data)
-		contents = append(contents, content{enc(k), o.Modified.UTC().Format(time.RFC3339), fmt.Sprintf(`"%x"`, sum), len(o.Data), "STANDARD"})
+		class := o.StorageClass
+		if class == "" {
+			class = "STANDARD"
+		}
+		contents = append(contents, content{enc(k), o.Modified.UTC().Format(time.RFC3339), fmt.Sprintf(`"%x"`, sum), len(o.Data), class})
 	}
 	type pfx struct {
 		Prefix string `xml:"Prefix"`

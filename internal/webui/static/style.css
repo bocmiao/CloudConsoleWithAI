@@ -877,3 +877,91 @@ button.link.danger { color: var(--crit); }
   .dns-table .c-ops:empty { display: none; }
   .dns-table td[colspan] { grid-column: 1 / -1; }
 }
+
+/* 存储: the bucket list on the left, the chosen bucket on the right. */
+.tag.crit { background: var(--crit-track); color: var(--crit); }
+.cos-layout { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 22px; align-items: start; }
+.cos-side { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; position: sticky; top: 12px; }
+.cos-side-head { display: flex; align-items: center; gap: 6px; padding: 10px 10px 10px 14px; border-bottom: 1px solid var(--sep); }
+.cos-side-head .grow { flex: 1; }
+.cos-pick { display: none; }
+.cos-blist { display: flex; flex-direction: column; padding: 5px; max-height: 70vh; overflow-y: auto; }
+button.cos-bucket { display: flex; align-items: center; gap: 9px; width: 100%; height: auto; padding: 8px 9px; background: none; box-shadow: none;
+  border-radius: 8px; text-align: left; color: var(--text); font-weight: 400; }
+button.cos-bucket:hover:not(:disabled) { background: var(--hover); }
+button.cos-bucket.on, button.cos-bucket.on:hover:not(:disabled) { background: var(--accent-track); }
+button.cos-bucket > .icon { color: var(--accent); flex: none; }
+button.cos-bucket .grow { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.cos-bname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.cos-empty { padding: 14px; }
+.cos-head { display: flex; align-items: flex-start; gap: 12px; }
+.cos-head h2 { font-size: 20px; letter-spacing: -.01em; overflow-wrap: anywhere; }
+.cos-head .grow { flex: 1; min-width: 0; }
+.cos-head .mono { font-size: 12px; overflow-wrap: anywhere; }
+.cos-tabs { margin: 14px 0 16px; }
+.cos-tabs .badge { margin-left: 4px; vertical-align: 1px; }
+.cos-recent { margin-bottom: 16px; }
+.cos-recent .spinner { flex: none; margin-top: 2px; }
+.cos-files { position: relative; }
+.cos-fbar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.cos-crumbs { flex: 1; min-width: 0; display: flex; align-items: center; height: 30px; padding: 0 4px; border-radius: 7px; background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--sep); overflow-x: auto; scrollbar-width: none; }
+.cos-crumbs::-webkit-scrollbar { display: none; }
+.cos-crumbs .sep { display: inline-flex; flex: none; color: var(--text-3); }
+.cos-crumbs .sep .icon { width: 11px; height: 11px; }
+.cos-filter { width: 180px; }
+.cos-actions { margin-bottom: 10px; }
+.cos-list { margin-bottom: 8px; }
+.cos-list > .notice { box-shadow: none; margin: 0; }
+.cos-table { font-size: 13px; }
+.cos-table td { vertical-align: middle; }
+.cos-table .ck { width: 38px; padding-right: 0; }
+.cos-table tr.on td { background: var(--accent-track); }
+button.cos-open { display: inline-flex; align-items: center; gap: 8px; height: auto; padding: 0; background: none; box-shadow: none; color: var(--text);
+  font-weight: 400; text-align: left; max-width: 100%; }
+button.cos-open span { overflow-wrap: anywhere; }
+button.cos-open:hover:not(:disabled) { background: none; color: var(--accent); }
+button.cos-open .icon { flex: none; color: var(--text-3); }
+button.cos-open .icon.dir { color: var(--accent); }
+.cos-ops { text-align: right; }
+.cos-none { text-align: center; padding: 32px 16px !important; }
+.cos-more { padding: 10px; text-align: center; border-top: 1px solid var(--sep); }
+.cos-foot { padding: 0 4px; }
+.cos-drop { inset: 0; }
+.cos-uploads { position: fixed; right: 24px; bottom: 24px; max-height: 50vh; z-index: 15; }
+.cos-set .row { align-items: center; }
+.cos-set .row > .grow > div:first-child { color: var(--text); }
+.cos-set .row > .grow .small { margin-top: 2px; }
+.cos-set .row > button { flex: none; }
+.cos-sec-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.cos-sec-head .grow { flex: 1; min-width: 200px; }
+.cos-flist { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.cos-note { margin: 0 4px 18px; }
+.cos-spike { margin-bottom: 18px; }
+.cos-url { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.cos-url .mono { flex: 1; min-width: 0; font-size: 12px; word-break: break-all; max-height: 4.5em; overflow: auto; color: var(--text); }
+.cos-url button { flex: none; }
+.cos-ed { width: min(620px, 94vw); }
+.cos-ed textarea { width: 100%; }
+.cos-methods { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.cos-methods label { display: inline-flex; align-items: center; gap: 5px; }
+.cos-days .v { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; }
+.cos-days label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--text-2); }
+.cos-templates { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 14px; }
+.cos-add { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+textarea.cos-policy { width: 100%; font-size: 12.5px; margin-bottom: 14px; min-height: 240px; }
+@media (max-width: 980px) {
+  .cos-layout { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .cos-side { position: static; }
+  .cos-blist { display: none; }
+  .cos-pick { display: block; width: calc(100% - 20px); margin: 10px; }
+  .cos-side-head { border-bottom: none; padding-bottom: 0; }
+}
+@media (max-width: 720px) {
+  .cos-fbar { flex-wrap: wrap; }
+  .cos-crumbs { flex-basis: 100%; }
+  .cos-filter { flex: 1; width: auto; }
+  .cos-table .hide-sm { display: none; }
+  .cos-days .v { grid-template-columns: minmax(0, 1fr); }
+  .cos-uploads { left: 12px; right: 12px; width: auto; bottom: 12px; }
+}
