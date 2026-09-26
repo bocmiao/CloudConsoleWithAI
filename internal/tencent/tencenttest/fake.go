@@ -44,9 +44,9 @@ type Fake struct {
 	Records map[string][]Record // by DNSPod domain
 	// PageSize, when set, caps every list answer, to test paging.
 	PageSize int
-	Zones   []tencent.Zone
-	Domains []*Domain
-	Calls   []string // "service Action"
+	Zones    []tencent.Zone
+	Domains  []*Domain
+	Calls    []string // "service Action"
 	// DeniedService makes every call to that service fail with a
 	// permission error.
 	DeniedService string
