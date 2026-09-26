@@ -113,6 +113,30 @@ const RISK_NAME = { R0: '只读', R1: '可撤销', R2: '影响线上', R3: '高�
 const mbText = v => v >= 1024 ? (v / 1024).toFixed(1) + ' GB' : (v || 0) + ' MB';
 
 // A checklist the AI proposed: pick steps, run them, follow progress, undo.
+// diffLines turns a unified diff into lines to show, without its headers.
+function diffLines(diff) {
+  return (diff || '').replace(/\n$/, '').split('\n').filter(l => !l.startsWith('--- ') && !l.startsWith('+++ ')).map(l => ({
+    t: l || ' ', cls: l.startsWith('+') ? 'add' : l.startsWith('-') ? 'del' : l.startsWith('@@') ? 'hunk' : '',
+  }));
+}
+function fileVerb(free, path) {
+  const d = (free.diffs || []).find(x => x.path === path);
+  if (!d) return '修改';
+  if (d.diff.startsWith('软链接')) return '链接';
+  if (/@@ -0,0 /.test(d.diff)) return '新建';
+  if (/ \+0,0 @@/.test(d.diff)) return '删除';
+  return '修改';
+}
+const scriptLines = text => (text || '').split('\n');
+function serviceList(free) {
+  return (free.services || []).map(svc => {
+    const name = svc.replace(/^docker:/, '');
+    const restart = (free.serviceOps || []).some(op => op.includes('restart') && op.includes(name));
+    if (svc.startsWith('docker:')) return `重启容器 ${name}（中断几秒）`;
+    return restart ? `重启 ${name}（会中断几秒）` : `重新加载 ${name}（不中断访问）`;
+  });
+}
+
 const PlanCard = {
   props: { plan: { type: Object, required: true }, serverName: { type: String, default: '' } },
   setup(props) {
@@ -180,6 +204,7 @@ const PlanCard = {
     onUnmounted(stop);
 
     const status = s => STEP_STATUS[s.status] || null;
+    const hasFree = computed(() => chosenSteps.value.some(s => s.capability === 'free_command'));
     const deltas = computed(() => {
       const b = p.value.before, a = p.value.after;
       if (!b || !a) return [];
@@ -191,7 +216,8 @@ const PlanCard = {
       ];
       return rows;
     });
-    return { p, steps, running, canPick, picked, toggle, chosen, chosenSteps, confirming, busy, run, undo, undoable, undoAll, openLog, status, deltas, riskName: r => RISK_NAME[r] || '' };
+    return { p, steps, running, canPick, picked, toggle, chosen, chosenSteps, confirming, busy, run, undo, undoable, undoAll, openLog, status, deltas,
+      hasFree, diffLines, fileVerb, serviceList, scriptLines, riskName: r => RISK_NAME[r] || '' };
   },
   template: `
   <div class="plan">
@@ -210,6 +236,35 @@ const PlanCard = {
             <span class="risk">{{ s.risk }} {{ riskName(s.risk) }}</span>{{ s.via }} · {{ s.downtime }} · {{ s.reversible ? '可以撤销' : '无法撤销' }}
           </div>
           <div class="small secondary" v-else>暂时不能自动执行：{{ s.blocked }}</div>
+          <div class="free" v-if="s.free && s.free.passed">
+            <div class="free-title"><ui-icon name="sparkles"></ui-icon>AI 自定义操作（没有现成模板，由 AI 现场编写）</div>
+            <div class="free-row"><span class="k">要做什么</span><span>{{ s.free.summary || s.free.goal }}</span></div>
+            <div class="free-row"><span class="k">会改动</span><div>
+              <div v-for="f in s.free.files" :key="f">{{ fileVerb(s.free, f) }} <span class="mono">{{ f }}</span></div>
+              <div v-for="v in serviceList(s.free)" :key="v">{{ v }}</div>
+            </div></div>
+            <details class="free-more" v-for="d in s.free.diffs || []" :key="'d' + d.path">
+              <summary><ui-icon name="chevron"></ui-icon>{{ d.path }} 的具体改动</summary>
+              <div class="diff"><div v-for="(l, j) in diffLines(d.diff)" :key="j" :class="l.cls">{{ l.t }}</div></div>
+            </details>
+            <div class="free-row"><span class="k">不会</span><span>改动上面以外的文件、安装软件、访问网络、改动账号或防火墙</span></div>
+            <div class="free-checks">
+              <div v-if="s.free.dryRun === 'ok'"><ui-icon name="check" class="st-ok"></ui-icon>已在隔离环境里试运行，实际改动就是上面这些</div>
+              <div v-else><ui-icon name="warn" class="st-warn"></ui-icon>这台服务器不能隔离试运行（{{ s.free.dryRunNote }}），所以要先做快照</div>
+              <div><ui-icon name="check" class="st-ok"></ui-icon>独立审查通过：{{ s.free.review }}</div>
+              <div><ui-icon name="check" class="st-ok"></ui-icon>执行前自动备份上面的文件，失败立即恢复</div>
+              <div><ui-icon name="check" class="st-ok"></ui-icon>5 分钟保险：执行后如果 Miao Panel 连不上服务器，服务器会自己恢复原状</div>
+            </div>
+            <div class="free-row"><span class="k">最坏情况</span><span>改动让服务出问题 → 自动恢复，最长约 5 分钟</span></div>
+            <details class="free-more">
+              <summary><ui-icon name="chevron"></ui-icon>查看原始命令（高级）</summary>
+              <div class="diff"><div v-for="(l, j) in scriptLines(s.free.script)" :key="j">{{ l || ' ' }}</div></div>
+            </details>
+          </div>
+          <details class="free-more" v-else-if="s.free && s.free.script">
+            <summary><ui-icon name="chevron"></ui-icon>查看 AI 写的命令</summary>
+            <div class="diff"><div v-for="(l, j) in scriptLines(s.free.script)" :key="j">{{ l || ' ' }}</div></div>
+          </details>
           <div class="small" v-if="status(s)" :class="'st-' + status(s).cls">{{ status(s).text }}<button v-if="s.logId" class="link small log-link" @click="openLog(s.logId)">查看执行日志</button></div>
           <div class="step-log" v-if="s.log && s.log.length"><div v-for="(l, j) in s.log" :key="j">{{ l }}</div></div>
         </div>
@@ -241,9 +296,10 @@ const PlanCard = {
           </div>
         </div>
         <div class="hint">每一步执行前会先检查条件并备份；某一步失败会自动恢复原状，并停止后面的步骤。</div>
+        <div class="free-warn" v-if="hasFree"><ui-icon name="warn"></ui-icon><div>其中有 AI 现场编写的命令。它通过了检查、试运行和独立审查，也有备份和 5 分钟保险，能大幅降低风险，但做不到零风险。</div></div>
         <div class="sheet-actions">
           <button @click="confirming = false">取消</button>
-          <button class="primary" @click="run" :disabled="busy">确定执行</button>
+          <button class="primary" @click="run" :disabled="busy">{{ hasFree ? '我了解，执行' : '确定执行' }}</button>
         </div>
       </div>
     </div>
@@ -611,6 +667,15 @@ const app = createApp({
     const msgBox = ref(null);
     const op = reactive({ port: 0, host: '', apiKey: '', hasKey: false, info: '' });
     const tc = reactive({ configured: false, hint: '', secretId: '', secretKey: '', info: '' });
+    const freeCmd = reactive({ enabled: false });
+    async function loadFree() { Object.assign(freeCmd, await api('GET', '/api/settings/free-command')); }
+    async function setFree(on) {
+      if (on && !confirm('开启后，没有现成模板时 AI 可以现场编写命令。系统会替你检查、试运行、独立审查，并自动备份和设置 5 分钟保险，但做不到零风险。确定开启吗？')) return;
+      await guarded(on ? '正在开启……' : '正在关闭……', async () => {
+        Object.assign(freeCmd, await api('PUT', '/api/settings/free-command', { enabled: on }));
+        notify(on ? '已开启 AI 自由命令' : '已关闭 AI 自由命令');
+      });
+    }
     const cloud = ref(null);          // Tencent Cloud instance behind the selected server
     const cloudList = ref([]);        // instances offered when adding a server
     const cloudPick = ref('');
@@ -892,7 +957,7 @@ const app = createApp({
       try {
         info.value = await api('GET', '/api/info');
         presets.value = await api('GET', '/api/ai/presets');
-        await Promise.all([loadServers(), loadAI(), loadSpend(), loadConvs(), loadTencent()]);
+        await Promise.all([loadServers(), loadAI(), loadSpend(), loadConvs(), loadTencent(), loadFree()]);
         if (convs.value.length) await openConv(convs.value[0].id);
         if (servers.value.length) await select(servers.value[0].id);
       } catch (e) { notify(e.message, 'error'); }
@@ -903,7 +968,7 @@ const app = createApp({
       spendText, plans, audit, logView, logFocus, loadAudit, openLog, showAdd, addForm, messages, draft, chatBusy, msgBox, suggestions,
       select, openAdd, addServer, testConn, discover, removeServer, askAbout, send, onEnter, newChat, applyPreset, saveAI, testAI,
       convs, showConvs, conversationId, openConv, deleteConv, relTime,
-      op, saveOnePanel, testOnePanel, tc, saveTencent, testTencent, clearTencent,
+      op, saveOnePanel, testOnePanel, tc, saveTencent, testTencent, clearTencent, freeCmd, setFree,
       cloud, cloudList, cloudPick, pickCloud, askAI, daysTo, fmtBytes,
       memPct, rootDisk, envSub, dockerText, money, mb, meterClass, levelClass, levelIcon, levelName, riskName, adapterName,
       fmtTime, serverName, parseSteps, toolName, actorName, actionName, md,

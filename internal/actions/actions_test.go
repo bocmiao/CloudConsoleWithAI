@@ -41,7 +41,7 @@ func TestResolveValidatesParams(t *testing.T) {
 		{"php_fpm.set", map[string]any{"max_children": 10}, "bt", "宝塔"},
 		{"mysql.vars.set", map[string]any{"max_connections": 200}, "linux", "纯 Linux"},
 		{"mysql.vars.set", map[string]any{}, "1panel", "至少要改"},
-		{"free_command", nil, "linux", "自由命令"},
+		{"free_command", nil, "linux", "缺少参数"},
 		{"server.reboot", nil, "linux", "还不能自动执行"},
 	} {
 		_, err := Resolve(c.capability, c.params, c.adapter)
@@ -50,8 +50,8 @@ func TestResolveValidatesParams(t *testing.T) {
 		}
 	}
 	var ne *ErrNotExecutable
-	if _, err := Resolve("free_command", nil, "linux"); !errors.As(err, &ne) {
-		t.Errorf("free_command should be ErrNotExecutable, got %T", err)
+	if _, err := Resolve("server.reboot", nil, "linux"); !errors.As(err, &ne) {
+		t.Errorf("server.reboot should be ErrNotExecutable, got %T", err)
 	}
 }
 

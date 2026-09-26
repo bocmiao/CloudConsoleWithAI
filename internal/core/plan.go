@@ -36,6 +36,39 @@ type Step struct {
 	Undo       map[string]string `json:"undo,omitempty"`
 	FinishedAt string            `json:"finishedAt,omitempty"`
 	LogID      int64             `json:"logId,omitempty"` // execution log entry of the latest run
+
+	// Free is how Miao Panel vetted an AI-written command; set by the
+	// system when the plan is saved, never taken from the AI.
+	Free *FreeCheck `json:"free,omitempty"`
+}
+
+// FileDiff is how one file changes.
+type FileDiff struct {
+	Path string `json:"path"`
+	Diff string `json:"diff"`
+}
+
+// FreeCheck records the checks an AI-written command went through before
+// it was shown to the user (docs/DESIGN.md 7.5).
+type FreeCheck struct {
+	Goal     string   `json:"goal"`
+	Script   string   `json:"script"`
+	Files    []string `json:"files"`
+	Services []string `json:"services"`
+	CheckURL string   `json:"checkUrl,omitempty"`
+
+	DryRun     string     `json:"dryRun"` // ok, or unsupported (then a snapshot comes first)
+	DryRunNote string     `json:"dryRunNote,omitempty"`
+	Diffs      []FileDiff `json:"diffs,omitempty"`
+	ServiceOps []string   `json:"serviceOps,omitempty"` // recorded during the dry run, not done
+	Output     string     `json:"output,omitempty"`
+
+	Summary string `json:"summary,omitempty"` // the reviewer's plain description
+	Review  string `json:"review,omitempty"`  // the reviewer's reasoning
+
+	Passed    bool   `json:"passed"`
+	Problem   string `json:"problem,omitempty"` // why it cannot run
+	CheckedAt string `json:"checkedAt"`
 }
 
 // capabilityRisk is the policy table for known capabilities. Anything else

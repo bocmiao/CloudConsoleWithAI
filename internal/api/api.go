@@ -56,6 +56,8 @@ func New(a *app.App, token string, port int, version string) *Server {
 	api("GET /api/settings/ai", s.getAISettings)
 	api("PUT /api/settings/ai", s.putAISettings)
 	api("POST /api/settings/ai/test", s.testAI)
+	api("GET /api/settings/free-command", s.getFreeCommand)
+	api("PUT /api/settings/free-command", s.putFreeCommand)
 	api("GET /api/settings/tencent", s.getTencent)
 	api("PUT /api/settings/tencent", s.putTencent)
 	api("DELETE /api/settings/tencent", s.deleteTencent)
@@ -241,6 +243,18 @@ func (s *Server) testAI(_ http.ResponseWriter, r *http.Request) (any, error) {
 	defer cancel()
 	text, err := s.app.TestAI(ctx)
 	return map[string]string{"reply": text}, err
+}
+
+func (s *Server) getFreeCommand(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return s.app.FreeCommand()
+}
+
+func (s *Server) putFreeCommand(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req app.FreeCommandSettings
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.SaveFreeCommand(req)
 }
 
 func (s *Server) getTencent(_ http.ResponseWriter, _ *http.Request) (any, error) {

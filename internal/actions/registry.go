@@ -12,17 +12,36 @@ import (
 	"strings"
 
 	"github.com/bocmiao/CloudConsoleWithAI/internal/core"
+	"github.com/bocmiao/CloudConsoleWithAI/internal/freecmd"
 )
+
+// splitList splits a list written with commas, spaces or new lines.
+func splitList(s string) []string {
+	return strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == '，' || r == '\n' || r == ' ' || r == '\t' })
+}
+
+// lines splits a newline-separated parameter value.
+func lines(s string) []string {
+	var out []string
+	for _, l := range strings.Split(s, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
 
 // Param describes one input of a capability.
 type Param struct {
 	Name     string
 	Desc     string
-	Kind     string // int | enum | name | host | subdomain | text | instance | region | port | cidr | iplist | path
+	Kind     string // int | enum | name | host | subdomain | text | instance | region | port | cidr | iplist | path | script | pathlist | servicelist | localurl | lines
 	Min, Max int
 	Enum     []string
 	Default  string
 	Required bool
+	// Hidden parameters are filled in by Miao Panel, not proposed by the AI.
+	Hidden bool
 }
 
 // Impl is how a capability runs in one environment.
@@ -34,6 +53,11 @@ type Impl struct {
 	Cloud    string   // Tencent Cloud operation
 	Downtime string   // what the user will notice while it runs
 	Undo     string   // what rolling it back does, in plain words
+	// Encode passes the script's arguments base64-encoded (free text).
+	Encode bool
+	// Guarded scripts arm a restore on the server that Miao Panel cancels
+	// once it has heard back, proving the connection still works.
+	Guarded bool
 }
 
 // NeedsServer reports whether running this implementation needs the
@@ -62,6 +86,7 @@ var (
 	instanceRe  = regexp.MustCompile(`^(lhins|ins)-[a-z0-9]{6,20}$`)
 	regionRe    = regexp.MustCompile(`^[a-z]{2,3}(-[a-z0-9]+){1,3}$`)
 	portRe      = regexp.MustCompile(`^(ALL|[0-9]{1,5}(-[0-9]{1,5})?(,[0-9]{1,5}(-[0-9]{1,5})?)*)$`)
+	localURLRe  = regexp.MustCompile(`^https?://(127\.0\.0\.1|localhost)(:[0-9]{1,5})?(/[A-Za-z0-9._~/?=&%-]*)?$`)
 	pathRe      = regexp.MustCompile(`^/[A-Za-z0-9._~!&()*+,;=:@%/-]*$`)
 	subdomainRe = regexp.MustCompile(`^(@|\*|(\*\.)?[A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9])?)*)$`)
 )
@@ -299,6 +324,27 @@ func init() {
 			Undo: "恢复原来的 CC 防护设置"}},
 	})
 	register(&Capability{
+		Name: "free_command", Title: "AI 自由命令", Risk: core.R2, Reversible: true,
+		Params: []Param{
+			{Name: "goal", Kind: "text", Required: true, Desc: "用大白话说这一步要做什么、为什么，例如「给 Nginx 开启 gzip 压缩，减少网页传输大小」"},
+			{Name: "script", Kind: "script", Required: true, Desc: "要执行的 shell 命令（规则见系统说明；最多 4000 字节）"},
+			{Name: "files", Kind: "pathlist", Desc: "命令会写入、新建或删除的所有文件的绝对路径，逗号分隔；必须和命令完全一致"},
+			{Name: "services", Kind: "servicelist", Desc: "命令会重载或重启的服务，逗号分隔，例如 nginx、php8.2-fpm；Docker 容器写 docker:容器名；必须和命令完全一致"},
+			{Name: "check_url", Kind: "localurl", Desc: "执行后用来检查网站是否正常的本机地址，例如 http://127.0.0.1/ ；可不填"},
+			{Name: "expect", Kind: "lines", Hidden: true},
+		},
+		Impls: map[string]Impl{"*": {Via: "AI 自由命令", Script: "free_command.sh", Args: []string{"script", "files", "services", "check_url", "expect"},
+			Encode: true, Guarded: true, Downtime: "改动见下面的说明；重载服务一般不中断访问",
+			Undo: "把改动过的文件恢复成执行前的备份，并重新加载相关服务"}},
+		Check: func(v map[string]string) error {
+			a := freecmd.Analyze(freecmd.Declaration{Script: v["script"], Files: lines(v["files"]), Services: lines(v["services"])})
+			if !a.OK() {
+				return fmt.Errorf("命令没有通过检查：%s", strings.Join(a.Problems, "；"))
+			}
+			return nil
+		},
+	})
+	register(&Capability{
 		Name: "container.restart", Title: "重启容器", Risk: core.R2,
 		NoUndo: "重启容器没有修改任何配置，不需要回滚",
 		Params: []Param{{Name: "name", Kind: "name", Required: true, Desc: "Docker 容器名（docker ps 里的 NAMES，例如 1Panel-halo-xxxx）"}},
@@ -438,6 +484,9 @@ func Describe() string {
 		if len(c.Params) > 0 {
 			var ps []string
 			for _, p := range c.Params {
+				if p.Hidden {
+					continue
+				}
 				s := p.Name
 				switch p.Kind {
 				case "int":
@@ -601,6 +650,39 @@ func paramValue(p Param, raw any) (string, error) {
 	case "path":
 		if len(s) > 256 || !pathRe.MatchString(s) {
 			return "", fmt.Errorf("参数 %s 要是以 / 开头的网址路径，例如 /wp-login.php，%q 不是", p.Name, s)
+		}
+		return s, nil
+	case "script":
+		if len(s) > freecmd.MaxScript || strings.ContainsFunc(s, func(r rune) bool { return (r < 0x20 && r != '\n' && r != '\t') || r == 0x7f }) {
+			return "", fmt.Errorf("参数 %s 太长（最多 %d 字节）或含有控制字符", p.Name, freecmd.MaxScript)
+		}
+		return strings.ReplaceAll(s, "\r\n", "\n"), nil
+	case "pathlist":
+		var out []string
+		for _, f := range splitList(s) {
+			if err := freecmd.CheckPath(f); err != nil {
+				return "", fmt.Errorf("参数 %s 里的 %s：%v", p.Name, f, err)
+			}
+			out = append(out, f)
+		}
+		return strings.Join(out, "\n"), nil
+	case "servicelist":
+		var out []string
+		for _, n := range splitList(s) {
+			if err := freecmd.CheckService(n); err != nil {
+				return "", fmt.Errorf("参数 %s：%v", p.Name, err)
+			}
+			out = append(out, strings.TrimSuffix(n, ".service"))
+		}
+		return strings.Join(out, "\n"), nil
+	case "localurl":
+		if !localURLRe.MatchString(s) {
+			return "", fmt.Errorf("参数 %s 要是本机地址，例如 http://127.0.0.1/ ，%q 不是", p.Name, s)
+		}
+		return s, nil
+	case "lines":
+		if len(s) > 4096 || strings.ContainsAny(s, "\x00\r") {
+			return "", fmt.Errorf("参数 %s 不对", p.Name)
 		}
 		return s, nil
 	case "text":

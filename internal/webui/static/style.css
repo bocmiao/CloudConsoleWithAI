@@ -388,3 +388,25 @@ details.guide code { font: 12px ui-monospace, "SF Mono", Menlo, Consolas, monosp
   .exec-detail { padding-left: 16px; }
   .exec-detail .kv { grid-template-columns: 1fr; gap: 2px; }
 }
+
+/* AI-written commands: what will happen, then the checks it passed */
+.free { margin-top: 8px; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); font-size: 13px; }
+.free-title { display: flex; align-items: center; gap: 6px; font-weight: 600; margin-bottom: 6px; }
+.free-title .icon { color: var(--accent); }
+.free-row { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; padding: 3px 0; }
+.free-row .k { color: var(--text-2); }
+.free-row .mono { word-break: break-all; }
+.free-checks { margin: 6px 0; display: grid; gap: 3px; }
+.free-checks > div { display: flex; gap: 6px; align-items: flex-start; }
+.free-checks .icon { flex: none; margin-top: 1px; }
+details.free-more { margin: 4px 0; }
+details.free-more summary { cursor: pointer; color: var(--text-2); list-style: none; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; }
+details.free-more summary::-webkit-details-marker { display: none; }
+details.free-more[open] summary .icon { transform: rotate(90deg); }
+.diff { margin-top: 6px; padding: 8px 0; border-radius: 8px; background: var(--surface); box-shadow: var(--shadow); font: 12px/1.55 ui-monospace, "SF Mono", Menlo, Consolas, monospace; max-height: 320px; overflow: auto; }
+.diff > div { padding: 0 10px; white-space: pre-wrap; word-break: break-all; }
+.diff .add { background: color-mix(in srgb, var(--good) 14%, transparent); }
+.diff .del { background: var(--crit-track); }
+.diff .hunk { color: var(--text-3); }
+.free-warn { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; margin: 0 0 12px; border-radius: 10px; background: var(--warn-track); font-size: 13px; }
+.free-warn .icon { color: var(--warn); flex: none; margin-top: 1px; }

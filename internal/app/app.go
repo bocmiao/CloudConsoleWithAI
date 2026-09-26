@@ -34,6 +34,9 @@ type App struct {
 	// PollInterval, when set, is how often running actions check on
 	// progress; tests shorten it.
 	PollInterval time.Duration
+	// Reviewer, when set, stands in for the model that independently
+	// reviews AI-written commands; tests set it.
+	Reviewer func(ctx context.Context, prompt string) (string, error)
 
 	mu    sync.Mutex
 	convs map[string]*conversation

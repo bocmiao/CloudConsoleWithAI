@@ -3,10 +3,12 @@ package actions
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"regexp"
 	"sort"
 	"strconv"
@@ -70,12 +72,52 @@ type Progress func(log []string)
 func Apply(ctx context.Context, env *Env, r Resolved, progress Progress) Outcome {
 	switch {
 	case r.Impl.Script != "":
-		return runScript(ctx, env, r, "apply", nil, progress)
+		out := runScript(ctx, env, r, "apply", nil, progress)
+		if r.Impl.Guarded && out.Status == StatusDone {
+			confirmGuard(ctx, env, &out)
+		}
+		return out
 	case r.Impl.Cloud != "":
 		return applyCloud(ctx, env, r, progress)
 	}
 	return applyPanel(ctx, env, r, progress)
 }
+
+// confirmGuard cancels the restore a guarded script armed on the server.
+// Reaching the server to do so proves the connection survived the change;
+// if it cannot be reached, the server restores itself.
+func confirmGuard(ctx context.Context, env *Env, out *Outcome) {
+	guard, restore := out.Undo["guard"], out.Undo["restore"]
+	if !strings.HasSuffix(restore, "/restore.sh") {
+		out.logf("没有找到 5 分钟保险的记录，无法确认")
+		return
+	}
+	flag := shq(path.Dir(restore) + "/guard.cancelled")
+	cmd := "touch " + flag
+	switch {
+	case strings.HasPrefix(guard, "unit:") && unitRe.MatchString(strings.TrimPrefix(guard, "unit:")):
+		cmd += "; systemctl stop " + strings.TrimPrefix(guard, "unit:") + ".timer 2>/dev/null"
+	case strings.HasPrefix(guard, "pid:") && pidRe.MatchString(strings.TrimPrefix(guard, "pid:")):
+		cmd += "; kill " + strings.TrimPrefix(guard, "pid:") + " 2>/dev/null"
+	}
+	cmd += "; test -e " + flag
+	if env.User != "root" {
+		cmd = "sudo -n sh -c " + shq(cmd)
+	}
+	out.Commands = append(out.Commands, "# 6. 连接正常，取消 5 分钟保险", cmd)
+	res, err := env.SSH.Run(ctx, cmd, "", 1024)
+	if err != nil || res.ExitCode != 0 {
+		out.Status = StatusFailed
+		out.logf("执行后没能确认服务器状态（%v %s）：5 分钟后服务器会自动恢复原状。如果改动其实没问题，恢复后可以重新执行", err, strings.TrimSpace(res.Stderr))
+		return
+	}
+	out.logf("已确认连接正常，取消了 5 分钟保险")
+}
+
+var (
+	unitRe = regexp.MustCompile(`^miaopanel-guard-[A-Za-z0-9-]+$`)
+	pidRe  = regexp.MustCompile(`^[0-9]{1,9}$`)
+)
 
 // Undo reverts a step using the data its Apply recorded.
 func Undo(ctx context.Context, env *Env, r Resolved, undo map[string]string) Outcome {
@@ -140,7 +182,15 @@ func quoteAll(args []string) string {
 func scriptArgs(r Resolved) []string {
 	var args []string
 	for _, name := range r.Impl.Args {
-		args = append(args, r.Values[name])
+		v := r.Values[name]
+		if r.Impl.Encode {
+			if v == "" {
+				v = "-"
+			} else {
+				v = base64.StdEncoding.EncodeToString([]byte(v))
+			}
+		}
+		args = append(args, v)
 	}
 	return args
 }
@@ -168,7 +218,11 @@ func runScript(ctx context.Context, env *Env, r Resolved, mode string, undo map[
 
 	args := scriptArgs(r)
 	vars := append([]string{"MIAO_BACKUP_DIR=" + shq(backupDir)}, undoEnv(undo)...)
-	entry := strings.ReplaceAll(fmt.Sprintf("id=%s action=%s mode=%s args=%s", id, r.Cap.Name, mode, strings.Join(args, ",")), "\n", " ")
+	argText := strings.Join(args, ",")
+	if r.Impl.Encode {
+		argText = "（见 Miao Panel 执行日志）"
+	}
+	entry := strings.ReplaceAll(fmt.Sprintf("id=%s action=%s mode=%s args=%s", id, r.Cap.Name, mode, argText), "\n", " ")
 	journal := fmt.Sprintf(`(umask 077; mkdir -p %s && printf '%%s %%s rc=%%s\n' "$(date '+%%Y-%%m-%%d %%H:%%M:%%S')" %s "$rc" >>%s/actions.log) 2>/dev/null`,
 		journalDir, shq(entry), journalDir)
 	inner := fmt.Sprintf("%s sh %s.sh %s >%s.log 2>&1 </dev/null; rc=$?; %s; echo $rc >%s.rc",

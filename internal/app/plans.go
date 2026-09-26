@@ -70,6 +70,13 @@ func prepareSteps(steps []core.Step, adapter string) []core.Step {
 		s.Via = r.Impl.Via
 		s.Downtime = r.Impl.Downtime
 		s.Reversible = r.Cap.Reversible
+		if s.Capability == freeCapability && (s.Free == nil || !s.Free.Passed) {
+			s.Executable = false
+			s.Blocked = "这段自定义命令还没有通过试运行和独立审查，请让 AI 重新生成"
+			if s.Free != nil && s.Free.Problem != "" {
+				s.Blocked = s.Free.Problem
+			}
+		}
 	}
 	return steps
 }
@@ -268,6 +275,11 @@ func (a *App) ExecutePlan(id int64, selected []int) (PlanView, error) {
 		}
 		if !fresh[i].Executable {
 			return v, userErr("第 %d 步不能执行：%s", i+1, fresh[i].Blocked)
+		}
+	}
+	for _, i := range selected {
+		if err := a.freeReady(v.StepList, i, seen); err != nil {
+			return v, err
 		}
 	}
 	if !a.locks.try(sv.ID) {
