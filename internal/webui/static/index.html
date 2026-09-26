@@ -23,6 +23,7 @@
       <div class="side-item" :class="{active: tab === 'terminal'}" @click="go('terminal')"><ui-icon name="prompt"></ui-icon>终端</div>
       <div class="side-item" :class="{active: tab === 'plans'}" @click="go('plans')"><ui-icon name="bulb"></ui-icon>建议</div>
       <div class="side-item" :class="{active: tab === 'logs'}" @click="go('logs')"><ui-icon name="terminal"></ui-icon>日志</div>
+      <div class="side-item" :class="{active: tab === 'notices'}" @click="go('notices')"><ui-icon name="bell"></ui-icon>通知<span class="badge crit side-badge" v-if="unread">{{ unread > 99 ? '99+' : unread }}</span></div>
     </div>
 
     <div class="side-section">
@@ -312,6 +313,14 @@
         <div v-if="statsSeen.eo" v-show="statsView === 'eo'">
           <eo-stats :configured="tc.configured" :active="tab === 'stats' && statsView === 'eo'" @ask="askAI" @settings="go('settings')"></eo-stats>
         </div>
+      </div>
+    </div>
+
+    <!-- Notices: daily reports and alerts -->
+    <div class="tab-pane" v-if="seen.notices" v-show="tab === 'notices'">
+      <header class="toolbar"><h1>通知</h1></header>
+      <div class="page">
+        <notice-page :active="tab === 'notices'" @unread="n => unread = n"></notice-page>
       </div>
     </div>
 

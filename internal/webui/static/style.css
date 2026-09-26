@@ -629,3 +629,17 @@ button.th-sort:focus-visible { outline: 2px solid var(--accent); outline-offset:
   .kv-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .subtabs { gap: 16px; overflow-x: auto; }
 }
+
+/* 通知 */
+.side-badge { margin-left: auto; }
+.time-input { width: auto; }
+.notice-item { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); padding: 12px 16px; margin-bottom: 12px; }
+.notice-item.unread { box-shadow: inset 3px 0 0 var(--accent), var(--shadow); }
+.notice-item header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.notice-item header .grow { flex: 1; }
+.notice-text { white-space: pre-line; line-height: 1.7; color: var(--text-2); }
+.tag.warn { background: var(--warn-track); color: var(--warn); }
+@media (max-width: 720px) {
+  .notice-settings .row { flex-wrap: wrap; }
+  .notice-settings .row > .grow { flex-basis: 100%; }
+}

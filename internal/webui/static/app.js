@@ -81,6 +81,7 @@ const ICONS = {
   prompt: 'M4 6l6 6-6 6M12 18h8',
   close: 'M6 6l12 12M18 6L6 18',
   cloud: 'M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 8.6 4.5 4.5 0 0 1 17.5 18z',
+  bell: 'M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15zM10 20.5a2 2 0 0 0 4 0',
 };
 
 // In Miao Panel's own window, links that would open a new window go to
@@ -2026,6 +2027,101 @@ const EoStats = {
   </div>`,
 };
 
+// 通知: the daily report and alerts, and where they are pushed.
+const NoticePage = {
+  props: { active: Boolean },
+  emits: ['unread', 'ask'],
+  setup(props, { emit }) {
+    const data = ref(null);
+    const error = ref('');
+    const busy = ref('');
+    const form = reactive({ daily: true, dailyAt: '09:00', alertRisk: true, alertLeak: true, alertCert: true, alertBlock: true });
+    const hook = reactive({ url: '', secret: '', editing: false });
+    function take(v) {
+      data.value = v;
+      Object.assign(form, { daily: v.settings.daily, dailyAt: v.settings.dailyAt, alertRisk: v.settings.alertRisk, alertLeak: v.settings.alertLeak,
+        alertCert: v.settings.alertCert, alertBlock: v.settings.alertBlock });
+      emit('unread', v.unread);
+    }
+    async function load() {
+      try { take(await api('GET', '/api/notices')); error.value = ''; } catch (e) { error.value = e.message; }
+    }
+    async function markRead() {
+      if (!data.value || !data.value.unread) return;
+      try { await api('POST', '/api/notices/read'); emit('unread', 0); } catch { /* next time */ }
+    }
+    onMounted(async () => { await load(); if (props.active) setTimeout(markRead, 1500); });
+    watch(() => props.active, async on => { if (on) { await load(); setTimeout(markRead, 1500); } });
+    async function run(label, fn) {
+      busy.value = label;
+      try { await fn(); } catch (e) { notify(e.message, 'error'); } finally { busy.value = ''; }
+    }
+    const saveSettings = () => run('settings', async () => { take(await api('PUT', '/api/notices/settings', { ...form })); notify('已保存', 'ok'); });
+    const saveHook = () => run('hook', async () => {
+      take(await api('PUT', '/api/notices/webhook', { url: hook.url, secret: hook.secret }));
+      hook.url = ''; hook.secret = ''; hook.editing = false;
+      notify('推送地址已保存，可以点「发送测试」试一下', 'ok');
+    });
+    const clearHook = () => run('hook', async () => {
+      if (!confirm('不再推送到这个地址？日报和提醒仍会保存在这一页。')) return;
+      take(await api('PUT', '/api/notices/webhook', { url: '', secret: '' }));
+    });
+    const testHook = () => run('test', async () => { await api('POST', '/api/notices/test'); notify('测试消息已发送，去群里或手机上看看', 'ok'); });
+    const reportNow = () => run('report', async () => { take(await api('POST', '/api/notices/report')); notify('日报已生成', 'ok'); });
+    const needsSecret = computed(() => /\/robot\/send|\/open-apis\/bot\//.test(hook.url));
+    const kindText = k => ({ report: '日报', alert: '提醒', test: '测试' }[k] || k);
+    return { data, error, busy, form, hook, needsSecret, saveSettings, saveHook, clearHook, testHook, reportNow, kindText, whenText, load };
+  },
+  template: `
+  <div>
+    <div class="page-head"><p>每天的访问日报，以及需要你看一眼的提醒：新的高风险 IP、敏感文件被下载、证书快到期、自动封禁做了什么。都保存在这里，也可以推送到企业微信、钉钉、飞书群或者微信（Server酱）。</p></div>
+    <div class="notice" v-if="error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ error }}</div>
+    <template v-if="data">
+      <div class="group-title">推送到</div>
+      <div class="group notice-settings">
+        <div class="row" v-if="data.settings.webhook && !hook.editing">
+          <div class="grow"><div>{{ data.settings.webhookKind }}</div><div class="small tertiary mono-ish">{{ data.settings.webhook }}<span v-if="data.settings.hasSecret"> · 已设置加签密钥</span></div></div>
+          <button @click="testHook" :disabled="!!busy"><span class="spinner inline" v-if="busy === 'test'"></span>发送测试</button>
+          <button class="plain" @click="hook.editing = true">更换</button>
+          <button class="plain destructive" @click="clearHook" :disabled="!!busy">不推送</button>
+        </div>
+        <template v-else>
+          <div class="row form"><span class="k">推送地址</span><span class="v">
+            <input v-model="hook.url" placeholder="粘贴群机器人的 Webhook 地址，或 Server酱的 SendKey 地址" autocomplete="off" spellcheck="false" aria-label="推送地址"></span></div>
+          <div class="row form" v-if="needsSecret"><span class="k">加签密钥</span><span class="v">
+            <input v-model="hook.secret" type="password" placeholder="机器人开了「加签」才填（SEC 开头）" autocomplete="off" aria-label="加签密钥"></span></div>
+          <div class="row"><div class="grow small tertiary">
+              企业微信：群设置 → 群机器人 → 添加，复制 Webhook 地址。钉钉：群设置 → 机器人 → 自定义，安全设置选「加签」。飞书：群设置 → 群机器人 → 自定义机器人。微信：在 Server酱官网拿到 SendKey，地址是 https://sctapi.ftqq.com/SendKey.send。</div>
+            <button class="plain" v-if="hook.editing" @click="hook.editing = false">取消</button>
+            <button class="primary" @click="saveHook" :disabled="!hook.url.trim() || !!busy">保存</button></div>
+        </template>
+      </div>
+
+      <div class="group-title">发送什么</div>
+      <div class="group notice-settings">
+        <div class="row"><label class="check grow"><input type="checkbox" v-model="form.daily"> 每日日报：前一天的 PV、UV、IP 和变化，热门页面、地区，安全和证书情况</label>
+          <input type="time" v-model="form.dailyAt" class="time-input" aria-label="日报时间" :disabled="!form.daily"></div>
+        <div class="row"><label class="check"><input type="checkbox" v-model="form.alertRisk"> 发现新的高风险 IP（还没有封禁的）</label></div>
+        <div class="row"><label class="check"><input type="checkbox" v-model="form.alertLeak"> 敏感文件（如 .env、数据库备份）被下载</label></div>
+        <div class="row"><label class="check"><input type="checkbox" v-model="form.alertCert"> 证书快到期、已过期或申请失败</label></div>
+        <div class="row"><label class="check"><input type="checkbox" v-model="form.alertBlock"> 自动封禁和解封了 IP</label></div>
+        <div class="row"><div class="grow small tertiary">提醒随统计每 20 分钟检查一次，同一个问题一周内只提醒一次（高风险 IP 一天）。日报在设定时间后的第一次检查时生成；Miao Panel 没开着就等下次打开。</div>
+          <button @click="reportNow" :disabled="!!busy"><span class="spinner inline" v-if="busy === 'report'"></span>现在生成一份日报</button>
+          <button class="primary" @click="saveSettings" :disabled="!!busy">保存</button></div>
+      </div>
+
+      <div class="group-title">消息</div>
+      <div class="group" v-if="!data.notices.length"><div class="row secondary">还没有消息。</div></div>
+      <article class="notice-item" v-for="n in data.notices" :key="n.id" :class="{ unread: !n.read }">
+        <header><span class="tag" :class="n.kind === 'alert' ? 'warn' : 'on'">{{ kindText(n.kind) }}</span><b>{{ n.title }}</b>
+          <span class="grow"></span><span class="small tertiary">{{ whenText(n.at) }}</span></header>
+        <div class="notice-text small">{{ n.text.replace(/\\*\\*/g, '') }}</div>
+        <div class="small" v-if="n.push" :class="n.push === 'ok' ? 'tertiary' : 'st-crit'">{{ n.push === 'ok' ? '已推送' : '推送失败：' + n.push }}</div>
+      </article>
+    </template>
+  </div>`,
+};
+
 const app = createApp({
   setup() {
     const tab = ref('servers');
@@ -2465,17 +2561,22 @@ const app = createApp({
       if (Array.isArray(a.checks) && a.checks.length) parts.push(a.checks.join('、'));
       return parts.join(' · ');
     }
-    const actorName = a => ({ user: '你', ai: 'AI', system: '系统' }[a] || a);
+    const actorName = a => ({ user: '你', ai: 'AI', system: '系统', auto: '自动' }[a] || a);
     const actionName = a => ({ 'server.add': '添加服务器', 'server.delete': '删除服务器', 'server.test': '测试连接', 'server.discover': '识别环境',
       'server.hostkey.recorded': '记录服务器指纹', 'settings.ai': '修改 AI 设置', 'ai.chat': 'AI 对话', 'plan.propose': 'AI 生成清单',
       'plan.execute': '执行清单', 'plan.step': '执行步骤', 'plan.undo': '撤销步骤', 'exec.rollback': '回滚', 'onepanel.settings': '修改 1Panel 接口设置', 'settings.tencent': '修改腾讯云密钥',
-      'terminal.open': '打开终端', 'terminal.close': '关闭终端' }[a] || a);
+      'terminal.open': '打开终端', 'terminal.close': '关闭终端', 'settings.autoblock': '修改自动封禁', 'settings.notices': '修改通知设置',
+      'settings.webhook': '修改推送地址', 'visits.judge': 'AI 研判 IP' }[a] || a);
+    // Unread notices, for the sidebar; checked every minute.
+    const unread = ref(0);
+    const loadUnread = () => api('GET', '/api/notices/unread').then(v => { unread.value = v.unread; }).catch(() => {});
+    setInterval(() => { if (document.visibilityState === 'visible' && tab.value !== 'notices') loadUnread(); }, 60000);
 
     onMounted(async () => {
       try {
         info.value = await api('GET', '/api/info');
         presets.value = await api('GET', '/api/ai/presets');
-        await Promise.all([loadServers(), loadAI(), loadSpend(), loadConvs(), loadTencent(), loadFree()]);
+        await Promise.all([loadServers(), loadAI(), loadSpend(), loadConvs(), loadTencent(), loadFree(), loadUnread()]);
         if (convs.value.length) await openConv(convs.value[0].id);
         if (servers.value.length) await select(servers.value[0].id);
       } catch (e) { notify(e.message, 'error'); }
@@ -2486,7 +2587,7 @@ const app = createApp({
       spendText, plans, audit, logView, logFocus, loadAudit, openLog, showAdd, addForm, messages, draft, chatBusy, msgBox, suggestions,
       select, openAdd, addServer, testConn, discover, removeServer, askAbout, send, onEnter, newChat, applyPreset, saveAI, testAI,
       convs, showConvs, conversationId, openConv, deleteConv, relTime,
-      op, saveOnePanel, testOnePanel, tc, saveTencent, testTencent, clearTencent, freeCmd, setFree, seen, statsView, statsSeen, termRequest, openTerminal,
+      op, saveOnePanel, testOnePanel, tc, saveTencent, testTencent, clearTencent, freeCmd, setFree, seen, statsView, statsSeen, termRequest, openTerminal, unread,
       cloud, cloudList, cloudPick, pickCloud, askAI, daysTo, fmtBytes,
       memPct, rootDisk, envSub, dockerText, money, mb, meterClass, levelClass, levelIcon, levelName, riskName, adapterName,
       fmtTime, serverName, parseSteps, toolName, toolDetail, actorName, actionName, md, live, liveStatus, thinkTail, stopAnswer,
@@ -2498,6 +2599,7 @@ app.component('plan-card', PlanCard);
 app.component('exec-log', ExecLog);
 app.component('line-chart', LineChart);
 app.component('eo-stats', EoStats);
+app.component('notice-page', NoticePage);
 app.component('visit-stats', VisitStats);
 app.component('rank-list', RankList);
 app.component('terminal-page', TerminalPage);

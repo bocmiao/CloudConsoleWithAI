@@ -78,6 +78,13 @@ func New(a *app.App, token string, port int, version string) *Server {
 	api("POST /api/terminals/{tid}/input", s.terminalInput)
 	api("POST /api/terminals/{tid}/resize", s.resizeTerminal)
 	api("DELETE /api/terminals/{tid}", s.closeTerminal)
+	api("GET /api/notices", s.notices)
+	api("GET /api/notices/unread", s.unreadNotices)
+	api("PUT /api/notices/settings", s.saveNoticeSettings)
+	api("PUT /api/notices/webhook", s.saveWebhook)
+	api("POST /api/notices/test", s.testWebhook)
+	api("POST /api/notices/read", s.readNotices)
+	api("POST /api/notices/report", s.reportNow)
 	api("GET /api/autoblock", s.autoBlock)
 	api("PUT /api/autoblock", s.saveAutoBlock)
 	api("POST /api/autoblock/run", s.runAutoBlock)
@@ -458,6 +465,53 @@ func (s *Server) serverCloud(_ http.ResponseWriter, r *http.Request) (any, error
 
 func (s *Server) eoSites(_ http.ResponseWriter, r *http.Request) (any, error) {
 	return s.app.EOSites(r.Context())
+}
+
+func (s *Server) notices(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return s.app.Notices(), nil
+}
+
+func (s *Server) unreadNotices(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return map[string]int{"unread": s.app.UnreadNotices()}, nil
+}
+
+func (s *Server) saveNoticeSettings(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req app.NoticeSettings
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.SaveNoticeSettings(req)
+}
+
+func (s *Server) saveWebhook(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req struct {
+		URL    string `json:"url"`
+		Secret string `json:"secret"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.SaveWebhook(req.URL, req.Secret)
+}
+
+func (s *Server) testWebhook(_ http.ResponseWriter, r *http.Request) (any, error) {
+	if err := s.app.TestWebhook(r.Context()); err != nil {
+		return nil, err
+	}
+	return map[string]bool{"ok": true}, nil
+}
+
+func (s *Server) readNotices(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	s.app.MarkNoticesRead()
+	return map[string]bool{"ok": true}, nil
+}
+
+// reportNow makes today's daily report (of yesterday) at once.
+func (s *Server) reportNow(_ http.ResponseWriter, r *http.Request) (any, error) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	defer cancel()
+	s.app.DailyReport(ctx)
+	return s.app.Notices(), nil
 }
 
 func (s *Server) autoBlock(_ http.ResponseWriter, _ *http.Request) (any, error) {
