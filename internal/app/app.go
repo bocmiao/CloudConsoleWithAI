@@ -42,6 +42,7 @@ type App struct {
 	convs map[string]*conversation
 	locks serverLocks
 	cloud cloudCache
+	certs certCache
 }
 
 // New creates an App.

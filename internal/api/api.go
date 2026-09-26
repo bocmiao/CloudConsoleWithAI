@@ -56,6 +56,7 @@ func New(a *app.App, token string, port int, version string) *Server {
 	api("GET /api/settings/ai", s.getAISettings)
 	api("PUT /api/settings/ai", s.putAISettings)
 	api("POST /api/settings/ai/test", s.testAI)
+	api("GET /api/certificates", s.getCertificates)
 	api("GET /api/settings/free-command", s.getFreeCommand)
 	api("PUT /api/settings/free-command", s.putFreeCommand)
 	api("GET /api/settings/tencent", s.getTencent)
@@ -243,6 +244,10 @@ func (s *Server) testAI(_ http.ResponseWriter, r *http.Request) (any, error) {
 	defer cancel()
 	text, err := s.app.TestAI(ctx)
 	return map[string]string{"reply": text}, err
+}
+
+func (s *Server) getCertificates(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.Certificates(r.Context(), r.URL.Query().Get("refresh") == "1")
 }
 
 func (s *Server) getFreeCommand(_ http.ResponseWriter, _ *http.Request) (any, error) {

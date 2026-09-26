@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/bocmiao/CloudConsoleWithAI/internal/tencent"
 )
@@ -241,7 +242,8 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			var certs []map[string]string
 			if d.CertMode == "eofreecert" {
-				certs = []map[string]string{{"CertId": "eofree-1", "Type": "managed", "Status": d.CertStatus}}
+				certs = []map[string]string{{"CertId": "eofree-1", "Type": "managed", "Status": d.CertStatus,
+					"ExpireTime": time.Now().Add(80 * 24 * time.Hour).UTC().Format(time.RFC3339)}}
 				if d.CertStatus == "applying" {
 					d.CertStatus = "deployed" // issued by the next look
 				}

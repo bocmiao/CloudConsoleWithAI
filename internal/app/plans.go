@@ -306,6 +306,7 @@ func now() string { return time.Now().UTC().Format(time.RFC3339) }
 
 func (a *App) runPlan(planID, serverID int64) {
 	defer a.locks.release(serverID)
+	defer a.forgetCertificates() // a step may have issued or changed one
 	ctx, cancel := context.WithTimeout(withOrigin(context.Background(), OriginPlan), runTimeout)
 	defer cancel()
 	v, err := a.Plan(planID)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/bocmiao/CloudConsoleWithAI/internal/tencent"
 )
@@ -20,6 +21,12 @@ func (f *Fake) serveEO(w http.ResponseWriter, service, action string, in map[str
 		return nil
 	}
 	switch service + " " + action {
+	case "ssl DescribeCertificates":
+		end := time.Now().Add(10 * 24 * time.Hour).In(time.FixedZone("CST", 8*3600)).Format("2006-01-02 15:04:05")
+		ok(w, map[string]any{"TotalCount": 1, "Certificates": []map[string]any{{
+			"CertificateId": "ssl-abc", "Domain": "api.example.com", "SubjectAltName": []string{"api.example.com"}, "From": "trustasia",
+			"ProductZhName": "TrustAsia 免费版", "Status": 1, "StatusName": "已通过", "CertEndTime": end, "IsDv": true, "HostingStatus": -1,
+		}}})
 	case "teo DescribeSecurityPolicy":
 		if str("Entity") != "ZoneDefaultPolicy" {
 			fail(w, "InvalidParameter", "fake only has site policies")

@@ -86,6 +86,7 @@ var (
 	instanceRe  = regexp.MustCompile(`^(lhins|ins)-[a-z0-9]{6,20}$`)
 	regionRe    = regexp.MustCompile(`^[a-z]{2,3}(-[a-z0-9]+){1,3}$`)
 	portRe      = regexp.MustCompile(`^(ALL|[0-9]{1,5}(-[0-9]{1,5})?(,[0-9]{1,5}(-[0-9]{1,5})?)*)$`)
+	emailRe     = regexp.MustCompile(`^[A-Za-z0-9._%+-]{1,64}@([A-Za-z0-9-]{1,63}\.)+[A-Za-z]{2,63}$`)
 	localURLRe  = regexp.MustCompile(`^https?://(127\.0\.0\.1|localhost)(:[0-9]{1,5})?(/[A-Za-z0-9._~/?=&%-]*)?$`)
 	pathRe      = regexp.MustCompile(`^/[A-Za-z0-9._~!&()*+,;=:@%/-]*$`)
 	subdomainRe = regexp.MustCompile(`^(@|\*|(\*\.)?[A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9])?)*)$`)
@@ -364,6 +365,54 @@ func init() {
 				Undo: "在 1Panel 里删除这个网站和它的目录（不删除应用和数据库；静态网站目录里后来放的文件也会一起删除）"},
 		},
 		Check: checkSiteParams,
+	})
+	register(&Capability{
+		Name: "cert.issue", Title: "申请证书并开启自动续签", Risk: core.R2, Reversible: true,
+		Params: []Param{
+			{Name: "domain", Kind: "certhost", Required: true, Desc: "证书的主域名，例如 blog.example.com；泛域名写 *.example.com（必须用 DNS 验证）"},
+			{Name: "other_domains", Kind: "hostlist", Desc: "同一张证书里的其他域名，逗号分隔，例如 www.example.com"},
+			{Name: "method", Kind: "enum", Enum: []string{"http", "dns"}, Default: "http",
+				Desc: "http：Let's Encrypt 访问网站验证（域名要能访问到这台服务器，经过 EdgeOne 也可以）；dns：用 1Panel 里配置好的 DNS 账号验证（泛域名必须用）"},
+			{Name: "dns_account", Kind: "text", Desc: "method=dns 时用哪个 1Panel DNS 账号（只有一个时可以不填）"},
+			{Name: "email", Kind: "email", Desc: "1Panel 里还没有 Let's Encrypt 账号时，用这个邮箱注册（接收到期提醒）"},
+			{Name: "apply", Kind: "enum", Enum: []string{"yes", "no"}, Default: "yes", Desc: "yes：申请后给同名网站（或 website 指定的网站）开启 HTTPS"},
+			{Name: "website", Kind: "host", Desc: "要开启 HTTPS 的 1Panel 网站主域名，不填就是 domain"},
+			{Name: "http_mode", Kind: "enum", Enum: []string{"HTTPAlso", "HTTPToHTTPS", "HTTPSOnly"}, Default: "HTTPAlso",
+				Desc: "HTTPAlso：HTTP 和 HTTPS 都能访问（EdgeOne 用 HTTP 回源时必须选这个）；HTTPToHTTPS：HTTP 跳转到 HTTPS；HTTPSOnly：只能 HTTPS"},
+		},
+		Impls: map[string]Impl{
+			"1panel": {Via: "1Panel 接口", Panel: "cert_issue", Downtime: "不中断访问；1Panel 重新加载 OpenResty",
+				Undo: "恢复网站原来的 HTTPS 设置，并删除新申请的证书"},
+		},
+		Check: func(v map[string]string) error {
+			if strings.HasPrefix(v["domain"], "*.") && v["method"] != "dns" {
+				return fmt.Errorf("泛域名证书必须用 DNS 验证（method=dns）")
+			}
+			for _, d := range lines(v["other_domains"]) {
+				if strings.HasPrefix(d, "*.") && v["method"] != "dns" {
+					return fmt.Errorf("泛域名证书必须用 DNS 验证（method=dns）")
+				}
+			}
+			return nil
+		},
+	})
+	register(&Capability{
+		Name: "cert.renew", Title: "立即续签证书", Risk: core.R1,
+		NoUndo: "续签只是换一张新的证书，不需要回滚",
+		Params: []Param{{Name: "domain", Kind: "certhost", Required: true, Desc: "1Panel 里证书的主域名"}},
+		Impls: map[string]Impl{
+			"1panel": {Via: "1Panel 接口", Panel: "cert_renew", Downtime: "不中断访问"},
+		},
+	})
+	register(&Capability{
+		Name: "cert.autorenew.set", Title: "开关证书自动续签", Risk: core.R1, Reversible: true,
+		Params: []Param{
+			{Name: "domain", Kind: "certhost", Required: true, Desc: "1Panel 里证书的主域名"},
+			{Name: "enabled", Kind: "enum", Enum: []string{"on", "off"}, Required: true, Desc: "on 开启，off 关闭"},
+		},
+		Impls: map[string]Impl{
+			"1panel": {Via: "1Panel 接口", Panel: "cert_autorenew", Downtime: "不影响访问", Undo: "改回原来的设置"},
+		},
 	})
 	register(&Capability{
 		Name: "app.limits.set", Title: "设置应用内存上限", Risk: core.R2, Reversible: true,
@@ -675,6 +724,27 @@ func paramValue(p Param, raw any) (string, error) {
 			out = append(out, strings.TrimSuffix(n, ".service"))
 		}
 		return strings.Join(out, "\n"), nil
+	case "certhost":
+		name := strings.ToLower(s)
+		if len(name) > 253 || !hostRe.MatchString(strings.TrimPrefix(name, "*.")) || !strings.Contains(name, ".") {
+			return "", fmt.Errorf("参数 %s 要是域名，例如 blog.example.com 或 *.example.com，%q 不是", p.Name, s)
+		}
+		return name, nil
+	case "hostlist":
+		var out []string
+		for _, d := range splitList(s) {
+			d = strings.ToLower(d)
+			if !hostRe.MatchString(strings.TrimPrefix(d, "*.")) || !strings.Contains(d, ".") {
+				return "", fmt.Errorf("参数 %s 里的 %q 不是域名", p.Name, d)
+			}
+			out = append(out, d)
+		}
+		return strings.Join(out, "\n"), nil
+	case "email":
+		if !emailRe.MatchString(s) {
+			return "", fmt.Errorf("参数 %s 要是邮箱地址，%q 不是", p.Name, s)
+		}
+		return s, nil
 	case "localurl":
 		if !localURLRe.MatchString(s) {
 			return "", fmt.Errorf("参数 %s 要是本机地址，例如 http://127.0.0.1/ ，%q 不是", p.Name, s)

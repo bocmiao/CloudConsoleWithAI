@@ -437,6 +437,12 @@ func applyPanel(ctx context.Context, env *Env, r Resolved, progress Progress) Ou
 			return applyJavaHeap(ctx, env, r.Values, out, report)
 		case "site_create":
 			return applySiteCreate(ctx, env, r.Values, out, report)
+		case "cert_issue":
+			return applyCertIssue(ctx, env, r.Values, out, report)
+		case "cert_renew":
+			return applyCertRenew(ctx, env, r.Values, out, report)
+		case "cert_autorenew":
+			return applyCertAutoRenew(ctx, env, r.Values, out, report)
 		}
 		out.Status = StatusFailed
 		out.logf("未知的面板操作 %s", r.Impl.Panel)
@@ -619,6 +625,10 @@ func undoPanel(ctx context.Context, env *Env, r Resolved, undo map[string]string
 			err = undoAppLimits(ctx, env.OnePanel, undo)
 		case "site_create":
 			err = undoSiteCreate(ctx, env.OnePanel, undo)
+		case "cert_issue":
+			err = undoCertIssue(ctx, env.OnePanel, undo)
+		case "cert_autorenew":
+			err = undoCertAutoRenew(ctx, env.OnePanel, undo)
 		case "java_heap":
 			id, _ := strconv.ParseUint(undo["install_id"], 10, 64)
 			var cfg onepanel.ContainerConfig

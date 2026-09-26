@@ -410,3 +410,10 @@ details.free-more[open] summary .icon { transform: rotate(90deg); }
 .diff .hunk { color: var(--text-3); }
 .free-warn { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; margin: 0 0 12px; border-radius: 10px; background: var(--warn-track); font-size: 13px; }
 .free-warn .icon { color: var(--warn); flex: none; margin-top: 1px; }
+
+/* Certificates */
+.table-wrap { overflow-x: auto; }
+.cert-table { min-width: 720px; font-size: 13px; }
+.cert-st { display: inline-flex; align-items: flex-start; gap: 5px; }
+.cert-st .icon { flex: none; margin-top: 2px; }
+.filter-row .primary .icon { color: var(--on-accent); }

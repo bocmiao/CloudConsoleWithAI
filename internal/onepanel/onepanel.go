@@ -81,6 +81,11 @@ func shq(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'
 
 const statusMark = "\nMIAOHTTP "
 
+// redactKeys blanks private keys in the panel's answers on the server, so
+// they never appear in command output that is stored elsewhere (such as
+// the automation agent's execution records).
+const redactKeys = ` | sed -E 's/"privateKey":"[^"]*"/"privateKey":""/g'`
+
 func (t *curlTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	var body []byte
 	if req.Body != nil {
@@ -104,15 +109,23 @@ func (t *curlTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		cmd = append(cmd, "--data-binary", "@-")
 	}
 	cmd = append(cmd, shq(u))
-	stdout, stderr, code, err := t.sh(req.Context(), strings.Join(cmd, " "), string(body), 8<<20)
-	switch {
-	case err != nil:
+	line := "{ " + strings.Join(cmd, " ") + "; rc=$?; echo; echo MIAOCURL $rc; }" + redactKeys
+	stdout, stderr, _, err := t.sh(req.Context(), line, string(body), 8<<20)
+	if err != nil {
 		return nil, err
+	}
+	end := strings.LastIndex(stdout, "\nMIAOCURL ")
+	if end < 0 {
+		return nil, fmt.Errorf("curl 返回了无法识别的内容：%.200s", stdout)
+	}
+	code, _ := strconv.Atoi(strings.TrimSpace(stdout[end+len("\nMIAOCURL "):]))
+	switch {
 	case code == 127:
 		return nil, errors.New("服务器上没有 curl，无法调用 1Panel 接口")
 	case code != 0:
 		return nil, fmt.Errorf("curl 连接 1Panel 失败（退出码 %d）：%s", code, strings.TrimSpace(stderr))
 	}
+	stdout = stdout[:end]
 	i := strings.LastIndex(stdout, statusMark)
 	if i < 0 {
 		return nil, fmt.Errorf("curl 返回了无法识别的内容：%.200s", stdout)
@@ -297,6 +310,7 @@ type InstalledApp struct {
 	Status      string `json:"status"`
 	Version     string `json:"version"`
 	HTTPPort    int    `json:"httpPort"` // the port the app is published on, if any
+	HTTPSPort   int    `json:"httpsPort"`
 }
 
 // InstalledApps lists the installed apps.

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/bocmiao/CloudConsoleWithAI/internal/actions"
+	"github.com/bocmiao/CloudConsoleWithAI/internal/certs"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/tencent/tencenttest"
 )
 
@@ -141,5 +142,58 @@ func TestEdgeOneSecurityAndPlanTools(t *testing.T) {
 	out, err = a.toolTencentEO(ctx, json.RawMessage(`{"domain":"new-site.org"}`))
 	if err != nil || !strings.Contains(out, "eo.zone.create") || !strings.Contains(out, "套餐 edgeone-free2 基础版 区域=global 状态=normal 还能绑定站点") {
 		t.Fatalf("eo without a site: %q %v", out, err)
+	}
+}
+
+func TestCertificateOverview(t *testing.T) {
+	a := newApp(t)
+	f := tencenttest.Start(t)
+	a.TencentEndpoint = f.Endpoint
+	f.Domains = append(f.Domains,
+		&tencenttest.Domain{Zone: "zone-abc", Name: "blog.example.com", Status: "online", Cname: "x", Origin: "1.2.3.4", CertMode: "eofreecert", CertStatus: "deployed"},
+		&tencenttest.Domain{Zone: "zone-abc", Name: "shop.example.com", Status: "online", Cname: "y", Origin: "1.2.3.4", CertMode: "disable"})
+	if _, err := a.SaveTencent(tencenttest.SecretID, tencenttest.SecretKey); err != nil {
+		t.Fatal(err)
+	}
+	old := probeCert
+	defer func() { probeCert = old }()
+	var probed []string
+	probeCert = func(_ context.Context, host string) (certs.Info, error) {
+		probed = append(probed, host)
+		return certs.Info{Names: []string{host}, Issuer: "Let's Encrypt R11", NotAfter: time.Now().Add(3 * 24 * time.Hour), Valid: true}, nil
+	}
+
+	ov, err := a.Certificates(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byDomain := map[string]CertEntry{}
+	for _, e := range ov.Entries {
+		byDomain[e.Source+" "+e.Domain] = e
+	}
+	blog, shop, api := byDomain["eo blog.example.com"], byDomain["eo shop.example.com"], byDomain["tencent_ssl api.example.com"]
+	if !blog.AutoRenew || blog.Level != "ok" || blog.DaysLeft == nil || *blog.DaysLeft < 78 || blog.Renew != "EdgeOne 自动续签" {
+		t.Fatalf("eo free cert = %+v", blog)
+	}
+	if shop.Level != "info" || !strings.Contains(shop.Status, "没有开启 HTTPS") {
+		t.Fatalf("eo without https = %+v", shop)
+	}
+	if api.AutoRenew || api.Level != "warn" || !strings.Contains(api.Status, "不会自动续签") {
+		t.Fatalf("tencent ssl = %+v", api)
+	}
+	if len(probed) != 1 || probed[0] != "blog.example.com" || len(ov.Live) != 1 || ov.Live[0].Level != "crit" {
+		t.Fatalf("live = %v %+v", probed, ov.Live)
+	}
+	if ov.Entries[0].Level != "warn" {
+		t.Fatalf("problems should come first: %+v", ov.Entries[0])
+	}
+	text, err := a.toolCertificates(context.Background(), json.RawMessage(`{"domain":"example.com"}`))
+	if err != nil || !strings.Contains(text, "EdgeOne 自动续签") || !strings.Contains(text, "https://blog.example.com") {
+		t.Fatalf("tool = %q %v", text, err)
+	}
+	// Cached for a while.
+	calls := len(f.Calls)
+	if _, err := a.Certificates(context.Background(), false); err != nil || len(f.Calls) != calls {
+		t.Fatal("second overview should come from the cache")
 	}
 }

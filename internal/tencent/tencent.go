@@ -60,7 +60,7 @@ func friendly(e *Error) string {
 		return "电脑的时间不准，腾讯云拒绝了请求，请把电脑时间校准后再试"
 	case strings.HasPrefix(e.Code, "AuthFailure.UnauthorizedOperation"), strings.HasPrefix(e.Code, "UnauthorizedOperation"):
 		name := map[string]string{"dnspod": "DNSPod", "teo": "EdgeOne", "lighthouse": "轻量应用服务器", "cvm": "云服务器 CVM",
-			"vpc": "私有网络（安全组）", "cbs": "云硬盘（快照）", "monitor": "云监控", "tat": "自动化助手（TAT）"}[e.Service]
+			"vpc": "私有网络（安全组）", "cbs": "云硬盘（快照）", "monitor": "云监控", "tat": "自动化助手（TAT）", "ssl": "SSL 证书"}[e.Service]
 		if name == "" {
 			name = e.Service
 		}

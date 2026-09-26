@@ -237,6 +237,7 @@ func (a *App) rollback(ctx context.Context, e *store.ExecLog) (store.ExecLog, er
 			_ = a.savePlan(&v)
 		}
 	}
+	a.forgetCertificates()
 	_ = a.Store.Audit("user", "exec.rollback", e.Title, fmt.Sprintf("%s：%s", sv.Name, out.Status))
 	if out.Status != actions.StatusUndone {
 		return rb, userErr("回滚没有成功：%s", strings.Join(out.Log, "；"))

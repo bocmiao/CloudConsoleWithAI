@@ -46,6 +46,8 @@ func fakePanel(t *testing.T, bodies *[]map[string]any) http.Handler {
 			reply(`{"id":3,"params":{"pm":"dynamic","pm.max_children":"30"}}`)
 		case "/api/v2/runtimes/php/fpm/config", "/api/v2/databases/variables/update":
 			reply(`null`)
+		case "/api/v2/websites/ssl/search":
+			reply(`{"total":1,"items":[{"id":3,"primaryDomain":"blog.example.com","status":"ready","privateKey":"-----BEGIN EC PRIVATE KEY-----\nsecret\n-----END EC PRIVATE KEY-----\n"}]}`)
 		case "/api/v2/databases/variables":
 			reply(`{"innodb_buffer_pool_size":"1073741824","max_connections":"500"}`)
 		default:
@@ -183,6 +185,27 @@ func TestClientOverShell(t *testing.T) {
 	}
 	if _, err := NewOverShell(localShell, portOf(t, srv), "wrong", "", "").Probe(ctx); err == nil || !strings.Contains(err.Error(), "API 密钥不对") {
 		t.Fatalf("wrong key: %v", err)
+	}
+
+	var seen strings.Builder
+	spy := func(ctx context.Context, cmd, stdin string, n int) (string, string, int, error) {
+		out, errOut, code, err := localShell(ctx, cmd, stdin, n)
+		seen.WriteString(out)
+		return out, errOut, code, err
+	}
+	ssls, err := NewOverShell(spy, portOf(t, srv), key, "", "").SSLs(ctx)
+	if err != nil || len(ssls) != 1 || ssls[0].PrimaryDomain != "blog.example.com" {
+		t.Fatalf("ssls: %+v %v", ssls, err)
+	}
+	if strings.Contains(seen.String(), "secret") || !strings.Contains(seen.String(), `"privateKey":""`) {
+		t.Fatalf("private key came back over the shell: %s", seen.String())
+	}
+
+	closed := httptest.NewServer(http.NotFoundHandler())
+	closedPort := portOf(t, closed)
+	closed.Close()
+	if _, err := NewOverShell(localShell, closedPort, key, "", "").Probe(ctx); err == nil || !strings.Contains(err.Error(), "退出码 7") {
+		t.Fatalf("closed port: %v", err)
 	}
 
 	tls := httptest.NewTLSServer(fakePanel(t, &bodies))

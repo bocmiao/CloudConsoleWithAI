@@ -19,6 +19,7 @@
     <div class="side-section">
       <div class="side-item" :class="{active: tab === 'chat'}" @click="go('chat')"><ui-icon name="sparkles"></ui-icon>AI 助手</div>
       <div class="side-item" :class="{active: tab === 'stats'}" @click="go('stats')"><ui-icon name="chart"></ui-icon>网站统计</div>
+      <div class="side-item" :class="{active: tab === 'certs'}" @click="go('certs')"><ui-icon name="lock"></ui-icon>证书</div>
       <div class="side-item" :class="{active: tab === 'plans'}" @click="go('plans')"><ui-icon name="bulb"></ui-icon>建议</div>
       <div class="side-item" :class="{active: tab === 'logs'}" @click="go('logs')"><ui-icon name="terminal"></ui-icon>日志</div>
     </div>
@@ -282,6 +283,14 @@
       </div>
     </template>
 
+    <!-- Certificates -->
+    <template v-if="tab === 'certs'">
+      <header class="toolbar"><h1>证书</h1></header>
+      <div class="page">
+        <cert-page :configured="tc.configured" @ask="askAI"></cert-page>
+      </div>
+    </template>
+
     <!-- Plans -->
     <template v-if="tab === 'plans'">
       <header class="toolbar"><h1>建议</h1></header>
@@ -361,7 +370,7 @@
           <ol>
             <li>打开腾讯云控制台的<a href="https://console.cloud.tencent.com/cam" target="_blank" rel="noopener">访问管理（CAM）</a>，进入「用户 → 用户列表 → 新建用户 → 快速创建」；</li>
             <li>用户名随便填，比如 miaopanel；访问方式只勾选「编程访问」，<b>不要</b>勾选控制台访问；</li>
-            <li>用户权限里搜索并勾选：<code>QcloudDNSPodFullAccess</code>（解析）、<code>QcloudTEOFullAccess</code>（EdgeOne）、<code>QcloudLighthouseFullAccess</code>（轻量服务器）、<code>QcloudCVMFullAccess</code> 和 <code>QcloudVPCFullAccess</code>（云服务器和它的安全组）、<code>QcloudCBSFullAccess</code>（云服务器快照）、<code>QcloudMonitorReadOnlyAccess</code>（监控数据）、<code>QcloudTATFullAccess</code>（自动化助手，不用密码连接服务器时需要）。用不到的产品可以不勾；只想让 AI 查看、不让它修改的话，改选名字里带 ReadOnly 的同名策略；</li>
+            <li>用户权限里搜索并勾选：<code>QcloudDNSPodFullAccess</code>（解析）、<code>QcloudTEOFullAccess</code>（EdgeOne）、<code>QcloudLighthouseFullAccess</code>（轻量服务器）、<code>QcloudCVMFullAccess</code> 和 <code>QcloudVPCFullAccess</code>（云服务器和它的安全组）、<code>QcloudCBSFullAccess</code>（云服务器快照）、<code>QcloudMonitorReadOnlyAccess</code>（监控数据）、<code>QcloudTATFullAccess</code>（自动化助手，不用密码连接服务器时需要）、<code>QcloudSSLReadOnlyAccess</code>（在「证书」页查看腾讯云 SSL 证书）。用不到的产品可以不勾；只想让 AI 查看、不让它修改的话，改选名字里带 ReadOnly 的同名策略；</li>
             <li>创建完成后复制 SecretId 和 SecretKey 粘贴到上面。SecretKey 只显示一次；</li>
             <li>不要用主账号的密钥。子账号只有你勾选的权限，不能购买新资源，随时可以在访问管理里删掉。</li>
           </ol>

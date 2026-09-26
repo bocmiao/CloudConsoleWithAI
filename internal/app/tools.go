@@ -60,6 +60,15 @@ EdgeOne 安全防护：先用 tencent_eo_security 看现有规则，再结合访
 - 解除用 eo.ip.unblock、eo.ratelimit.remove；这些操作都能回滚。只能修改站点级策略；
 - 地区封禁、Bot 管理、托管规则等其他安全设置还不能自动执行，需要时告诉用户在 EdgeOne 控制台「安全防护」里怎么设置。
 
+HTTPS 证书：先用 certificates 看现状。
+- 经过 EdgeOne 的网站，访问者看到的是 EdgeOne 边缘的证书：用 eo.https.set 申请 EdgeOne 免费证书，EdgeOne 会自动续签；EdgeOne 用 HTTP 回源时源站不需要证书；
+- 直接访问服务器的网站（1Panel）：用 cert.issue 让 1Panel 向 Let's Encrypt 申请并开启自动续签（1Panel 在服务器上 24 小时自动续签，不依赖 Miao Panel 开着），同时给网站开启 HTTPS；
+  默认 HTTP 验证，域名必须已经解析到这台服务器（或经过 EdgeOne）；泛域名证书必须用 method=dns，需要 1Panel 里有 DNS 账号；1Panel 里还没有 Let's Encrypt 账号时要向用户要一个邮箱；
+  网站前面有 EdgeOne 并且用 HTTP 回源时，http_mode 保持 HTTPAlso，不要设成跳转，否则会循环跳转；
+- 自动续签失败或快到期：cert.renew 立即续签；自动续签没开：cert.autorenew.set；
+- 证书 30 天内到期而且不会自动续签、已经过期、实际访问到的证书有问题，要主动提醒用户；
+- 宝塔和纯 Linux 服务器暂时不能自动申请证书，告诉用户在面板里申请，或者把网站接入 EdgeOne 用免费证书。
+
 AI 自由命令（free_command）：只有在没有合适的正式操作时才用，比如修改某个服务的配置文件、调整一个少见软件的参数。用户需要先在设置里开启。
 - 系统会先做静态检查，再在服务器上隔离试运行，再请另一个模型独立审查，都通过了才会显示给用户执行；执行前自动备份，失败自动恢复，还有 5 分钟保险；
 - 命令规则：每一步直接写出来，不能用变量、$(...)、反引号、通配符、循环、函数、后台（&）；写配置文件用 cat > 路径 <<'EOF'（结束符要加引号）或 sed -i 's/旧/新/' 路径（不带备份后缀）；
@@ -140,6 +149,15 @@ func (a *App) tools() map[string]ai.Tool {
 				"domain": map[string]any{"type": "string", "description": "站点或加速域名，例如 example.com 或 blog.example.com"},
 			}),
 		}, Run: a.toolTencentEO},
+		{Def: ai.ToolDef{
+			Name: "certificates",
+			Description: "查看所有 HTTPS 证书（只读）：EdgeOne 加速域名的证书、腾讯云 SSL 证书服务里的证书、各台服务器 1Panel 里的证书（到期时间、剩余天数、由谁自动续签、申请失败的原因），" +
+				"以及实际访问每个域名时拿到的证书。结果缓存 5 分钟，refresh=true 强制刷新；domain 只看包含这个域名的。",
+			Schema: obj(map[string]any{
+				"refresh": map[string]any{"type": "boolean"},
+				"domain":  map[string]any{"type": "string"},
+			}),
+		}, Run: a.toolCertificates},
 		{Def: ai.ToolDef{
 			Name:        "tencent_eo_security",
 			Description: "查看 EdgeOne 站点的安全防护（只读）：自定义规则（包括 Miao Panel 的封禁 IP 列表）、速率限制规则、CC 防护（自适应频控等）和托管规则的开关。",
