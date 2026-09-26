@@ -42,6 +42,8 @@ type Fake struct {
 	mu      sync.Mutex
 	nextID  uint64
 	Records map[string][]Record // by DNSPod domain
+	// PageSize, when set, caps every list answer, to test paging.
+	PageSize int
 	Zones   []tencent.Zone
 	Domains []*Domain
 	Calls   []string // "service Action"
@@ -234,7 +236,9 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				out = append(out, rec)
 			}
 		}
-		ok(w, map[string]any{"RecordList": out})
+		total := len(out)
+		out = f.page(out, int(num("Offset")), int(num("Limit")))
+		ok(w, map[string]any{"RecordList": out, "RecordCountInfo": map[string]any{"TotalCount": total}})
 	case "dnspod CreateRecord":
 		rec := f.recordFrom(in, str, num)
 		if f.conflicts(str("Domain"), rec, 0) {
@@ -459,4 +463,19 @@ func (f *Fake) Domain(name string) *Domain {
 		}
 	}
 	return nil
+}
+
+// page cuts one page out of a list, as the real APIs do.
+func (f *Fake) page(list []Record, offset, limit int) []Record {
+	if f.PageSize > 0 && (limit == 0 || limit > f.PageSize) {
+		limit = f.PageSize
+	}
+	if offset >= len(list) {
+		return nil
+	}
+	list = list[offset:]
+	if limit > 0 && len(list) > limit {
+		list = list[:limit]
+	}
+	return list
 }

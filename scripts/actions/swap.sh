@@ -1,7 +1,11 @@
 # swap.set: add a swap file.  args: <size_gb>
 SIZE_GB=$1
 SWAPFILE=/swapfile
-SYSCTL_FILE=/etc/sysctl.d/99-miaopanel-swap.conf
+# Named to sort after 99-sysctl.conf (the link to /etc/sysctl.conf), which
+# on many cloud images sets swappiness itself and would otherwise win at
+# boot. The old name is still removed on undo.
+SYSCTL_FILE=/etc/sysctl.d/zz-miaopanel-swap.conf
+OLD_SYSCTL_FILE=/etc/sysctl.d/99-miaopanel-swap.conf
 
 check() {
   is_uint "$SIZE_GB" && [ "$SIZE_GB" -ge 1 ] && [ "$SIZE_GB" -le 16 ] || refuse "swap 大小需要在 1 到 16 GB 之间"
@@ -49,7 +53,7 @@ undo() {
     swapoff "$f" || { info "swap 正在被大量使用，内存不够把它收回，暂时不能撤销"; exit 10; }
   fi
   sed -i "\#^$f #d" /etc/fstab
-  rm -f "$f" "$SYSCTL_FILE"
+  rm -f "$f" "$SYSCTL_FILE" "$OLD_SYSCTL_FILE"
   sysctl -q -w vm.swappiness="${UNDO_swappiness:-60}" 2>/dev/null
   info "已撤销：swap 已移除"
 }

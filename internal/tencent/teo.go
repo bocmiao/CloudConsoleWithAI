@@ -42,11 +42,21 @@ func (z Zone) Verification() *DNSVerification {
 
 // Zones lists the account's EdgeOne sites.
 func (c *Client) Zones(ctx context.Context) ([]Zone, error) {
-	var out struct {
-		Zones []Zone `json:"Zones"`
+	var all []Zone
+	for offset := 0; ; {
+		var out struct {
+			Zones      []Zone `json:"Zones"`
+			TotalCount int    `json:"TotalCount"`
+		}
+		if err := c.Call(ctx, "teo", teoVersion, "DescribeZones", map[string]any{"Offset": offset, "Limit": 100}, &out); err != nil {
+			return all, err
+		}
+		all = append(all, out.Zones...)
+		offset += len(out.Zones)
+		if len(out.Zones) == 0 || offset >= out.TotalCount {
+			return all, nil
+		}
 	}
-	err := c.Call(ctx, "teo", teoVersion, "DescribeZones", map[string]any{"Limit": 100}, &out)
-	return out.Zones, err
 }
 
 // ZoneFor finds the site a domain belongs to: the longest zone name the

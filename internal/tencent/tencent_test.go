@@ -2,6 +2,7 @@ package tencent_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -50,5 +51,22 @@ func TestZoneFor(t *testing.T) {
 		if z.ZoneID != want {
 			t.Errorf("ZoneFor(%s) = %q, want %q", name, z.ZoneID, want)
 		}
+	}
+}
+
+// Every page of records is read.
+func TestRecordsPaging(t *testing.T) {
+	f := tencenttest.Start(t)
+	f.PageSize = 3
+	var recs []tencenttest.Record
+	for i := 0; i < 8; i++ {
+		recs = append(recs, tencenttest.Record{RecordID: uint64(i + 1), Name: fmt.Sprintf("n%d", i), Type: "A", Value: "1.2.3.4", Line: "默认", TTL: 600, Status: "ENABLE"})
+	}
+	f.Records["paged.example"] = recs
+	c := tencent.New(tencenttest.SecretID, tencenttest.SecretKey)
+	c.Endpoint = f.Endpoint
+	got, err := c.Records(context.Background(), "paged.example", "")
+	if err != nil || len(got) != 8 {
+		t.Fatalf("records = %d %v", len(got), err)
 	}
 }

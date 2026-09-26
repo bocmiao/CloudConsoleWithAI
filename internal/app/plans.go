@@ -66,7 +66,7 @@ func prepareSteps(steps []core.Step, adapter string) []core.Step {
 		}
 		s.Executable = true
 		s.Title = r.Cap.Title
-		s.Risk = r.Cap.Risk
+		s.Risk = r.StepRisk()
 		s.Via = r.Impl.Via
 		s.Downtime = r.Impl.Downtime
 		s.Reversible = r.Cap.Reversible

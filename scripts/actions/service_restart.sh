@@ -5,7 +5,8 @@ check() {
   case "$NAME" in '' | *[!A-Za-z0-9@._-]*) refuse "服务名不对：$NAME" ;; esac
   has_systemd || refuse "这台服务器没有使用 systemd，暂不支持重启服务"
   case "${NAME%.service}" in
-  ssh | sshd | tat_agent | 1panel* | systemd-* | dbus | docker | containerd)
+  ssh | sshd | tat_agent | 1panel* | bt | systemd-* | dbus | docker | containerd | networking | network | NetworkManager | \
+    firewalld | ufw | nftables | iptables | polkit | cron | crond | rsyslog | *.socket | *.target | *.mount | *.timer)
     refuse "$NAME 是关键服务（重启可能断开连接或影响所有容器），不允许在这里重启" ;;
   esac
   systemctl cat "$NAME" >/dev/null 2>&1 || refuse "找不到服务 $NAME"

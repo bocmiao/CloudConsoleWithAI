@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -89,11 +90,7 @@ func deleteRule(ctx context.Context, c *tencent.Client, s tencent.Server, group 
 }
 
 func ruleText(r tencent.FirewallRule) string {
-	cidr := r.CidrBlock
-	if cidr == "" {
-		cidr = "0.0.0.0/0"
-	}
-	return fmt.Sprintf("%s %s 来源 %s %s", r.Protocol, r.Port, cidr, r.Action)
+	return fmt.Sprintf("%s %s 来源 %s %s", r.Protocol, r.Port, r.Source(), r.Action)
 }
 
 func applyFirewallOpen(ctx context.Context, env *Env, v map[string]string, out *Outcome, report func(string, ...any)) Outcome {
@@ -197,8 +194,9 @@ func undoFirewall(ctx context.Context, c *tencent.Client, undo map[string]string
 	if err := json.Unmarshal([]byte(undo["removed"]), &rules); err != nil {
 		return err
 	}
+	// Back in their places, lowest first, so each lands where it was.
+	sort.Slice(rules, func(i, j int) bool { return rules[i].Index < rules[j].Index })
 	for _, r := range rules {
-		r.Index = 0
 		if err := addRule(ctx, c, s, undo["group"], r); err != nil {
 			return err
 		}
@@ -467,13 +465,14 @@ func applyOrigin(ctx context.Context, env *Env, v map[string]string, out *Outcom
 		return *out
 	}
 	report("正在把 %s 的源站从 %s（%s）改为 %s", name, d.OriginDetail.Origin, d.OriginProtocol, v["origin"])
-	if err := c.SetOrigin(ctx, z.ZoneID, name, v["origin"], v["origin_protocol"], httpPort, httpsPort); err != nil {
+	if err := c.SetOrigin(ctx, z.ZoneID, name, v["origin"], v["origin_protocol"], httpPort, httpsPort, d.OriginDetail.HostHeader); err != nil {
 		out.Status = StatusRefused
 		out.logf("修改失败：%v", err)
 		return *out
 	}
 	out.Undo["zone_id"], out.Undo["domain"], out.Undo["origin"], out.Undo["protocol"] = z.ZoneID, name, d.OriginDetail.Origin, d.OriginProtocol
 	out.Undo["http_port"], out.Undo["https_port"] = strconv.FormatUint(d.HTTPOriginPort, 10), strconv.FormatUint(d.HTTPSOriginPort, 10)
+	out.Undo["host_header"] = d.OriginDetail.HostHeader
 	report("完成：%s 现在回源到 %s", name, v["origin"])
 	out.Status = StatusDone
 	return *out
@@ -482,12 +481,12 @@ func applyOrigin(ctx context.Context, env *Env, v map[string]string, out *Outcom
 func undoOrigin(ctx context.Context, c *tencent.Client, undo map[string]string) error {
 	hp, _ := strconv.Atoi(undo["http_port"])
 	hsp, _ := strconv.Atoi(undo["https_port"])
-	return c.SetOrigin(ctx, undo["zone_id"], undo["domain"], undo["origin"], undo["protocol"], hp, hsp)
+	return c.SetOrigin(ctx, undo["zone_id"], undo["domain"], undo["origin"], undo["protocol"], hp, hsp, undo["host_header"])
 }
 
 // checkCIDR validates an IPv4 address or network.
 func checkCIDR(s string) error {
-	if _, _, err := net.ParseCIDR(s); err == nil {
+	if ip, _, err := net.ParseCIDR(s); err == nil && ip.To4() != nil {
 		return nil
 	}
 	if ip := net.ParseIP(s); ip != nil && ip.To4() != nil {

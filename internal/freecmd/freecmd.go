@@ -335,6 +335,13 @@ func checkService(name string) error {
 	if strings.HasPrefix(name, "docker:") {
 		return nil // containers; the panel's apps are named 1Panel-...
 	}
+	// Only services: a target (poweroff.target, reboot.target), socket,
+	// mount or timer would do far more than restart a program.
+	for _, kind := range []string{".target", ".socket", ".mount", ".automount", ".timer", ".path", ".slice", ".scope", ".swap", ".device"} {
+		if strings.HasSuffix(strings.ToLower(name), kind) {
+			return fmt.Errorf("%s 不是普通服务，自由命令只能重载或重启 .service", name)
+		}
+	}
 	base := strings.ToLower(name)
 	if strings.HasPrefix(base, "systemd-") || strings.HasPrefix(base, "1panel") {
 		return fmt.Errorf("%s 是关键服务，自由命令不能重启它", name)

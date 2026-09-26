@@ -100,12 +100,19 @@ func confirmGuard(ctx context.Context, env *Env, out *Outcome) {
 	case strings.HasPrefix(guard, "pid:") && pidRe.MatchString(strings.TrimPrefix(guard, "pid:")):
 		cmd += "; kill " + strings.TrimPrefix(guard, "pid:") + " 2>/dev/null"
 	}
-	cmd += "; test -e " + flag
+	// The guard may have fired already, when confirming took too long:
+	// then the change is gone, whatever the flag says now.
+	cmd += "; if [ -e " + shq(path.Dir(restore)+"/restored") + " ]; then echo MIAO_RESTORED; exit 3; fi; test -e " + flag
 	if env.User != "root" {
 		cmd = "sudo -n sh -c " + shq(cmd)
 	}
 	out.Commands = append(out.Commands, "# 6. 连接正常，取消 5 分钟保险", cmd)
 	res, err := env.SSH.Run(ctx, cmd, "", 1024)
+	if err == nil && strings.Contains(res.Stdout, "MIAO_RESTORED") {
+		out.Status = StatusRolledBack
+		out.logf("确认之前 5 分钟保险已经触发，服务器恢复了原状，这次改动没有生效。可以重新执行")
+		return
+	}
 	if err != nil || res.ExitCode != 0 {
 		out.Status = StatusFailed
 		out.logf("执行后没能确认服务器状态（%v %s）：5 分钟后服务器会自动恢复原状。如果改动其实没问题，恢复后可以重新执行", err, strings.TrimSpace(res.Stderr))
@@ -633,7 +640,20 @@ func undoPanel(ctx context.Context, env *Env, r Resolved, undo map[string]string
 			id, _ := strconv.ParseUint(undo["install_id"], 10, 64)
 			var cfg onepanel.ContainerConfig
 			if cfg, err = env.OnePanel.AppConfig(ctx, uint(id)); err == nil {
-				err = env.OnePanel.UpdateAppConfig(ctx, uint(id), cfg, undo["compose"])
+				compose := undo["compose"]
+				// Put back only the one setting, so an app upgraded since
+				// keeps its new image and everything else.
+				if undo["has_options"] == "1" {
+					compose, err = setComposeEnv(cfg.DockerCompose, undo["service"], "JAVA_TOOL_OPTIONS", func(string) string {
+						if undo["java_options"] == "" {
+							return unsetEnv // it was not set before
+						}
+						return undo["java_options"]
+					})
+				}
+				if err == nil {
+					err = env.OnePanel.UpdateAppConfig(ctx, uint(id), cfg, compose)
+				}
 			}
 		default:
 			err = fmt.Errorf("未知的面板操作 %s", r.Impl.Panel)
@@ -907,6 +927,7 @@ func applyJavaHeap(ctx context.Context, env *Env, v map[string]string, out *Outc
 	out.Undo["install_id"] = strconv.FormatUint(uint64(app.ID), 10)
 	out.Undo["app"] = app.Name
 	out.Undo["compose"] = old.DockerCompose
+	out.Undo["service"], out.Undo["java_options"], out.Undo["has_options"] = app.ServiceName, before, "1"
 	if before == "" {
 		before = "没有设置"
 	}

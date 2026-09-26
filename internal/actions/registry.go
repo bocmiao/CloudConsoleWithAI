@@ -79,6 +79,19 @@ type Capability struct {
 	NoUndo string
 	// Check validates parameters as a whole, after each one is checked.
 	Check func(v map[string]string) error
+	// RiskFor raises Risk for parameters that make the same action more
+	// dangerous (a port open to everyone, a bucket anyone may write).
+	RiskFor func(v map[string]string) core.Risk
+}
+
+// StepRisk is a resolved step's risk: the capability's, or higher.
+func (r Resolved) StepRisk() core.Risk {
+	if r.Cap.RiskFor != nil {
+		if x := r.Cap.RiskFor(r.Values); x > r.Cap.Risk {
+			return x
+		}
+	}
+	return r.Cap.Risk
 }
 
 var (
@@ -115,6 +128,14 @@ func init() {
 		NoUndo: "重启服务没有修改任何配置，不需要回滚",
 		Params: []Param{{Name: "name", Kind: "name", Required: true, Desc: "systemd 服务名，例如 nginx、php8.2-fpm、mysql"}},
 		Impls:  map[string]Impl{"*": {Via: "系统脚本", Script: "service_restart.sh", Args: []string{"name"}, Downtime: "这个服务会中断几秒"}},
+		// The same critical list as free commands: SSH, the network, the
+		// firewall (restarting it drops Docker's rules), the panels.
+		Check: func(v map[string]string) error {
+			if strings.HasPrefix(v["name"], "docker:") {
+				return fmt.Errorf("容器请用重启容器的操作")
+			}
+			return freecmd.CheckService(v["name"])
+		},
 	})
 	register(&Capability{
 		Name: "dns.record.set", Title: "设置 DNS 解析", Risk: core.R2, Reversible: true,
@@ -173,6 +194,18 @@ func init() {
 		},
 		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "firewall_open", Downtime: "不影响现有访问",
 			Undo: "删除这条放行规则"}},
+		// Every port, or a database's, open to everyone.
+		RiskFor: func(v map[string]string) core.Risk {
+			if v["cidr"] != "" && v["cidr"] != "0.0.0.0/0" {
+				return core.R1
+			}
+			for _, p := range []int{3306, 5432, 6379, 27017, 9200, 11211, 1433} {
+				if portCovers(v["port"], p) {
+					return core.R3
+				}
+			}
+			return core.R1
+		},
 	})
 	register(&Capability{
 		Name: "cloud.firewall.close", Title: "腾讯云防火墙关闭端口", Risk: core.R2, Reversible: true,
@@ -193,6 +226,13 @@ func init() {
 			{Name: "instance", Kind: "instance", Required: true, Desc: "腾讯云实例 ID（tencent_servers 返回的 id，lhins- 开头是轻量服务器，ins- 开头是云服务器 CVM）"},
 			{Name: "region", Kind: "region", Required: true, Desc: "实例所在地域，例如 ap-guangzhou（tencent_servers 返回的 region）"},
 			{Name: "name", Kind: "text", Desc: "快照名称，不填自动生成"},
+		},
+		// A CVM snapshot is billed by size.
+		RiskFor: func(v map[string]string) core.Risk {
+			if strings.HasPrefix(v["instance"], "ins-") {
+				return core.R3
+			}
+			return core.R1
 		},
 		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "snapshot", Downtime: "不影响运行；轻量服务器有免费快照额度，云服务器快照按容量收费"}},
 	})
@@ -224,7 +264,7 @@ func init() {
 			{Name: "domain", Kind: "host", Required: true, Desc: "站点或加速域名，例如 blog.example.com"},
 			{Name: "type", Kind: "enum", Enum: []string{"url", "prefix", "host", "all"}, Default: "url",
 				Desc: "url：指定网址；prefix：目录；host：整个域名；all：整个站点（会让源站压力突增，尽量少用）"},
-			{Name: "targets", Kind: "text", Desc: "要清除的完整网址或目录（https:// 开头），多个用逗号或换行分隔；host 类型填域名，不填就是 domain；all 不用填"},
+			{Name: "targets", Kind: "lines", Desc: "要清除的完整网址或目录（https:// 开头），多个用逗号或换行分隔；host 类型填域名，不填就是 domain；all 不用填"},
 			{Name: "method", Kind: "enum", Enum: []string{"invalidate", "delete"}, Default: "invalidate",
 				Desc: "invalidate：只刷新有更新的内容（默认）；delete：全部删除"},
 		},
@@ -235,7 +275,7 @@ func init() {
 		NoUndo: "预热只是提前把内容缓存到节点，不需要回滚",
 		Params: []Param{
 			{Name: "domain", Kind: "host", Required: true, Desc: "站点或加速域名"},
-			{Name: "targets", Kind: "text", Required: true, Desc: "要预热的完整网址（https:// 开头），多个用逗号或换行分隔"},
+			{Name: "targets", Kind: "lines", Required: true, Desc: "要预热的完整网址（https:// 开头），多个用逗号或换行分隔"},
 		},
 		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "eo_prefetch", Downtime: "不影响访问"}},
 	})

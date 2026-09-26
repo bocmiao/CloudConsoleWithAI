@@ -238,6 +238,12 @@ func init() {
 	})
 	register(&Capability{
 		Name: "cos.acl.set", Title: "设置存储桶访问权限", Risk: core.R2, Reversible: true,
+		RiskFor: func(v map[string]string) core.Risk {
+			if v["acl"] == "public-read-write" {
+				return core.R3 // anyone may overwrite or delete the files
+			}
+			return core.R2
+		},
 		Params: []Param{bucket, region,
 			{Name: "acl", Kind: "enum", Enum: []string{"private", "public-read", "public-read-write"}, Required: true,
 				Desc: "private 私有读写；public-read 公有读私有写（任何人能下载和列出文件）；public-read-write 公有读写（任何人能上传和删除，极不安全）"}},
@@ -263,6 +269,17 @@ func init() {
 	})
 	register(&Capability{
 		Name: "cos.lifecycle.set", Title: "设置生命周期规则", Risk: core.R2, Reversible: true,
+		// A rule that deletes files for the whole bucket cannot be undone
+		// for the files.
+		RiskFor: func(v map[string]string) core.Risk {
+			rules, _ := ParseLifeRules(v["rules"])
+			for _, r := range rules {
+				if r.Enabled && r.Prefix == "" && r.ExpireDays > 0 {
+					return core.R3
+				}
+			}
+			return core.R2
+		},
 		Params: []Param{bucket, region,
 			{Name: "rules", Kind: "json", Required: true,
 				Desc: `规则列表（JSON），[] 表示删除全部。每条：{"id":"backup-30d","prefix":"backup/","enabled":true,"iaDays":30,"archiveDays":90,"deepDays":180,"expireDays":365,"noncurrentDays":30,"abortDays":7}，` +
@@ -294,6 +311,12 @@ func init() {
 	})
 	register(&Capability{
 		Name: "cos.policy.set", Title: "设置存储桶策略", Risk: core.R2, Reversible: true,
+		RiskFor: func(v map[string]string) core.Risk {
+			if p := v["policy"]; strings.Contains(p, "anyone") && regexp.MustCompile(`(?i)cos:(\*|Put|Delete|Post|Append|Initiate|Upload|Complete)`).MatchString(p) {
+				return core.R3 // lets anyone write
+			}
+			return core.R2
+		},
 		Params: []Param{bucket, region,
 			{Name: "policy", Kind: "json", Desc: `存储桶策略（JSON，COS 的格式），空或 {} 表示删除策略`}},
 		Impls: cloud("cos_policy", "立即生效", "恢复原来的存储桶策略"),

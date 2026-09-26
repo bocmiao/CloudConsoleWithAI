@@ -47,18 +47,31 @@ type Record struct {
 
 // Records lists a domain's records, only those of subdomain when given.
 func (c *Client) Records(ctx context.Context, domain, subdomain string) ([]Record, error) {
-	in := map[string]any{"Domain": domain, "Limit": 3000, "ErrorOnEmpty": "no"}
-	if subdomain != "" {
-		in["Subdomain"] = subdomain
+	var all []Record
+	for offset := 0; ; {
+		in := map[string]any{"Domain": domain, "Offset": offset, "Limit": 3000, "ErrorOnEmpty": "no"}
+		if subdomain != "" {
+			in["Subdomain"] = subdomain
+		}
+		var out struct {
+			RecordList      []Record `json:"RecordList"`
+			RecordCountInfo struct {
+				TotalCount int `json:"TotalCount"`
+			} `json:"RecordCountInfo"`
+		}
+		err := c.Call(ctx, "dnspod", dnspodVersion, "DescribeRecordList", in, &out)
+		if IsCode(err, "ResourceNotFound.NoDataOfRecord") {
+			return all, nil
+		}
+		if err != nil {
+			return all, err
+		}
+		all = append(all, out.RecordList...)
+		offset += len(out.RecordList)
+		if len(out.RecordList) == 0 || offset >= out.RecordCountInfo.TotalCount {
+			return all, nil
+		}
 	}
-	var out struct {
-		RecordList []Record `json:"RecordList"`
-	}
-	err := c.Call(ctx, "dnspod", dnspodVersion, "DescribeRecordList", in, &out)
-	if IsCode(err, "ResourceNotFound.NoDataOfRecord") {
-		return nil, nil
-	}
-	return out.RecordList, err
 }
 
 func recordFields(domain string, r Record) map[string]any {

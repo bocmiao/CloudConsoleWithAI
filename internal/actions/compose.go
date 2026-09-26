@@ -20,6 +20,9 @@ func mapValue(m *yaml.Node, key string) *yaml.Node {
 
 func scalar(v string) *yaml.Node { return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: v} }
 
+// unsetEnv, returned by setComposeEnv's edit, removes the variable.
+const unsetEnv = "\x00unset"
+
 // setComposeEnv changes one environment variable of a service in a
 // docker-compose file, keeping everything else. edit gets the current
 // value ("" when unset) and returns the new one. When service is empty or
@@ -58,21 +61,42 @@ func setComposeEnv(compose, service, key string, edit func(old string) string) (
 	}
 	switch env.Kind {
 	case yaml.MappingNode:
-		if v := mapValue(env, key); v != nil {
-			*v = *scalar(edit(v.Value))
-		} else {
-			env.Content = append(env.Content, scalar(key), scalar(edit("")))
+		found := false
+		for i := 0; i+1 < len(env.Content); i += 2 {
+			if env.Content[i].Value == key {
+				found = true
+				if nv := edit(env.Content[i+1].Value); nv == unsetEnv {
+					env.Content = append(env.Content[:i], env.Content[i+2:]...)
+				} else {
+					*env.Content[i+1] = *scalar(nv)
+				}
+				break
+			}
+		}
+		if nv := ""; !found {
+			if nv = edit(""); nv != unsetEnv {
+				env.Content = append(env.Content, scalar(key), scalar(nv))
+			}
 		}
 	case yaml.SequenceNode:
 		found := false
+		kept := env.Content[:0]
 		for _, item := range env.Content {
 			if k, v, _ := strings.Cut(item.Value, "="); k == key {
-				*item = *scalar(key + "=" + edit(v))
 				found = true
+				nv := edit(v)
+				if nv == unsetEnv {
+					continue
+				}
+				*item = *scalar(key + "=" + nv)
 			}
+			kept = append(kept, item)
 		}
-		if !found {
-			env.Content = append(env.Content, scalar(key+"="+edit("")))
+		env.Content = kept
+		if nv := ""; !found {
+			if nv = edit(""); nv != unsetEnv {
+				env.Content = append(env.Content, scalar(key+"="+nv))
+			}
 		}
 	default:
 		return "", errors.New("docker-compose 配置里 environment 的格式不对")

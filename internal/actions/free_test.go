@@ -119,4 +119,25 @@ func TestFreeCommandForReal(t *testing.T) {
 	if b, _ := os.ReadFile(conf); string(b) != "gzip off;\n" {
 		t.Fatalf("not restored after failure: %q", b)
 	}
+
+	// Writing through a symbolic link would reach a file outside the
+	// dry-run layer and the backup: refused, before anything runs.
+	real := filepath.Join(dir, "real.conf")
+	_ = os.WriteFile(real, []byte("keep\n"), 0o644)
+	link := filepath.Join(dir, "link.conf")
+	_ = os.Symlink(real, link)
+	params = map[string]any{"goal": "写入", "script": "echo changed > " + link, "files": link}
+	r, err = Resolve("free_command", params, "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, err := DryRun(ctx, env, r); err == nil && d.Supported {
+		t.Fatalf("dry run through a link = %+v", d)
+	}
+	if o := Apply(ctx, env, r, nil); o.Status != StatusRefused || !strings.Contains(strings.Join(o.Log, ""), "软链接") {
+		t.Fatalf("apply through a link = %+v", o)
+	}
+	if b, _ := os.ReadFile(real); string(b) != "keep\n" {
+		t.Fatalf("the link's target changed: %q", b)
+	}
 }

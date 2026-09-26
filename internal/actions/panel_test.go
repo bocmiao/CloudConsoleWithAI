@@ -187,8 +187,11 @@ func TestJavaHeapApplyAndUndo(t *testing.T) {
 	if !strings.Contains(strings.Join(out.Log, ""), "原来：没有设置") {
 		t.Fatalf("log = %v", out.Log)
 	}
+	// The app was upgraded meanwhile: undo puts back only the Java option.
+	f.compose = strings.Replace(f.compose, "halohub/halo:2.21", "halohub/halo:2.22", 1)
 	undone := Undo(ctx, env, r, out.Undo)
-	if undone.Status != StatusUndone || f.compose != haloCompose {
+	if undone.Status != StatusUndone || strings.Contains(f.compose, "JAVA_TOOL_OPTIONS") || !strings.Contains(f.compose, "halo:2.22") ||
+		!strings.Contains(f.compose, "TZ=Asia/Shanghai") || !strings.Contains(f.compose, "# the database is another 1Panel app") {
 		t.Fatalf("undo: %+v\ncompose:\n%s", undone, f.compose)
 	}
 	if _, err := Resolve("java.heap.set", map[string]any{"app": "halo", "max_heap_mb": 768}, "linux"); err == nil {

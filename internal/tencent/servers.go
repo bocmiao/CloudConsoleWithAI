@@ -83,31 +83,43 @@ type internet struct {
 	InternetMaxBandwidthOut int `json:"InternetMaxBandwidthOut"`
 }
 
+type lighthouseInstance struct {
+	InstanceID         string   `json:"InstanceId"`
+	InstanceName       string   `json:"InstanceName"`
+	InstanceState      string   `json:"InstanceState"`
+	CPU                int      `json:"CPU"`
+	Memory             int      `json:"Memory"`
+	SystemDisk         sysDisk  `json:"SystemDisk"`
+	PublicAddresses    []string `json:"PublicAddresses"`
+	PrivateAddresses   []string `json:"PrivateAddresses"`
+	InternetAccessible internet `json:"InternetAccessible"`
+	OsName             string   `json:"OsName"`
+	Zone               string   `json:"Zone"`
+	InstanceChargeType string   `json:"InstanceChargeType"`
+	ExpiredTime        string   `json:"ExpiredTime"`
+	RenewFlag          string   `json:"RenewFlag"`
+}
+
 func (c *Client) lighthouseServers(ctx context.Context, r Region) ([]Server, error) {
 	var out struct {
-		InstanceSet []struct {
-			InstanceID         string   `json:"InstanceId"`
-			InstanceName       string   `json:"InstanceName"`
-			InstanceState      string   `json:"InstanceState"`
-			CPU                int      `json:"CPU"`
-			Memory             int      `json:"Memory"`
-			SystemDisk         sysDisk  `json:"SystemDisk"`
-			PublicAddresses    []string `json:"PublicAddresses"`
-			PrivateAddresses   []string `json:"PrivateAddresses"`
-			InternetAccessible internet `json:"InternetAccessible"`
-			OsName             string   `json:"OsName"`
-			Zone               string   `json:"Zone"`
-			InstanceChargeType string   `json:"InstanceChargeType"`
-			ExpiredTime        string   `json:"ExpiredTime"`
-			RenewFlag          string   `json:"RenewFlag"`
-		} `json:"InstanceSet"`
+		InstanceSet []lighthouseInstance `json:"InstanceSet"`
+		TotalCount  int                  `json:"TotalCount"`
 	}
-	if err := c.CallRegion(ctx, Lighthouse, lighthouseVersion, "DescribeInstances", r.Region, map[string]any{"Limit": 100}, &out); err != nil {
-		return nil, err
+	var all []lighthouseInstance
+	for offset := 0; ; {
+		out.InstanceSet, out.TotalCount = nil, 0
+		if err := c.CallRegion(ctx, Lighthouse, lighthouseVersion, "DescribeInstances", r.Region, map[string]any{"Offset": offset, "Limit": 100}, &out); err != nil {
+			return nil, err
+		}
+		all = append(all, out.InstanceSet...)
+		offset += len(out.InstanceSet)
+		if len(out.InstanceSet) == 0 || offset >= out.TotalCount {
+			break
+		}
 	}
 	var list []Server
 	var ids []string
-	for _, i := range out.InstanceSet {
+	for _, i := range all {
 		list = append(list, Server{
 			Kind: Lighthouse, ID: i.InstanceID, Name: i.InstanceName, Region: r.Region, RegionName: r.RegionName, Zone: i.Zone,
 			State: i.InstanceState, CPU: i.CPU, MemoryGB: i.Memory, DiskGB: i.SystemDisk.DiskSize, SystemDiskID: i.SystemDisk.DiskID,
@@ -116,7 +128,12 @@ func (c *Client) lighthouseServers(ctx context.Context, r Region) ([]Server, err
 		})
 		ids = append(ids, i.InstanceID)
 	}
-	if len(ids) > 0 {
+	for len(ids) > 0 { // at most 100 IDs a call
+		page := ids
+		if len(page) > 100 {
+			page = page[:100]
+		}
+		ids = ids[len(page):]
 		var tp struct {
 			InstanceTrafficPackageSet []struct {
 				InstanceID        string `json:"InstanceId"`
@@ -127,7 +144,7 @@ func (c *Client) lighthouseServers(ctx context.Context, r Region) ([]Server, err
 			} `json:"InstanceTrafficPackageSet"`
 		}
 		if err := c.CallRegion(ctx, Lighthouse, lighthouseVersion, "DescribeInstancesTrafficPackages", r.Region,
-			map[string]any{"InstanceIds": ids, "Limit": 100}, &tp); err == nil {
+			map[string]any{"InstanceIds": page, "Limit": 100}, &tp); err == nil {
 			for _, p := range tp.InstanceTrafficPackageSet {
 				for i := range list {
 					if list[i].ID == p.InstanceID {
@@ -143,33 +160,45 @@ func (c *Client) lighthouseServers(ctx context.Context, r Region) ([]Server, err
 	return list, nil
 }
 
+type cvmInstance struct {
+	InstanceID         string   `json:"InstanceId"`
+	InstanceName       string   `json:"InstanceName"`
+	InstanceState      string   `json:"InstanceState"`
+	CPU                int      `json:"CPU"`
+	Memory             int      `json:"Memory"`
+	SystemDisk         sysDisk  `json:"SystemDisk"`
+	PublicIPAddresses  []string `json:"PublicIpAddresses"`
+	PrivateIPAddresses []string `json:"PrivateIpAddresses"`
+	InternetAccessible internet `json:"InternetAccessible"`
+	OsName             string   `json:"OsName"`
+	Placement          struct {
+		Zone string `json:"Zone"`
+	} `json:"Placement"`
+	InstanceChargeType string   `json:"InstanceChargeType"`
+	ExpiredTime        string   `json:"ExpiredTime"`
+	RenewFlag          string   `json:"RenewFlag"`
+	SecurityGroupIDs   []string `json:"SecurityGroupIds"`
+}
+
 func (c *Client) cvmServers(ctx context.Context, r Region) ([]Server, error) {
 	var out struct {
-		InstanceSet []struct {
-			InstanceID         string   `json:"InstanceId"`
-			InstanceName       string   `json:"InstanceName"`
-			InstanceState      string   `json:"InstanceState"`
-			CPU                int      `json:"CPU"`
-			Memory             int      `json:"Memory"`
-			SystemDisk         sysDisk  `json:"SystemDisk"`
-			PublicIPAddresses  []string `json:"PublicIpAddresses"`
-			PrivateIPAddresses []string `json:"PrivateIpAddresses"`
-			InternetAccessible internet `json:"InternetAccessible"`
-			OsName             string   `json:"OsName"`
-			Placement          struct {
-				Zone string `json:"Zone"`
-			} `json:"Placement"`
-			InstanceChargeType string   `json:"InstanceChargeType"`
-			ExpiredTime        string   `json:"ExpiredTime"`
-			RenewFlag          string   `json:"RenewFlag"`
-			SecurityGroupIDs   []string `json:"SecurityGroupIds"`
-		} `json:"InstanceSet"`
+		InstanceSet []cvmInstance `json:"InstanceSet"`
+		TotalCount  int           `json:"TotalCount"`
 	}
-	if err := c.CallRegion(ctx, CVM, cvmVersion, "DescribeInstances", r.Region, map[string]any{"Limit": 100}, &out); err != nil {
-		return nil, err
+	var all []cvmInstance
+	for offset := 0; ; {
+		out.InstanceSet, out.TotalCount = nil, 0
+		if err := c.CallRegion(ctx, CVM, cvmVersion, "DescribeInstances", r.Region, map[string]any{"Offset": offset, "Limit": 100}, &out); err != nil {
+			return nil, err
+		}
+		all = append(all, out.InstanceSet...)
+		offset += len(out.InstanceSet)
+		if len(out.InstanceSet) == 0 || offset >= out.TotalCount {
+			break
+		}
 	}
 	var list []Server
-	for _, i := range out.InstanceSet {
+	for _, i := range all {
 		list = append(list, Server{
 			Kind: CVM, ID: i.InstanceID, Name: i.InstanceName, Region: r.Region, RegionName: r.RegionName, Zone: i.Placement.Zone,
 			State: i.InstanceState, CPU: i.CPU, MemoryGB: i.Memory, DiskGB: i.SystemDisk.DiskSize, SystemDiskID: i.SystemDisk.DiskID,
@@ -263,11 +292,13 @@ func (c *Client) Instance(ctx context.Context, region, id string) (Server, bool,
 // StopInstances or RebootInstances.
 func (c *Client) Power(ctx context.Context, region, id, action string) error {
 	in := map[string]any{"InstanceIds": []string{id}}
+	if KindOf(id) == Lighthouse {
+		// Lighthouse takes only the IDs (it always shuts down cleanly);
+		// anything else is refused as an unknown parameter.
+		return c.CallRegion(ctx, Lighthouse, lighthouseVersion, action, region, in, nil)
+	}
 	if action != "StartInstances" {
 		in["StopType"] = "SOFT_FIRST"
-	}
-	if KindOf(id) == Lighthouse {
-		return c.CallRegion(ctx, Lighthouse, lighthouseVersion, action, region, in, nil)
 	}
 	return c.CallRegion(ctx, CVM, cvmVersion, action, region, in, nil)
 }
@@ -281,19 +312,33 @@ type FirewallRule struct {
 	Action      string `json:"Action"`
 	Description string `json:"Description,omitempty"`
 	Index       int64  `json:"PolicyIndex,omitempty"` // CVM security group rules only
+	// Sources other than an IPv4 range: a rule with one of these does not
+	// allow everyone even though its CidrBlock is empty.
+	Ipv6     string `json:"Ipv6CidrBlock,omitempty"`
+	Group    string `json:"SecurityGroupId,omitempty"` // CVM only
+	Template string `json:"AddressTemplate,omitempty"` // CVM only: an address template or template group ID
+}
+
+// Source is who the rule is about, in words for logs.
+func (r FirewallRule) Source() string {
+	switch {
+	case r.CidrBlock != "":
+		return r.CidrBlock
+	case r.Ipv6 != "":
+		return r.Ipv6
+	case r.Group != "":
+		return "安全组 " + r.Group
+	case r.Template != "":
+		return "参数模板 " + r.Template
+	}
+	return "0.0.0.0/0"
 }
 
 // Same compares what a rule allows, ignoring its description.
 func (r FirewallRule) Same(o FirewallRule) bool {
 	norm := func(s string) string { return strings.ToUpper(strings.TrimSpace(s)) }
-	cidr := func(s string) string {
-		if s == "" {
-			return "0.0.0.0/0"
-		}
-		return s
-	}
 	return norm(r.Protocol) == norm(o.Protocol) && norm(r.Port) == norm(o.Port) &&
-		cidr(r.CidrBlock) == cidr(o.CidrBlock) && norm(r.Action) == norm(o.Action)
+		r.Source() == o.Source() && r.Ipv6 == o.Ipv6 && r.Group == o.Group && r.Template == o.Template && norm(r.Action) == norm(o.Action)
 }
 
 // LighthouseFirewall lists a Lighthouse instance's firewall rules.
@@ -303,6 +348,7 @@ func (c *Client) LighthouseFirewall(ctx context.Context, region, id string) ([]F
 			Protocol    string `json:"Protocol"`
 			Port        string `json:"Port"`
 			CidrBlock   string `json:"CidrBlock"`
+			Ipv6        string `json:"Ipv6CidrBlock"`
 			Action      string `json:"Action"`
 			Description string `json:"FirewallRuleDescription"`
 		} `json:"FirewallRuleSet"`
@@ -310,13 +356,18 @@ func (c *Client) LighthouseFirewall(ctx context.Context, region, id string) ([]F
 	err := c.CallRegion(ctx, Lighthouse, lighthouseVersion, "DescribeFirewallRules", region, map[string]any{"InstanceId": id, "Limit": 100}, &out)
 	var rules []FirewallRule
 	for _, r := range out.FirewallRuleSet {
-		rules = append(rules, FirewallRule{Protocol: r.Protocol, Port: r.Port, CidrBlock: r.CidrBlock, Action: r.Action, Description: r.Description})
+		rules = append(rules, FirewallRule{Protocol: r.Protocol, Port: r.Port, CidrBlock: r.CidrBlock, Ipv6: r.Ipv6, Action: r.Action, Description: r.Description})
 	}
 	return rules, err
 }
 
 func lighthouseRule(r FirewallRule) map[string]any {
-	m := map[string]any{"Protocol": r.Protocol, "Port": r.Port, "CidrBlock": r.CidrBlock, "Action": r.Action}
+	m := map[string]any{"Protocol": r.Protocol, "Port": r.Port, "Action": r.Action}
+	if r.Ipv6 != "" {
+		m["Ipv6CidrBlock"] = r.Ipv6
+	} else {
+		m["CidrBlock"] = r.CidrBlock
+	}
 	if r.Description != "" {
 		m["FirewallRuleDescription"] = r.Description
 	}
@@ -341,10 +392,16 @@ func (c *Client) SecurityGroupIngress(ctx context.Context, region, group string)
 	var out struct {
 		SecurityGroupPolicySet struct {
 			Ingress []struct {
-				PolicyIndex       int64  `json:"PolicyIndex"`
-				Protocol          string `json:"Protocol"`
-				Port              string `json:"Port"`
-				CidrBlock         string `json:"CidrBlock"`
+				PolicyIndex     int64  `json:"PolicyIndex"`
+				Protocol        string `json:"Protocol"`
+				Port            string `json:"Port"`
+				CidrBlock       string `json:"CidrBlock"`
+				Ipv6CidrBlock   string `json:"Ipv6CidrBlock"`
+				SecurityGroupID string `json:"SecurityGroupId"`
+				AddressTemplate struct {
+					AddressID      string `json:"AddressId"`
+					AddressGroupID string `json:"AddressGroupId"`
+				} `json:"AddressTemplate"`
 				Action            string `json:"Action"`
 				PolicyDescription string `json:"PolicyDescription"`
 			} `json:"Ingress"`
@@ -353,24 +410,46 @@ func (c *Client) SecurityGroupIngress(ctx context.Context, region, group string)
 	err := c.CallRegion(ctx, "vpc", vpcVersion, "DescribeSecurityGroupPolicies", region, map[string]any{"SecurityGroupId": group}, &out)
 	var rules []FirewallRule
 	for _, r := range out.SecurityGroupPolicySet.Ingress {
-		rules = append(rules, FirewallRule{Protocol: r.Protocol, Port: r.Port, CidrBlock: r.CidrBlock, Action: r.Action,
-			Description: r.PolicyDescription, Index: r.PolicyIndex})
+		tpl := r.AddressTemplate.AddressID
+		if tpl == "" {
+			tpl = r.AddressTemplate.AddressGroupID
+		}
+		rules = append(rules, FirewallRule{Protocol: r.Protocol, Port: r.Port, CidrBlock: r.CidrBlock, Ipv6: r.Ipv6CidrBlock,
+			Group: r.SecurityGroupID, Template: tpl, Action: r.Action, Description: r.PolicyDescription, Index: r.PolicyIndex})
 	}
 	return rules, err
 }
 
 func groupRule(r FirewallRule) map[string]any {
-	m := map[string]any{"Protocol": r.Protocol, "Port": r.Port, "CidrBlock": r.CidrBlock, "Action": r.Action}
+	m := map[string]any{"Protocol": r.Protocol, "Port": r.Port, "Action": r.Action}
+	switch {
+	case r.Ipv6 != "":
+		m["Ipv6CidrBlock"] = r.Ipv6
+	case r.Group != "":
+		m["SecurityGroupId"] = r.Group
+	case strings.HasPrefix(r.Template, "ipmg-"):
+		m["AddressTemplate"] = map[string]string{"AddressGroupId": r.Template}
+	case r.Template != "":
+		m["AddressTemplate"] = map[string]string{"AddressId": r.Template}
+	default:
+		m["CidrBlock"] = r.CidrBlock
+	}
 	if r.Description != "" {
 		m["PolicyDescription"] = r.Description
 	}
 	return m
 }
 
-// AddSecurityGroupIngress adds an inbound rule at the top of a security group.
+// AddSecurityGroupIngress adds an inbound rule at the top of a security
+// group, or at r.Index when set (putting a removed rule back where it was:
+// rules are checked in order, so the place matters).
 func (c *Client) AddSecurityGroupIngress(ctx context.Context, region, group string, r FirewallRule) error {
+	m := groupRule(r)
+	if r.Index > 0 {
+		m["PolicyIndex"] = r.Index
+	}
 	return c.CallRegion(ctx, "vpc", vpcVersion, "CreateSecurityGroupPolicies", region, map[string]any{
-		"SecurityGroupId": group, "SecurityGroupPolicySet": map[string]any{"Ingress": []any{groupRule(r)}},
+		"SecurityGroupId": group, "SecurityGroupPolicySet": map[string]any{"Ingress": []any{m}},
 	}, nil)
 }
 

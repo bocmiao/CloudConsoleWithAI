@@ -18,6 +18,11 @@ locate() {
     VER=$(echo "$POOL" | cut -d/ -f4)
     BIN=php-fpm$VER
     SVC=php$VER-fpm ;;
+  /opt/remi/*)
+    # Remi's software collections: /opt/remi/php81/root/..., service php81-php-fpm.
+    VER=$(echo "$POOL" | cut -d/ -f4)
+    BIN=/opt/remi/$VER/root/usr/sbin/php-fpm
+    SVC=$VER-php-fpm ;;
   *)
     BIN=php-fpm
     SVC=php-fpm ;;

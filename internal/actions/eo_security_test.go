@@ -77,6 +77,19 @@ func TestEdgeOneIPBlock(t *testing.T) {
 		t.Fatalf("after undo: %v", p.CustomRules)
 	}
 
+	// Undoing an earlier block leaves a later one alone.
+	a := mustResolve(t, "eo.ip.block", map[string]any{"domain": "example.com", "ips": "1.1.1.1"})
+	outA := Apply(ctx, env, a, nil)
+	b := mustResolve(t, "eo.ip.block", map[string]any{"domain": "example.com", "ips": "2.2.2.2"})
+	Apply(ctx, env, b, nil)
+	if u := Undo(ctx, env, a, outA.Undo); u.Status != StatusUndone {
+		t.Fatalf("undo A: %+v", u)
+	}
+	cond = tencent.RuleString(rule(policy(t, f, "zone-abc").CustomRules, BlockRuleName), "Condition")
+	if strings.Contains(cond, "1.1.1.1") || !strings.Contains(cond, "2.2.2.2") {
+		t.Fatalf("undo of an earlier block touched a later one: %s", cond)
+	}
+
 	for _, ips := range []string{"0.0.0.0/0", "10.0.0.0/4", "not-an-ip", "1.2.3.4'] or ['x"} {
 		if _, err := Resolve("eo.ip.block", map[string]any{"domain": "example.com", "ips": ips}, "-"); err == nil {
 			t.Errorf("accepted ips %q", ips)

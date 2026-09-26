@@ -147,9 +147,14 @@ func (c *Client) Prefetch(ctx context.Context, zoneID string, targets []string) 
 }
 
 // SetOrigin changes where an acceleration domain fetches content from.
-func (c *Client) SetOrigin(ctx context.Context, zoneID, name, origin, protocol string, httpPort, httpsPort int) error {
-	in := map[string]any{"ZoneId": zoneID, "DomainName": name,
-		"OriginInfo": map[string]any{"OriginType": "IP_DOMAIN", "Origin": origin}}
+// hostHeader is the Host sent to the origin when it was set to a custom
+// one; OriginInfo is replaced as a whole, so it is sent again.
+func (c *Client) SetOrigin(ctx context.Context, zoneID, name, origin, protocol string, httpPort, httpsPort int, hostHeader string) error {
+	info := map[string]any{"OriginType": "IP_DOMAIN", "Origin": origin}
+	if hostHeader != "" {
+		info["HostHeader"] = hostHeader
+	}
+	in := map[string]any{"ZoneId": zoneID, "DomainName": name, "OriginInfo": info}
 	if protocol != "" {
 		in["OriginProtocol"] = protocol
 	}

@@ -190,7 +190,9 @@ func applyIPBlock(ctx context.Context, env *Env, block bool, v map[string]string
 		out.logf("修改失败：%v", err)
 		return *out
 	}
-	out.Undo["zone_id"], out.Undo["ips"] = z.ZoneID, strings.Join(current, ",")
+	// Undo touches only these IPs, so blocks made after this step stay.
+	out.Undo["zone_id"], out.Undo["changed"] = z.ZoneID, strings.Join(changed, ",")
+	out.Undo["mode"] = map[bool]string{true: "added", false: "removed"}[block]
 	report("完成：封禁规则里现在有 %d 个 IP，几十秒内在各节点生效", len(next))
 	out.Status = StatusDone
 	return *out
@@ -210,11 +212,33 @@ func undoIPBlock(ctx context.Context, c *tencent.Client, undo map[string]string)
 	if err != nil {
 		return err
 	}
-	var ips []string
-	if undo["ips"] != "" {
-		ips = strings.Split(undo["ips"], ",")
+	split := func(v string) []string {
+		if v == "" {
+			return nil
+		}
+		return strings.Split(v, ",")
 	}
-	return c.SetCustomRules(ctx, undo["zone_id"], withBlocked(p.CustomRules, ips))
+	if undo["mode"] == "" { // recorded by an older version: the whole list before
+		return c.SetCustomRules(ctx, undo["zone_id"], withBlocked(p.CustomRules, split(undo["ips"])))
+	}
+	var current []string
+	if i := findRule(p.CustomRules, BlockRuleName); i >= 0 {
+		current = ruleIPs(p.CustomRules[i])
+	}
+	changed := map[string]bool{}
+	for _, ip := range split(undo["changed"]) {
+		changed[ip] = true
+	}
+	var next []string
+	for _, ip := range current {
+		if !changed[ip] {
+			next = append(next, ip)
+		}
+	}
+	if undo["mode"] == "removed" {
+		next = append(next, split(undo["changed"])...)
+	}
+	return c.SetCustomRules(ctx, undo["zone_id"], withBlocked(p.CustomRules, next))
 }
 
 // ---- rate limiting ----

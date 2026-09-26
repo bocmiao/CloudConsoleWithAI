@@ -194,3 +194,26 @@ func TestCOSSettingValues(t *testing.T) {
 		t.Errorf("good lifecycle refused: %v", err)
 	}
 }
+
+func TestRiskFollowsParameters(t *testing.T) {
+	for _, c := range []struct {
+		capability string
+		params     map[string]any
+		want       string
+	}{
+		{"cos.acl.set", map[string]any{"bucket": "a-1250000000", "region": "ap-guangzhou", "acl": "public-read-write"}, "R3"},
+		{"cos.acl.set", map[string]any{"bucket": "a-1250000000", "region": "ap-guangzhou", "acl": "private"}, "R2"},
+		{"cos.lifecycle.set", map[string]any{"bucket": "a-1250000000", "region": "ap-guangzhou", "rules": `[{"id":"x","enabled":true,"expireDays":1}]`}, "R3"},
+		{"cos.lifecycle.set", map[string]any{"bucket": "a-1250000000", "region": "ap-guangzhou", "rules": `[{"id":"x","prefix":"logs/","enabled":true,"expireDays":30}]`}, "R2"},
+		{"cloud.firewall.open", map[string]any{"instance": "lhins-abc12345", "region": "ap-guangzhou", "port": "3306"}, "R3"},
+		{"cloud.firewall.open", map[string]any{"instance": "lhins-abc12345", "region": "ap-guangzhou", "port": "443"}, "R1"},
+		{"cloud.firewall.open", map[string]any{"instance": "lhins-abc12345", "region": "ap-guangzhou", "port": "3306", "cidr": "1.2.3.4"}, "R1"},
+		{"cloud.snapshot.create", map[string]any{"instance": "ins-abc12345", "region": "ap-guangzhou"}, "R3"},
+		{"cloud.snapshot.create", map[string]any{"instance": "lhins-abc12345", "region": "ap-guangzhou"}, "R1"},
+	} {
+		r := mustResolve(t, c.capability, c.params)
+		if got := string(r.StepRisk()); got != c.want {
+			t.Errorf("%s %v: %s, want %s", c.capability, c.params, got, c.want)
+		}
+	}
+}

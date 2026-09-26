@@ -72,6 +72,10 @@ func (f *Fake) serveMore(w http.ResponseWriter, service, action, region string, 
 			"TrafficPackageSet": []map[string]any{{"TrafficUsed": 900 << 30, "TrafficPackageTotal": 1000 << 30}}}}})
 	case "lighthouse StartInstances", "lighthouse StopInstances", "lighthouse RebootInstances",
 		"cvm StartInstances", "cvm StopInstances", "cvm RebootInstances":
+		if _, has := in["StopType"]; has && service == "lighthouse" {
+			fail(w, "UnknownParameter", "The parameter `StopType` is not recognized")
+			return true
+		}
 		i := f.Instances[firstID()]
 		if i == nil || !here {
 			fail(w, "InvalidInstanceId.NotFound", "实例不存在。")

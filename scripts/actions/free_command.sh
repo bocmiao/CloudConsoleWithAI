@@ -37,11 +37,30 @@ state() {
     printf 'absent -'
   fi
 }
+# check_paths refuses declared files reached through a symbolic link: the
+# overlay, the backup and the restore all work on the path itself, so a
+# write through a link would land outside them. A file that is itself a
+# link may only be re-pointed with ln.
+check_paths() {
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    d=$(dirname "$f")
+    while [ ! -d "$d" ] && [ ! -L "$d" ]; do d=$(dirname "$d"); done
+    real=$(cd "$d" 2>/dev/null && pwd -P)
+    [ "$real" = "$d" ] || refuse "$f 所在的目录 $d 是软链接（指向 $real），为了安全不执行；请让 AI 直接写真实路径"
+    if [ -L "$f" ]; then
+      all=$(grep -cF -- "$f" "$WORK/cmd.sh")
+      links=$(grep -E '^[[:space:]]*ln[[:space:]]' "$WORK/cmd.sh" | grep -cF -- "$f")
+      [ "$all" = "$links" ] || refuse "$f 是软链接（指向 $(readlink "$f")），写入会改到别的文件；请让 AI 直接修改它指向的真实文件"
+    fi
+  done <"$WORK/files"
+}
 run_cmd() {
   if have timeout; then timeout "$1" sh "$WORK/cmd.sh"; else sh "$WORK/cmd.sh"; fi
 }
 
 dryrun() {
+  check_paths
   if ! have unshare || ! grep -qw overlay /proc/filesystems 2>/dev/null; then
     echo "MIAO_DRY unsupported 这台服务器不支持隔离试运行（缺少 unshare 命令或 overlay 文件系统）"
     return
@@ -159,6 +178,7 @@ restore_now() {
 }
 
 apply() {
+  check_paths
   while read -r a b f; do
     [ -n "$f" ] || continue
     [ "$(state "$f")" = "$a $b" ] || refuse "$f 在试运行之后被改动过，为了安全不执行，请让 AI 重新生成这一步"

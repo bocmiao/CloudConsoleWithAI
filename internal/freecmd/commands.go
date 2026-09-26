@@ -1,6 +1,7 @@
 package freecmd
 
 import (
+	"path"
 	"regexp"
 	"strings"
 )
@@ -58,8 +59,8 @@ var commands = map[string]check{
 	"ls": readOnly, "stat": readOnly, "test": readOnly, "[": readOnly, "echo": readOnly, "printf": readOnly,
 	"true": readOnly, "false": readOnly, "wc": readOnly, "cut": readOnly, "tr": readOnly, "diff": readOnly, "cmp": readOnly,
 	"sha256sum": readOnly, "md5sum": readOnly, "basename": readOnly, "dirname": readOnly, "readlink": readOnly, "realpath": readOnly,
-	"id": readOnly, "whoami": readOnly, "hostname": readOnly, "uname": readOnly, "date": readOnly, "df": readOnly, "du": readOnly,
-	"free": readOnly, "uptime": readOnly, "ps": readOnly, "pgrep": readOnly, "ss": readOnly, "netstat": readOnly, "which": readOnly,
+	"id": readOnly, "whoami": readOnly, "hostname": hostname, "uname": readOnly, "date": date, "df": readOnly, "du": readOnly,
+	"free": readOnly, "uptime": readOnly, "ps": readOnly, "pgrep": readOnly, "ss": ss, "netstat": readOnly, "which": readOnly,
 	"nproc": readOnly, "file": readOnly, "getent": readOnly, "sleep": readOnly,
 	"set": func(a *analyzer, args []string) {
 		for _, x := range args {
@@ -164,8 +165,54 @@ func tee(a *analyzer, args []string) {
 	}
 }
 
+// These look read-only but are not with some arguments: hostname NAME
+// renames the machine, date -s sets the clock, ss -K kills connections.
+func hostname(a *analyzer, args []string) {
+	flags, ops := split(args)
+	if len(ops) > 0 || hasFlag(flags, "bF", "--boot", "--file") {
+		a.problem("hostname 只能用来查看，不能修改主机名")
+	}
+}
+
+func date(a *analyzer, args []string) {
+	for i := 0; i < len(args); i++ {
+		x := args[i]
+		switch {
+		case strings.HasPrefix(x, "+"):
+		case x == "-d" || x == "--date" || x == "-r" || x == "--reference":
+			i++ // a time to show, not to set
+		case strings.HasPrefix(x, "--date=") || strings.HasPrefix(x, "--reference=") || strings.HasPrefix(x, "--iso-8601") || strings.HasPrefix(x, "--rfc-"):
+		case x == "-u" || x == "--utc" || x == "-R" || strings.HasPrefix(x, "-I"):
+		default:
+			a.problem("date 只能用来查看时间，不能修改（%s）", x)
+			return
+		}
+	}
+}
+
+func ss(a *analyzer, args []string) {
+	if flags, _ := split(args); hasFlag(flags, "K", "--kill") {
+		a.problem("ss 不能用 -K 断开连接")
+	}
+}
+
+// noTarget refuses -t / --target-directory, which writes somewhere other
+// than the last argument says.
+func noTarget(a *analyzer, name string, flags []string) bool {
+	for _, f := range flags {
+		if f == "-t" || strings.HasPrefix(f, "--target-directory") || (strings.HasPrefix(f, "-") && !strings.HasPrefix(f, "--") && strings.Contains(f[1:], "t")) {
+			a.problem("%s 不能用 -t 指定目录，请写成 %s 源文件 目标文件（目标写完整的文件路径）", name, name)
+			return false
+		}
+	}
+	return true
+}
+
 func cp(a *analyzer, args []string) {
 	flags, ops := split(args)
+	if !noTarget(a, "cp", flags) {
+		return
+	}
 	if hasFlag(flags, "rRa", "--recursive", "--archive") {
 		a.problem("cp 不能复制整个目录（-r、-a），请逐个文件复制")
 		return
@@ -178,7 +225,10 @@ func cp(a *analyzer, args []string) {
 }
 
 func mv(a *analyzer, args []string) {
-	_, ops := split(args)
+	flags, ops := split(args)
+	if !noTarget(a, "mv", flags) {
+		return
+	}
 	if len(ops) != 2 {
 		a.problem("mv 要写成 mv 源文件 目标文件")
 		return
@@ -246,8 +296,18 @@ func owner(a *analyzer, name string, args []string) {
 
 func ln(a *analyzer, args []string) {
 	flags, ops := split(args)
-	if !hasFlag(flags, "s", "--symbolic") || len(ops) != 2 {
+	if !hasFlag(flags, "s", "--symbolic") || len(ops) != 2 || !noTarget(a, "ln", flags) {
 		a.problem("ln 只能用来建软链接：ln -s 目标 链接")
+		return
+	}
+	// Writes and chmod through the link reach its target, so the target
+	// must be a place free commands may change too.
+	target := ops[0]
+	if !strings.HasPrefix(target, "/") {
+		target = path.Join(path.Dir(ops[1]), target)
+	}
+	if err := CheckPath(path.Clean(target)); err != nil {
+		a.problem("软链接不能指向 %s：%v", ops[0], err)
 		return
 	}
 	a.write(ops[1])

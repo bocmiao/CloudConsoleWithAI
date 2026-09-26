@@ -94,3 +94,37 @@ func TestOtherAllowedForms(t *testing.T) {
 		}
 	}
 }
+
+// Commands that look harmless but change the machine, and writes that
+// land somewhere other than they seem.
+func TestHiddenChanges(t *testing.T) {
+	for _, c := range []struct {
+		d    Declaration
+		want string
+	}{
+		{Declaration{Script: "systemctl start poweroff.target", Services: []string{"poweroff.target"}}, "不是普通服务"},
+		{Declaration{Script: "systemctl restart ssh.socket", Services: []string{"ssh.socket"}}, "不是普通服务"},
+		{Declaration{Script: "hostname evil"}, "不能修改主机名"},
+		{Declaration{Script: "date -s '2020-01-01'"}, "不能修改"},
+		{Declaration{Script: "date 010100002020"}, "不能修改"},
+		{Declaration{Script: "ss -K dport = :22"}, "-K"},
+		{Declaration{Script: "cp -t /etc/cron.d /opt/job", Files: []string{"/opt/job"}}, "-t"},
+		{Declaration{Script: "cp --target-directory=/etc/cron.d /opt/job", Files: []string{"/opt/job"}}, "-t"},
+		{Declaration{Script: "mv -t /etc/cron.d /opt/job", Files: []string{"/opt/job"}}, "-t"},
+		{Declaration{Script: "ln -s /etc/shadow /opt/x", Files: []string{"/opt/x"}}, "软链接不能指向"},
+		{Declaration{Script: "ln -s ../shadow /etc/nginx/x", Files: []string{"/etc/nginx/x"}}, ""},
+	} {
+		a := Analyze(c.d)
+		if a.OK() || !strings.Contains(strings.Join(a.Problems, "；"), c.want) {
+			t.Errorf("%q: problems %v, want %q", c.d.Script, a.Problems, c.want)
+		}
+	}
+	for _, d := range []Declaration{
+		{Script: "hostname"}, {Script: "hostname -I"}, {Script: "date +%F"}, {Script: "date -d yesterday +%F"}, {Script: "ss -tlnp"},
+		{Script: "systemctl reload php8.2-fpm", Services: []string{"php8.2-fpm"}},
+	} {
+		if a := Analyze(d); !a.OK() {
+			t.Errorf("%q refused: %v", d.Script, a.Problems)
+		}
+	}
+}
