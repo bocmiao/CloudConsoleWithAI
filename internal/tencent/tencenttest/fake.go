@@ -73,6 +73,11 @@ type Fake struct {
 	// COS: buckets by name, and what Cloud Monitor reports for them.
 	COS      map[string]*COSBucket
 	COSUsage map[string]COSUsage
+	// SMS: what was sent, and the approved signature and template
+	// variable count it accepts.
+	SMS       []SentSMS
+	SMSSign   string
+	SMSParams int
 
 	// TAT: which instances have the agent online, and a function that
 	// plays the server running a command (defaults to echoing nothing).
@@ -101,6 +106,7 @@ func New() *Fake {
 			"sg-abc":         {{Protocol: "TCP", Port: "22", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Index: 0}},
 		},
 		Snaps:   map[string]*tencent.Snapshot{},
+		SMSSign: "喵面板", SMSParams: 2,
 		nextID:  100,
 		Records: map[string][]Record{"example.com": {{RecordID: 1, Name: "blog", Type: "A", Value: "1.2.3.4", Line: tencent.DefaultLine, TTL: 600, Status: "ENABLE"}}},
 		Zones:   []tencent.Zone{{ZoneID: "zone-abc", ZoneName: "example.com", Type: "partial", Status: "active", Area: "mainland", CnameStatus: "finished"}},

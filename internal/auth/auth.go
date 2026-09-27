@@ -10,6 +10,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha1"
@@ -79,12 +80,19 @@ type Service struct {
 	Dir     string           // where the setup code is kept
 	Now     func() time.Time // tests move the clock
 	Cost    int              // bcrypt cost; tests lower it
+	// Send delivers a code by "email" or "sms" (purpose login or bind),
+	// and Ready says whether a channel is set up; both come from the app.
+	Send  func(ctx context.Context, channel, to, code, purpose, ip string) error
+	Ready func(channel string) bool
 
 	mu       sync.Mutex
 	byIP     map[string]*tries
 	byUser   map[string]*tries
 	goodIP   map[string]time.Time // addresses that logged in lately
 	lastStep map[int64]int64      // TOTP steps already used, so a code works once
+	codes    map[string]*pendingCode
+	sends    map[string][]time.Time // when codes went out, per email/phone and per address
+	codeKey  []byte
 
 	dummyOnce sync.Once
 	dummy     []byte
@@ -223,27 +231,36 @@ func (s *Service) Setup(ip, ua, code, name, password string) (string, store.User
 // Without a code it answers need_code once the password is right.
 func (s *Service) Login(ip, ua, name, password, code string) (string, store.User, error) {
 	name = strings.TrimSpace(name)
-	done, err := s.attempt(ip, name)
-	if err != nil {
-		return "", store.User{}, err
+	if !s.ActiveMethods().Password {
+		return "", store.User{}, refuse("method_off", "密码登录已关闭，请用验证码登录")
 	}
-	u, err := s.Store.UserByName(name)
+	// The name, or the email or phone bound to the account; tries count
+	// against the account whichever is typed.
+	u, err := s.findLogin(name)
+	key := name
+	if err == nil {
+		key = u.Name
+	}
+	done, aerr := s.attempt(ip, key)
+	if aerr != nil {
+		return "", store.User{}, aerr
+	}
 	hash := []byte(u.Password)
 	if err != nil {
 		hash = s.dummyHash()
 	}
 	if bcrypt.CompareHashAndPassword(hash, []byte(password)) != nil || err != nil {
-		_ = s.Store.Audit(orDash(name), "auth.fail", orDash(name), ip)
-		return "", store.User{}, refuse("bad_login", "用户名或密码不对")
+		_ = s.Store.Audit(orDash(key), "auth.fail", orDash(key), ip)
+		return "", store.User{}, refuse("bad_login", "账号或密码不对")
 	}
 	if u.TOTP {
 		if strings.TrimSpace(code) == "" {
 			done() // the password was right; the code comes next
 			return "", store.User{}, refuse("need_code", "请输入身份验证器 App 里的 6 位验证码")
 		}
-		key, err := s.totpKey(u.ID, "totp")
-		if err != nil || !s.checkCode(u.ID, key, code) {
-			_ = s.Store.Audit(name, "auth.fail", name, ip+"（验证码不对）")
+		totp, err := s.totpKey(u.ID, "totp")
+		if err != nil || !s.checkCode(u.ID, totp, code) {
+			_ = s.Store.Audit(u.Name, "auth.fail", u.Name, ip+"（验证码不对）")
 			return "", store.User{}, refuse("bad_code", "验证码不对，请看 App 里最新的 6 位数字")
 		}
 	}
@@ -253,9 +270,9 @@ func (s *Service) Login(ip, ua, name, password, code string) (string, store.User
 	if s.goodIP == nil {
 		s.goodIP = map[string]time.Time{}
 	}
-	s.goodIP[name+"|"+ip] = s.Now()
+	s.goodIP[u.Name+"|"+ip] = s.Now()
 	s.mu.Unlock()
-	_ = s.Store.Audit(name, "auth.login", name, ip)
+	_ = s.Store.Audit(u.Name, "auth.login", u.Name, ip)
 	tok, err := s.newSession(u.ID, ip, ua)
 	return tok, u, err
 }
@@ -530,8 +547,12 @@ func ResetPassword(st *store.Store, sec secrets.Store, name, pw string) error {
 	}
 	_ = st.SetTOTP(u.ID, false)
 	_ = sec.Delete(totpName(u.ID, "totp"))
+	// The password works again even if it was turned off for codes.
+	m := loadMethods(st)
+	m.Password = true
+	_ = saveMethods(st, m)
 	_ = st.DeleteSessions(u.ID, "")
-	_ = st.Audit(name, "auth.reset", name, "在服务器命令行重设了密码，两步验证已关闭")
+	_ = st.Audit(name, "auth.reset", name, "在服务器命令行重设了密码，两步验证已关闭，密码登录已开启")
 	return nil
 }
 

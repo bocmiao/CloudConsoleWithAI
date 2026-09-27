@@ -12,6 +12,8 @@ type User struct {
 	Name      string `json:"name"`
 	Password  string `json:"-"` // bcrypt hash
 	TOTP      bool   `json:"totp"`
+	Email     string `json:"email"` // bound and verified; can receive login codes
+	Phone     string `json:"phone"` // +8613800000000
 	CreatedAt string `json:"createdAt"`
 	ChangedAt string `json:"changedAt"`
 }
@@ -44,12 +46,12 @@ func (s *Store) AddUser(name, hash string) (User, error) {
 	return User{ID: id, Name: name, Password: hash, CreatedAt: at, ChangedAt: at}, nil
 }
 
-const userCols = `id, name, password, totp, created_at, changed_at`
+const userCols = `id, name, password, totp, email, phone, created_at, changed_at`
 
 func scanUser(row interface{ Scan(...any) error }) (User, error) {
 	var u User
 	var totp int
-	err := row.Scan(&u.ID, &u.Name, &u.Password, &totp, &u.CreatedAt, &u.ChangedAt)
+	err := row.Scan(&u.ID, &u.Name, &u.Password, &totp, &u.Email, &u.Phone, &u.CreatedAt, &u.ChangedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return u, ErrNotFound
 	}
@@ -60,6 +62,31 @@ func scanUser(row interface{ Scan(...any) error }) (User, error) {
 // UserByName finds an account by its login name.
 func (s *Store) UserByName(name string) (User, error) {
 	return scanUser(s.db.QueryRow(`SELECT `+userCols+` FROM users WHERE name = ?`, name))
+}
+
+// UserByEmail finds the account an email is bound to.
+func (s *Store) UserByEmail(email string) (User, error) {
+	if email == "" {
+		return User{}, ErrNotFound
+	}
+	return scanUser(s.db.QueryRow(`SELECT `+userCols+` FROM users WHERE email = ?`, email))
+}
+
+// UserByPhone finds the account a phone number is bound to.
+func (s *Store) UserByPhone(phone string) (User, error) {
+	if phone == "" {
+		return User{}, ErrNotFound
+	}
+	return scanUser(s.db.QueryRow(`SELECT `+userCols+` FROM users WHERE phone = ?`, phone))
+}
+
+// SetContact binds (or, with "", unbinds) an account's email or phone.
+func (s *Store) SetContact(id int64, field, value string) error {
+	if field != "email" && field != "phone" {
+		return errors.New("unknown contact field " + field)
+	}
+	_, err := s.db.Exec(`UPDATE users SET `+field+` = ? WHERE id = ?`, value, id)
+	return err
 }
 
 // GetUser finds an account by id.

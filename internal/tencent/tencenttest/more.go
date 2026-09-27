@@ -151,6 +151,36 @@ func (f *Fake) serveMore(w http.ResponseWriter, service, action, region string, 
 			sn.State, sn.Percent = "NORMAL", 100 // finished by the next look
 		}
 		ok(w, map[string]any{"TotalCount": len(out), "SnapshotSet": out})
+	case "sms SendSms":
+		var phones, params []string
+		for _, key := range []string{"PhoneNumberSet", "TemplateParamSet"} {
+			list, _ := in[key].([]any)
+			for _, v := range list {
+				x, _ := v.(string)
+				if key == "PhoneNumberSet" {
+					phones = append(phones, x)
+				} else {
+					params = append(params, x)
+				}
+			}
+		}
+		code := "Ok"
+		switch {
+		case str("SignName") != f.SMSSign:
+			code = "FailedOperation.SignatureIncorrectOrUnapproved"
+		case len(params) != f.SMSParams:
+			code = "FailedOperation.TemplateParamSetNotMatchApprovedTemplate"
+		}
+		if code == "Ok" {
+			for _, p := range phones {
+				f.SMS = append(f.SMS, SentSMS{Phone: p, Params: params, Region: region})
+			}
+		}
+		var set []map[string]any
+		for _, p := range phones {
+			set = append(set, map[string]any{"PhoneNumber": p, "Code": code, "Message": "send " + code})
+		}
+		ok(w, map[string]any{"SendStatusSet": set})
 	case "cam GetUserAppId":
 		ok(w, map[string]any{"AppId": 1250000000, "Uin": "100000000001", "OwnerUin": "100000000001"})
 	case "monitor DescribeBaseMetrics":
@@ -267,6 +297,13 @@ func without(list, remove []tencent.FirewallRule) []tencent.FirewallRule {
 		}
 	}
 	return out
+}
+
+// SentSMS is a text message the fake accepted.
+type SentSMS struct {
+	Phone  string
+	Params []string
+	Region string
 }
 
 // COSUsage is what Cloud Monitor reports for a bucket: its standard

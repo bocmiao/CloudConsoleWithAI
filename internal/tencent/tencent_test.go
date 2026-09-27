@@ -70,3 +70,24 @@ func TestRecordsPaging(t *testing.T) {
 		t.Fatalf("records = %d %v", len(got), err)
 	}
 }
+
+func TestSendSMS(t *testing.T) {
+	f := tencenttest.Start(t)
+	c := tencent.New(tencenttest.SecretID, tencenttest.SecretKey)
+	c.Endpoint = f.Endpoint
+	s := tencent.SMS{AppID: "1400000000", Sign: "喵面板", Template: "123456", Params: 2}
+	if err := c.SendSMS(context.Background(), s, "+8613800138000", "654321", 10); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.SMS) != 1 || f.SMS[0].Phone != "+8613800138000" || strings.Join(f.SMS[0].Params, ",") != "654321,10" || f.SMS[0].Region != "ap-guangzhou" {
+		t.Fatalf("sent %+v", f.SMS)
+	}
+	s.Params = 1
+	if err := c.SendSMS(context.Background(), s, "+8613800138000", "654321", 10); err == nil || !strings.Contains(err.Error(), "变量的个数") {
+		t.Fatalf("wrong variable count: %v", err)
+	}
+	s.Params, s.Sign = 2, "别人的签名"
+	if err := c.SendSMS(context.Background(), s, "+8613800138000", "654321", 10); err == nil || !strings.Contains(err.Error(), "签名") {
+		t.Fatalf("wrong signature: %v", err)
+	}
+}

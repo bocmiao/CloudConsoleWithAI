@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/bocmiao/CloudConsoleWithAI/internal/auth"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/secrets"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/store"
+	"github.com/bocmiao/CloudConsoleWithAI/internal/tencent/tencenttest"
 )
 
 func newWebServer(t *testing.T) (*Server, *auth.Service) {
@@ -178,5 +180,64 @@ func TestClientIPBehindProxy(t *testing.T) {
 		if got := s.clientIP(r); got != c.want {
 			t.Errorf("%v %v: %s, want %s", c.remote, c.header, got, c.want)
 		}
+	}
+}
+
+// Binding a phone and logging in with a text message, over HTTP.
+func TestSMSLogin(t *testing.T) {
+	st, err := store.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	dir := t.TempDir()
+	sec := secrets.OpenFile(dir)
+	au := auth.New(st, sec, dir)
+	au.Cost = bcrypt.MinCost
+	a := app.New(st, sec)
+	f := tencenttest.Start(t)
+	a.TencentEndpoint = f.Endpoint
+	if _, err := a.SaveTencent(tencenttest.SecretID, tencenttest.SecretKey); err != nil {
+		t.Fatal(err)
+	}
+	s := NewServer(a, au, "test")
+	ConnectSenders(a, au)
+
+	code, _ := au.SetupCode()
+	w := call{method: "POST", path: "/api/auth/setup", body: `{"code":"` + code + `","name":"admin","password":"correct horse"}`}.do(s)
+	me := sessionCookie(w).Value
+	post := func(method, path, body, cookie string) *httptest.ResponseRecorder {
+		t.Helper()
+		return call{method: method, path: path, body: body, cookie: cookie, remote: "203.0.113.5:1"}.do(s)
+	}
+	smsForm := `{"appId":"1400000000","sign":"喵面板","template":"123456","params":2,"dailyLimit":20`
+	if w := post("PUT", "/api/account/sms", smsForm+`,"current":"wrong"}`, me); w.Code != 400 {
+		t.Fatalf("save sms with a wrong password: %d %s", w.Code, w.Body)
+	}
+	if w := post("PUT", "/api/account/sms", smsForm+`,"current":"correct horse"}`, me); w.Code != 200 || !strings.Contains(w.Body.String(), `"configured":true`) {
+		t.Fatalf("save sms: %d %s", w.Code, w.Body)
+	}
+	if w := post("POST", "/api/account/bind", `{"channel":"sms","target":"13800138000","password":"correct horse"}`, me); w.Code != 200 || len(f.SMS) != 1 {
+		t.Fatalf("bind: %d %s", w.Code, w.Body)
+	}
+	if w := post("PUT", "/api/account/bind", `{"channel":"sms","code":"`+f.SMS[0].Params[0]+`"}`, me); w.Code != 200 || !strings.Contains(w.Body.String(), "+8613800138000") {
+		t.Fatalf("confirm bind: %d %s", w.Code, w.Body)
+	}
+	if w := post("PUT", "/api/account/methods", `{"password":true,"sms":true}`, me); w.Code != 200 {
+		t.Fatalf("methods: %d %s", w.Code, w.Body)
+	}
+	if w := post("GET", "/api/auth/state", "", ""); !strings.Contains(w.Body.String(), `"sms":true`) {
+		t.Fatalf("state: %s", w.Body)
+	}
+	// Logging in from elsewhere: the answer is the same for an unbound number.
+	au.Now = func() time.Time { return time.Now().Add(2 * time.Minute) }
+	stranger := post("POST", "/api/auth/code", `{"channel":"sms","target":"13900000000"}`, "")
+	w = post("POST", "/api/auth/code", `{"channel":"sms","target":"13800138000"}`, "")
+	if w.Code != 200 || stranger.Body.String() != w.Body.String() || len(f.SMS) != 2 {
+		t.Fatalf("send code: %d %s / %s, sent %d", w.Code, w.Body, stranger.Body, len(f.SMS))
+	}
+	w = post("POST", "/api/auth/login", `{"channel":"sms","target":"138 0013 8000","loginCode":"`+f.SMS[1].Params[0]+`"}`, "")
+	if w.Code != 200 || sessionCookie(w) == nil {
+		t.Fatalf("login: %d %s", w.Code, w.Body)
 	}
 }

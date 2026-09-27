@@ -61,6 +61,7 @@ func serveMain(args []string) error {
 	a := app.New(st, sec)
 	a.CacheDir = filepath.Join(dir, "cache")
 	au := auth.New(st, sec, dir)
+	api.ConnectSenders(a, au) // login codes go out by the app's mail and SMS settings
 
 	ln, err := net.Listen("tcp", *listen)
 	if err != nil {

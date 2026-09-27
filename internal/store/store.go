@@ -175,8 +175,20 @@ func open(dsn string) (*Store, error) {
 		{"plans", "result", "TEXT NOT NULL DEFAULT ''"},
 		{"servers", "instance_id", "TEXT NOT NULL DEFAULT ''"},
 		{"servers", "region", "TEXT NOT NULL DEFAULT ''"},
+		{"users", "email", "TEXT NOT NULL DEFAULT ''"},
+		{"users", "phone", "TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err := addColumn(db, c[0], c[1], c[2]); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("migrate: %w", err)
+		}
+	}
+	// An email or a phone number belongs to one account at most.
+	for _, q := range []string{
+		`CREATE UNIQUE INDEX IF NOT EXISTS users_email ON users(email) WHERE email != ''`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS users_phone ON users(phone) WHERE phone != ''`,
+	} {
+		if _, err := db.Exec(q); err != nil {
 			db.Close()
 			return nil, fmt.Errorf("migrate: %w", err)
 		}
