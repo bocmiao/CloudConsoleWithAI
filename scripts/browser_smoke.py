@@ -133,16 +133,16 @@ def main():
           const box = document.querySelector('.messages');
           return box.scrollHeight > box.clientHeight + 200 ? box.scrollHeight : 0;
         """))
-        text_length = execute("document.querySelector('.live-text')?.textContent.length || 0")
+        text_length = execute("return document.querySelector('.live-text')?.textContent.length || 0")
         execute("""
           const box = document.querySelector('.messages');
           box.scrollTop = 0;
           box.dispatchEvent(new Event('scroll'));
         """)
-        wait_for(lambda: execute(f"(document.querySelector('.live-text')?.textContent.length || 0) > {text_length + 300}"))
-        assert execute("document.querySelector('.messages').scrollTop") <= 4, "Streaming pulled the reader away from earlier text"
-        wait_for(lambda: execute("!document.querySelector('.chat button.send.stop')"), seconds=15)
-        assert execute("document.querySelector('.messages').scrollTop") <= 4, "Answer completion jumped to the bottom"
+        wait_for(lambda: execute(f"return (document.querySelector('.live-text')?.textContent.length || 0) > {text_length + 300}"))
+        assert execute("return document.querySelector('.messages').scrollTop") <= 4, "Streaming pulled the reader away from earlier text"
+        wait_for(lambda: execute("return !document.querySelector('.chat button.send.stop')"), seconds=15)
+        assert execute("return document.querySelector('.messages').scrollTop") <= 4, "Answer completion jumped to the bottom"
         print("Browser setup, login, and chat scrolling passed")
     finally:
         if session:
