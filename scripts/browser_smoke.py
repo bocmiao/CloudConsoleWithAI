@@ -17,12 +17,17 @@ ELEMENT = "element-6066-11e4-a52e-4f735466cecf"
 
 
 def request(method, path, body=None):
+    if method == "POST" and body is None:
+        body = {}
     data = None if body is None else json.dumps(body).encode()
     req = Request(BASE + path, data=data, method=method)
     if data is not None:
         req.add_header("Content-Type", "application/json")
-    with urlopen(req, timeout=10) as response:
-        result = json.load(response)
+    try:
+        with urlopen(req, timeout=10) as response:
+            result = json.load(response)
+    except HTTPError as error:
+        raise HTTPError(error.url, error.code, error.read().decode(), error.headers, None) from error
     value = result["value"]
     if isinstance(value, dict) and value.get("error"):
         raise RuntimeError(value)
