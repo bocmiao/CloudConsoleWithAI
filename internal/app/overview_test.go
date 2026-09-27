@@ -91,3 +91,35 @@ func TestPageNote(t *testing.T) {
 		t.Fatalf("long note kept %d runes", len([]rune(got)))
 	}
 }
+
+// The 总览 counts certificates as the 证书 page does.
+func TestCertsOverview(t *testing.T) {
+	d := func(n int) *int { return &n }
+	c := CertOverview{
+		Groups: []CertGroup{
+			// In use and fine, plus an old copy nobody uses.
+			{Domain: "a.example.net", Level: "ok", Certs: []Cert{
+				{InUse: true, Level: "ok", DaysLeft: d(80)},
+				{Level: "crit", DaysLeft: d(-30)},
+			}},
+			// In use and expiring soon without renewal.
+			{Domain: "b.example.net", Level: "warn", Certs: []Cert{
+				{InUse: true, Level: "warn", DaysLeft: d(8), UsedBy: []string{"b.example.net"}},
+			}},
+			// Nothing in use; its failed request still needs a look.
+			{Domain: "c.example.net", Level: "crit", Certs: []Cert{{Level: "crit"}}},
+		},
+		Live: []LiveCert{
+			{Domain: "b.example.net", Level: "warn"},                  // explained by its certificate
+			{Domain: "d.example.net", Level: "crit", DaysLeft: d(-2)}, // only seen when visited
+			{Domain: "e.example.net", Level: "ok"},
+		},
+	}
+	o := certsOverview(c)
+	if o.Total != 2 || o.Attention != 3 || o.Level != "crit" || o.Soonest != "d.example.net" || o.Days == nil || *o.Days != -2 {
+		t.Fatalf("certs overview: %+v", o)
+	}
+	if o := certsOverview(CertOverview{}); o.Total != 0 || o.Attention != 0 || o.Level != "ok" {
+		t.Fatalf("empty: %+v", o)
+	}
+}

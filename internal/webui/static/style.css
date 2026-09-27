@@ -1143,8 +1143,10 @@ button.change-row:first-of-type { border-top: 0; }
 button.change-row:hover:not(:disabled) { background: var(--hover); }
 .change-when { width: 70px; flex: none; padding-top: 1px; }
 .change-row .grow { flex: 1; min-width: 0; }
-@media (max-width: 1100px) { .home-row.three { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
-@media (max-width: 900px) { .home-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } .home-row, .home-row.three { grid-template-columns: minmax(0, 1fr); } }
+/* By the page's own width, which the AI side panel also takes from. */
+.home { container-type: inline-size; }
+@container (max-width: 860px) { .home-cards, .home-row.three { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container (max-width: 640px) { .home-row, .home-row.three { grid-template-columns: minmax(0, 1fr); } }
 .home-card-sub .phone-only { display: none; }
 @media (max-width: 560px) {
   .home-card-top .pill { display: none; }
@@ -1164,6 +1166,9 @@ button.change-row:hover:not(:disabled) { background: var(--hover); }
 .ai-host { display: contents; }
 .ai-host.panel { display: flex; flex-direction: column; position: fixed; top: 0; right: 0; bottom: 0; width: min(440px, 100vw); z-index: 40;
   background: var(--bg); box-shadow: -1px 0 0 var(--sep), -12px 0 40px rgba(0, 0, 0, .12); }
+/* On a wide window the page makes room for the side panel instead of
+   hiding under it. */
+@media (min-width: 1100px) { .main.beside-ai { padding-right: 440px; } }
 .ai-host.panel .chat-layout { flex: 1; min-height: 0; display: flex; height: auto; }
 .ai-host.panel .conv-list { display: none; }
 .ai-host.panel .chat { flex: 1; min-width: 0; }

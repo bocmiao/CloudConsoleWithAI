@@ -123,7 +123,7 @@ func (a *App) ProposeEOCache(ctx context.Context, req EOCacheRequest) (PlanView,
 			method = "invalidate"
 		}
 		params["type"], params["method"] = kind, method
-		how := map[string]string{"invalidate": "标记过期（节点下次访问时向源站确认有没有更新）", "delete": "直接删除（下次访问一定回源）"}[method]
+		how := map[string]string{"invalidate": "标记过期，节点下次访问时向源站确认有没有更新", "delete": "直接删除，下次访问一定回源"}[method]
 		switch kind {
 		case "url", "prefix":
 			targets, err := eoTargets(domain, req.Targets, kind == "prefix")
@@ -138,7 +138,7 @@ func (a *App) ProposeEOCache(ctx context.Context, req EOCacheRequest) (PlanView,
 			if len(targets) == 1 {
 				what = "EdgeOne 上 " + targets[0] + " 的缓存"
 			}
-			title, summary = "清除 EdgeOne 缓存："+domain, "清除"+what+"（"+how+"）"
+			title, summary = "清除 EdgeOne 缓存："+domain, "清除 "+what+"（"+how+"）"
 		case "host":
 			title, summary = "清除 EdgeOne 缓存："+domain, "清除 EdgeOne 上 "+domain+" 整个域名的缓存（"+how+"）"
 		case "all":

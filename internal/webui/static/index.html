@@ -69,7 +69,7 @@
   </aside>
 
   <!-- Main -->
-  <div class="main">
+  <div class="main" :class="{ 'beside-ai': aiPanel && tab !== 'chat' }">
 
     <!-- 总览 -->
     <template v-if="tab === 'home'">
@@ -338,7 +338,8 @@
       </div>
       </div>
     </div>
-    <button class="ai-fab" v-if="tab !== 'chat' && !aiPanel" @click="toggleAI(true)" :title="'问 AI（' + modKey + 'J）'"><ui-icon name="sparkles"></ui-icon>问 AI</button>
+    <!-- Pages that fill the window ask from their toolbar instead. -->
+    <button class="ai-fab" v-if="!['chat', 'terminal', 'files'].includes(tab) && !aiPanel" @click="toggleAI(true)" :title="'问 AI（' + modKey + 'J）'"><ui-icon name="sparkles"></ui-icon>问 AI</button>
 
     <!-- Websites on 1Panel -->
     <div class="tab-pane" v-if="seen.sites" v-show="tab === 'sites'">
@@ -401,13 +402,13 @@
 
     <!-- Terminals: kept alive once opened, so sessions survive page switches. -->
     <div class="tab-pane" v-if="seen.terminal" v-show="tab === 'terminal'">
-      <header class="toolbar"><h1>终端</h1></header>
+      <header class="toolbar"><h1>终端</h1><span class="spacer"></span><button class="plain" v-if="!aiPanel" @click="toggleAI(true)" :title="'问 AI（' + modKey + 'J）'"><ui-icon name="sparkles"></ui-icon>问 AI</button></header>
       <terminal-page :servers="servers" :active="tab === 'terminal'" :request="termRequest"></terminal-page>
     </div>
 
     <!-- Files: kept alive once opened, so uploads and the open folder survive page switches. -->
     <div class="tab-pane" v-if="seen.files" v-show="tab === 'files'">
-      <header class="toolbar"><h1>文件</h1></header>
+      <header class="toolbar"><h1>文件</h1><span class="spacer"></span><button class="plain" v-if="!aiPanel" @click="toggleAI(true)" :title="'问 AI（' + modKey + 'J）'"><ui-icon name="sparkles"></ui-icon>问 AI</button></header>
       <file-page :servers="servers" :active="tab === 'files'" :request="filesRequest"></file-page>
     </div>
 

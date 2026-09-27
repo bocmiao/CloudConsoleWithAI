@@ -2452,7 +2452,7 @@ const HomePage = {
           <div class="home-empty" v-if="!ov.changes.length">还没有执行过修改</div>
           <button class="change-row" v-for="c in ov.changes" :key="c.id" @click="$emit('log', c.id)">
             <span class="small tertiary change-when">{{ whenText(c.startedAt) }}</span>
-            <span class="grow"><span class="ellipsis block">{{ c.title }}</span><span class="small secondary">{{ c.serverName }}{{ c.status === 'undone' || c.undoneBy ? ' · 已撤销' : c.status !== 'done' ? ' · 没有成功' : '' }}</span></span>
+            <span class="grow"><span class="ellipsis block" :title="c.note || c.title">{{ c.note || c.title }}</span><span class="small secondary">{{ c.serverName }}{{ c.status === 'undone' || c.undoneBy ? ' · 已撤销' : c.status !== 'done' ? ' · 没有成功' : '' }}</span></span>
           </button>
         </section>
       </div>
@@ -3644,7 +3644,7 @@ const StoragePage = {
       <div class="row"><ui-icon name="info" class="lg" style="color: var(--accent)"></ui-icon><div class="grow">存储桶在腾讯云 COS，需要先填写腾讯云密钥（子账号要有 COS 的权限）。</div><button @click="$emit('settings')">去设置</button></div>
     </div>
     <template v-else>
-      <div class="page-head"><p>腾讯云 COS 里的存储桶。文件的上传、改名和删除直接执行，会记在「日志」里；设置保存后马上生效，可以撤销。</p></div>
+      <div class="page-head"><p>腾讯云 COS 里的存储桶。文件的上传、改名和删除直接执行，会记在「记录」里；设置保存后马上生效，可以撤销。</p></div>
       <div class="notice" v-if="listError"><ui-icon name="alert" class="st-crit"></ui-icon><span class="grow">{{ listError }}</span><button class="small" @click="loadBuckets()">重试</button></div>
       <div class="notice" v-else-if="!list"><span class="spinner"></span>正在读取存储桶……</div>
 
@@ -5027,7 +5027,7 @@ const FilePage = {
       <span v-if="list">{{ list.entries.length }} 项<template v-if="selected.length"> · 已选 {{ selected.length }} 项{{ selSize }}</template></span>
       <span v-if="clip.paths.length" class="fm-clip">· 剪贴板：{{ clipText }}<button class="link" @click="clearClip">清空</button></span>
       <span class="grow"></span>
-      <span v-if="list">以 {{ list.user }} 身份登录 · 改动会记在「日志」里</span>
+      <span v-if="list">以 {{ list.user }} 身份登录 · 改动会记在「记录」里</span>
     </div>
 
     <div class="fm-uploads" v-if="uploads.length" role="status">

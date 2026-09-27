@@ -245,29 +245,16 @@ func (a *App) Overview(ctx context.Context) (OverviewView, error) {
 		}
 	}
 	if certErr == nil {
-		c := &OverviewCerts{Level: "ok"}
-		for _, g := range certs.Entries {
-			c.Total++
-			if g.Level == "warn" || g.Level == "crit" {
-				c.Attention++
-				if c.Days == nil || (g.DaysLeft != nil && *g.DaysLeft < *c.Days) {
-					c.Soonest, c.Days = g.Domain, g.DaysLeft
-				}
-				if g.Level == "crit" || c.Level == "ok" {
-					c.Level = g.Level
-				}
-			}
-		}
-		if c.Total > 0 {
+		if c := certsOverview(certs); c.Total > 0 || c.Attention > 0 {
 			v.Certs = c
-		}
-		if c.Attention > 0 {
-			meta := ""
-			if c.Days != nil {
-				meta = c.Soonest + " " + leftText(*c.Days)
+			if c.Attention > 0 {
+				meta := c.Soonest
+				if c.Days != nil {
+					meta += " " + leftText(*c.Days)
+				}
+				v.Todo = append(v.Todo, OverviewItem{Level: c.Level, Kind: "cert", Action: "查看",
+					Title: fmt.Sprintf("%d 张证书需要处理", c.Attention), Meta: meta})
 			}
-			v.Todo = append(v.Todo, OverviewItem{Level: c.Level, Kind: "cert", Action: "查看",
-				Title: fmt.Sprintf("%d 张证书需要处理", c.Attention), Meta: meta})
 		}
 	}
 
@@ -305,6 +292,48 @@ func (a *App) Overview(ctx context.Context) (OverviewView, error) {
 		v.Changes = logs
 	}
 	return v, nil
+}
+
+// certsOverview counts certificates the way the 证书 page does: the ones
+// in use, and the ones in its 需要处理 (a problem certificate in use, or of
+// a domain with none in use, and a site that served a bad certificate
+// none of those explains).
+func certsOverview(c CertOverview) *OverviewCerts {
+	o := &OverviewCerts{Level: "ok"}
+	note := func(level, domain string, days *int) {
+		o.Attention++
+		if level == "crit" || o.Level == "ok" {
+			o.Level = level
+		}
+		if o.Soonest == "" || days != nil && (o.Days == nil || *days < *o.Days) {
+			o.Soonest, o.Days = domain, days
+		}
+	}
+	bad := func(level string) bool { return level == "crit" || level == "warn" }
+	served := map[string]bool{}
+	for _, g := range c.Groups {
+		used := false
+		for _, x := range g.Certs {
+			used = used || x.InUse
+		}
+		for _, x := range g.Certs {
+			if x.InUse {
+				o.Total++
+			}
+			if bad(x.Level) && (x.InUse || !used) {
+				note(x.Level, g.Domain, x.DaysLeft)
+				for _, d := range append(append(append([]string{}, x.UsedBy...), x.EdgeOne...), x.ServedOn...) {
+					served[d] = true
+				}
+			}
+		}
+	}
+	for _, l := range c.Live {
+		if bad(l.Level) && !served[l.Domain] {
+			note(l.Level, l.Domain, l.DaysLeft)
+		}
+	}
+	return o
 }
 
 func leftText(d int) string {
