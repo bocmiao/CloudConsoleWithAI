@@ -26,9 +26,10 @@ docker logs miaopanel          # 找到「初始化码」
 
 ## 方式二：直接运行程序（systemd）
 
-从 [Releases](https://github.com/bocmiao/CloudConsoleWithAI/releases)（还没有发布版本时，用 [Actions](https://github.com/bocmiao/CloudConsoleWithAI/actions) 里最新一次构建的产物，下载后先解压）下载 `MiaoPanel-linux-amd64`（ARM 服务器用 `linux-arm64`），然后：
+从 [Releases](https://github.com/bocmiao/CloudConsoleWithAI/releases/latest) 下载 Linux 版程序（ARM 服务器把下面的 `amd64` 换成 `arm64`），然后：
 
 ```bash
+curl -fLO https://github.com/bocmiao/CloudConsoleWithAI/releases/latest/download/MiaoPanel-linux-amd64
 sudo useradd --system --home /var/lib/miaopanel --shell /usr/sbin/nologin miaopanel
 sudo install -m 755 MiaoPanel-linux-amd64 /usr/local/bin/miaopanel
 sudo curl -o /etc/systemd/system/miaopanel.service \
@@ -38,7 +39,7 @@ sudo journalctl -u miaopanel   # 找到「初始化码」
 ```
 
 服务文件在 [`deploy/miaopanel.service`](../deploy/miaopanel.service)：以 `miaopanel` 用户运行，数据在 `/var/lib/miaopanel`，只监听 `127.0.0.1:18765`。
-升级：替换 `/usr/local/bin/miaopanel` 后 `sudo systemctl restart miaopanel`。
+升级：下载新版本，`sudo install -m 755 MiaoPanel-linux-amd64 /usr/local/bin/miaopanel` 替换后 `sudo systemctl restart miaopanel`。
 
 ## 配置 HTTPS 反向代理
 

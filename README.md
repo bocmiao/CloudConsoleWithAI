@@ -37,7 +37,7 @@
 
 ## 怎么用（Windows）
 
-1. 在仓库的 Actions 或 Releases 页面下载 `MiaoPanel-windows-amd64.exe`；
+1. 在 [Releases](https://github.com/bocmiao/CloudConsoleWithAI/releases/latest) 页面下载 `MiaoPanel-windows-amd64.exe`（ARM 电脑用 `arm64`）；程序没有代码签名，Windows 提示「Windows 已保护你的电脑」时点「更多信息 → 仍要运行」；
 2. 双击运行，会打开 Miao Panel 自己的窗口（用的是 Windows 自带的 WebView2，和很多桌面软件一样；没有黑色命令行窗口，关掉窗口就是退出）。再次双击只会把已经打开的窗口切到前面；
 3. 按页面上的三步走：**设置 AI 模型**（推荐 DeepSeek V4.1 Flash，在 DeepSeek 开放平台创建 API Key）→ **添加服务器**（IP、用户名、密码）→ **识别环境**；
 4. 到「AI 助手」里用大白话说你想干什么，比如「服务器内存是不是太高了？帮我优化一下」；
@@ -110,7 +110,7 @@ docker logs miaopanel   # 里面有创建管理员账号用的「初始化码」
 ```
 
 再用 1Panel、宝塔、Nginx 或 Caddy 给它配一个 HTTPS 反向代理（代理到 `http://127.0.0.1:18765`），用浏览器打开你的域名，输入初始化码创建管理员账号。
-也可以不用 Docker，下载 Linux 版程序用 systemd 运行。完整步骤见 **[docs/DEPLOY.md](docs/DEPLOY.md)**。
+也可以不用 Docker，从 [Releases](https://github.com/bocmiao/CloudConsoleWithAI/releases/latest) 下载 Linux 版程序用 systemd 运行。完整步骤见 **[docs/DEPLOY.md](docs/DEPLOY.md)**。
 
 - 功能和桌面版一样；放在服务器上 7×24 运行，日报、提醒、自动封禁不用等你开电脑；手机浏览器也能用（侧边栏收进左上角的菜单）；
 - 登录：密码（bcrypt 保存）＋可选的两步验证（身份验证器 App），也可以开启邮箱验证码登录（用你自己的 SMTP 邮箱发信）和手机短信验证码登录（腾讯云或阿里云短信），各自开关；输错多次自动锁定一段时间，能查看和退出登录的设备；

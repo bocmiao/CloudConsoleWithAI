@@ -84,11 +84,22 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+      # Checksums for every file, and the notes written for this version
+      # (docs/releases/<tag>.md) when there are some.
+      - name: Checksums and notes
+        id: notes
+        run: |
+          (cd dist && sha256sum * > SHA256SUMS.txt)
+          f="docs/releases/${GITHUB_REF_NAME}.md"
+          if [ -f "$f" ]; then echo "path=$f" >> "$GITHUB_OUTPUT"; fi
       - uses: softprops/action-gh-release@v2
         with:
+          name: Miao Panel ${{ github.ref_name }}
           files: dist/*
+          body_path: ${{ steps.notes.outputs.path }}
           generate_release_notes: true
