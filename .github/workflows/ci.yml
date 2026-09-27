@@ -136,8 +136,8 @@ jobs:
           mkdir -p /tmp/miaopanel-backup
           docker run --rm --user 0 --volumes-from miaopanel -v /tmp/miaopanel-backup:/backup \
             --entrypoint sh miaopanel:ci -c 'umask 077; tar -C /data -czf /backup/miaopanel.tar.gz .'
-          sha256sum /tmp/miaopanel-backup/miaopanel.tar.gz > /tmp/miaopanel-backup/miaopanel.tar.gz.sha256
-          sha256sum -c /tmp/miaopanel-backup/miaopanel.tar.gz.sha256
+          sudo sha256sum /tmp/miaopanel-backup/miaopanel.tar.gz > /tmp/miaopanel-backup/miaopanel.tar.gz.sha256
+          sudo sha256sum -c /tmp/miaopanel-backup/miaopanel.tar.gz.sha256
           docker volume create miaopanel-ci-restored
           docker run --rm --user 0 -v miaopanel-ci-restored:/data -v /tmp/miaopanel-backup:/backup:ro \
             --entrypoint sh miaopanel:ci -c 'test -z "$(ls -A /data)"; tar -C /data -xzf /backup/miaopanel.tar.gz'

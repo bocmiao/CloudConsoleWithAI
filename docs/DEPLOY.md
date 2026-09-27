@@ -37,14 +37,14 @@ docker compose stop miaopanel
 docker compose run --rm --no-deps --user 0 \
   -v "$PWD/backups:/backup" --entrypoint sh miaopanel \
   -c 'umask 077; tar -C /data -czf /backup/miaopanel-backup.tar.gz .'
-sha256sum backups/miaopanel-backup.tar.gz > backups/miaopanel-backup.tar.gz.sha256
+sudo sha256sum backups/miaopanel-backup.tar.gz > backups/miaopanel-backup.tar.gz.sha256
 docker compose start miaopanel
 ```
 
 在新机器或**新的、空的数据卷**里恢复。把备份放在新项目目录的 `backups/` 下，先不要运行 `docker compose up`：
 
 ```bash
-sha256sum -c backups/miaopanel-backup.tar.gz.sha256
+sudo sha256sum -c backups/miaopanel-backup.tar.gz.sha256
 docker compose run --rm --no-deps --user 0 \
   -v "$PWD/backups:/backup:ro" --entrypoint sh miaopanel \
   -c 'test -z "$(ls -A /data)" || { echo "数据卷必须为空"; exit 1; }; tar -C /data -xzf /backup/miaopanel-backup.tar.gz'
