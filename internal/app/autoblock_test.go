@@ -32,12 +32,16 @@ func TestAutoBlockRecordsOnlyRulesItCreated(t *testing.T) {
 		Params: map[string]any{"domain": "example.com", "ips": "1.2.3.4,5.6.7.8"},
 		Undo:   map[string]string{"changed": "5.6.7.8"},
 	}}}
-	if n := a.recordAutoBlocked(plan, AutoBlockSettings{Hours: 24}, nil); n != 1 {
-		t.Fatalf("recorded %d rules, want 1", n)
+	if n, err := a.recordAutoBlocked(plan, AutoBlockSettings{Hours: 24}, nil); n != 1 || err != nil {
+		t.Fatalf("recorded %d rules, err %v; want 1", n, err)
 	}
 	st := a.AutoBlock()
 	if len(st.Blocked) != 1 || st.Blocked[0].IP != "5.6.7.8" || st.Blocked[0].Zone != "example.com" {
 		t.Fatalf("owned rules: %+v", st.Blocked)
+	}
+	_ = a.Store.Close()
+	if n, err := a.recordAutoBlocked(plan, AutoBlockSettings{Hours: 24}, nil); n != 1 || err == nil {
+		t.Fatalf("storage failure hidden: recorded %d rules, err %v", n, err)
 	}
 }
 

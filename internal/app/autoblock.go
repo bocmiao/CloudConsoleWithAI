@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"sort"
 	"strings"
@@ -265,8 +266,15 @@ func (a *App) RunAutoBlock(ctx context.Context) string {
 	autoBlockMu.Lock()
 	st = a.loadAutoBlock()
 	st.LastRun, st.LastNote = now(), note
-	_ = a.saveAutoBlock(st)
+	err := a.saveAutoBlock(st)
 	autoBlockMu.Unlock()
+	if err != nil {
+		log.Printf("保存自动封禁运行状态失败：%v", err)
+		if note != "" {
+			note += "；"
+		}
+		note += "自动封禁状态保存失败，请检查数据库"
+	}
 	return note
 }
 
@@ -466,7 +474,12 @@ func (a *App) blockPicked(ctx context.Context, s AutoBlockSettings) string {
 		if plan.Status == core.PlanRunning {
 			go a.recordWhenDone(plan.ID, s, why)
 		} else {
-			n = a.recordAutoBlocked(plan, s, why)
+			var recordErr error
+			n, recordErr = a.recordAutoBlocked(plan, s, why)
+			if recordErr != nil {
+				log.Printf("保存自动封禁清单 %d 的到期解封记录失败：%v", plan.ID, recordErr)
+				did = append(did, "封禁已生效，但到期解封记录保存失败；请手动检查 EdgeOne 封禁规则："+recordErr.Error())
+			}
 		}
 		if err != nil {
 			did = append(did, src.Title+"：封禁没有全部完成："+err.Error())
@@ -633,7 +646,9 @@ func (a *App) recordWhenDone(id int64, s AutoBlockSettings, why map[string]strin
 			return
 		}
 		if v.Status != core.PlanRunning {
-			a.recordAutoBlocked(v, s, why)
+			if _, err := a.recordAutoBlocked(v, s, why); err != nil {
+				log.Printf("保存自动封禁清单 %d 的到期解封记录失败，请手动检查 EdgeOne：%v", id, err)
+			}
 			return
 		}
 	}
@@ -641,7 +656,7 @@ func (a *App) recordWhenDone(id int64, s AutoBlockSettings, why map[string]strin
 
 // recordAutoBlocked remembers the IPs a finished checklist blocked and
 // when they are due to be lifted; it returns how many.
-func (a *App) recordAutoBlocked(plan PlanView, s AutoBlockSettings, why map[string]string) int {
+func (a *App) recordAutoBlocked(plan PlanView, s AutoBlockSettings, why map[string]string) (int, error) {
 	at := time.Now().UTC()
 	until := ""
 	if s.Hours > 0 {
@@ -670,6 +685,8 @@ func (a *App) recordAutoBlocked(plan PlanView, s AutoBlockSettings, why map[stri
 		st.Events = append(st.Events, AutoBlockEvent{At: now(), PlanID: plan.ID,
 			Text: fmt.Sprintf("自动封禁 %d 个 IP（%s）：%s", n, durationText(s.Hours), strings.Join(ips, "、"))})
 	}
-	_ = a.saveAutoBlock(st)
-	return n
+	if n == 0 {
+		return 0, nil
+	}
+	return n, a.saveAutoBlock(st)
 }
