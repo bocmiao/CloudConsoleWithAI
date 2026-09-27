@@ -67,6 +67,7 @@ def main():
 
         def fill(selector, value):
             element = wait_for(lambda: find(selector))
+            request("POST", root + f"/element/{element}/clear")
             request("POST", root + f"/element/{element}/value", {"text": value})
 
         def click(selector):
