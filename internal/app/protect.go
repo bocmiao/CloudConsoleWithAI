@@ -95,14 +95,12 @@ func (a *App) proposePlan(ctx context.Context, actor string, serverID int64, tit
 // engine crawlers are refused. IPs the automatic rule blocked for a while
 // become the user's own, kept until unblocked by hand.
 func (a *App) ProposeBlock(ctx context.Context, source string, ips []string) (PlanView, error) {
-	a.forgetAutoBlocked(ips)
 	return a.blockPlan(ctx, "user", source, ips, "", "根据访问日志：")
 }
 
 // ProposeBlockInZone lets a user place manually entered IPs in one named
 // EdgeOne site, instead of inferring a site from a missing visit-log row.
 func (a *App) ProposeBlockInZone(ctx context.Context, source, zone string, ips []string) (PlanView, error) {
-	a.forgetAutoBlocked(ips)
 	zone = strings.ToLower(strings.TrimSpace(zone))
 	if zone == "" {
 		return PlanView{}, userErr("请先选择要封禁的网站")
@@ -244,7 +242,6 @@ func (a *App) blockPlanForZone(ctx context.Context, actor, source string, ips []
 // ProposeUnblock makes a checklist that lifts Miao Panel's block on IPs
 // in an EdgeOne site.
 func (a *App) ProposeUnblock(ctx context.Context, zone string, ips []string) (PlanView, error) {
-	a.forgetAutoBlocked(ips)
 	return a.unblockPlan(ctx, "user", zone, ips, "由你在网站统计页选择解封")
 }
 

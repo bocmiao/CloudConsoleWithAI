@@ -330,13 +330,13 @@ func (a *App) executePlan(id int64, selected []int, who string) (PlanView, error
 		return v, err
 	}
 	_ = a.Store.Audit(who, "plan.execute", v.Title, fmt.Sprintf("服务器 %s，%d 项", sv.Name, len(selected)))
-	go a.runPlan(v.ID, sv.ID)
+	go a.runPlan(v.ID, sv.ID, who)
 	return v, nil
 }
 
 func now() string { return time.Now().UTC().Format(time.RFC3339) }
 
-func (a *App) runPlan(planID, serverID int64) {
+func (a *App) runPlan(planID, serverID int64, who string) {
 	defer a.locks.release(serverID)
 	defer a.forgetCertificates() // a step may have issued or changed one
 	ctx, cancel := context.WithTimeout(withOrigin(context.Background(), OriginPlan), runTimeout)
@@ -411,6 +411,9 @@ func (a *App) runPlan(planID, serverID int64) {
 			st.Log = log
 			_ = a.savePlan(&v)
 		})
+		if who == "user" && out.Status == actions.StatusDone && (st.Capability == "eo.ip.block" || st.Capability == "eo.ip.unblock") {
+			a.forgetAutoBlocked(out.Result["zone"], strings.Split(r.Values["ips"], ","))
+		}
 		a.finishAction(&entry, out)
 		st.Status, st.Log, st.Undo, st.FinishedAt = out.Status, out.Log, out.Undo, now()
 		if out.Status != actions.StatusDone {

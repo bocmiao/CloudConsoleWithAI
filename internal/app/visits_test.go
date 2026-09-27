@@ -479,9 +479,17 @@ func TestAutoBlock(t *testing.T) {
 	if len(a.AutoBlock().Blocked) != 1 {
 		t.Fatal("not blocked again")
 	}
-	if _, err := a.ProposeBlock(ctx, "edgeone", []string{"45.148.10.2"}); err != nil {
+	manual, err := a.ProposeBlock(ctx, "edgeone", []string{"45.148.10.2"})
+	if err != nil {
 		t.Fatal(err)
 	}
+	if st := a.AutoBlock(); len(st.Blocked) != 1 {
+		t.Fatalf("proposal changed automatic block: %+v", st.Blocked)
+	}
+	if _, err := a.ExecutePlan(manual.ID, []int{0}); err != nil {
+		t.Fatal(err)
+	}
+	waitPlan(t, a, manual.ID)
 	if st := a.AutoBlock(); len(st.Blocked) != 0 {
 		t.Fatalf("still the rule's: %+v", st.Blocked)
 	}

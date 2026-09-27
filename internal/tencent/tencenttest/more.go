@@ -118,7 +118,20 @@ func (f *Fake) serveMore(w http.ResponseWriter, service, action, region string, 
 		ok(w, map[string]any{"SecurityGroupPolicySet": map[string]any{"Ingress": out, "Version": "5"}})
 	case "vpc CreateSecurityGroupPolicies":
 		set, _ := in["SecurityGroupPolicySet"].(map[string]any)
-		f.Firewall[str("SecurityGroupId")] = append(rules("", set["Ingress"]), f.Firewall[str("SecurityGroupId")]...)
+		group := str("SecurityGroupId")
+		for _, r := range rules("", set["Ingress"]) {
+			index := len(f.Firewall[group])
+			if list, _ := set["Ingress"].([]any); len(list) > 0 {
+				if rule, _ := list[0].(map[string]any); rule != nil {
+					if n, ok := rule["PolicyIndex"].(float64); ok {
+						index = int(n)
+					}
+				}
+			}
+			index = min(index, len(f.Firewall[group]))
+			before := append([]tencent.FirewallRule(nil), f.Firewall[group][:index]...)
+			f.Firewall[group] = append(append(before, r), f.Firewall[group][index:]...)
+		}
 		ok(w, nil)
 	case "vpc DeleteSecurityGroupPolicies":
 		set, _ := in["SecurityGroupPolicySet"].(map[string]any)

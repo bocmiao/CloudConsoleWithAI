@@ -1037,7 +1037,34 @@ func applyBackup(ctx context.Context, env *Env, v map[string]string, out *Outcom
 		for {
 			rec, found, err := c.FindBackup(ctx, j.kind, j.name, j.detail, task)
 			if err == nil && found && rec.Status == "Success" {
-				report("已备份%s：%s/%s", j.label, rec.FileDir, rec.FileName)
+				if strings.TrimSpace(rec.FileDir) == "" || strings.TrimSpace(rec.FileName) == "" {
+					out.Status = StatusFailed
+					out.logf("1Panel 报告备份%s成功，但没有返回备份文件位置；请在 1Panel「备份」里核对", j.label)
+					return *out
+				}
+				var size int64
+				var sizeErr error
+				for attempt := 0; attempt < 3; attempt++ {
+					size, sizeErr = c.BackupSize(ctx, j.kind, j.name, j.detail, rec.ID)
+					if sizeErr == nil && size > 0 {
+						break
+					}
+					if attempt < 2 {
+						select {
+						case <-ctx.Done():
+							out.Status = StatusFailed
+							out.logf("核对备份%s文件大小时连接中断", j.label)
+							return *out
+						case <-time.After(pollEvery(env)):
+						}
+					}
+				}
+				if sizeErr != nil || size <= 0 {
+					out.Status = StatusFailed
+					out.logf("1Panel 报告备份%s成功，但无法确认文件有内容（%s/%s）：大小 %d，错误 %v；请在 1Panel「备份」里核对", j.label, rec.FileDir, rec.FileName, size, sizeErr)
+					return *out
+				}
+				report("已备份%s：%s/%s（%d 字节）", j.label, rec.FileDir, rec.FileName, size)
 				break
 			}
 			if err == nil && found && rec.Status == "Failed" {

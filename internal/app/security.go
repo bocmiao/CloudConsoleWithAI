@@ -106,7 +106,7 @@ func (a *App) ProposeServerSecurity(ctx context.Context, id int64, req SecurityR
 		if err != nil {
 			return PlanView{}, err
 		}
-		if _, err := actions.FirewallTightenRules(rules, v.Server.Port); err != nil {
+		if _, err := actions.FirewallTightenRules(rules, v.Server.Port, cidr.String()); err != nil {
 			return PlanView{}, userErr("安全组 %s：%v", cs.Groups[0], err)
 		}
 		title = "收紧安全组 " + cs.Groups[0]

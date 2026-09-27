@@ -19,14 +19,18 @@ import (
 // fakeApps is a 1Panel with two installed apps (halo and mysql) that keeps
 // the container settings it is sent, and finishes backups on the second look.
 type fakeApps struct {
-	mu        sync.Mutex
-	memory    float64
-	unit      string
-	specifyIP string
-	breakIP   bool // simulate a panel that changes the port binding
-	compose   string
-	requests  []string
-	backups   map[string]int // taskID -> times looked up
+	mu              sync.Mutex
+	memory          float64
+	unit            string
+	specifyIP       string
+	breakIP         bool // simulate a panel that changes the port binding
+	compose         string
+	requests        []string
+	backups         map[string]int // taskID -> times looked up
+	backupIDs       map[string]uint
+	nextBackupID    uint
+	emptyBackupFile bool
+	emptyBackupSize bool
 }
 
 func (f *fakeApps) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -67,7 +71,13 @@ func (f *fakeApps) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/api/v2/databases/search":
 		reply(`{"total":2,"items":[{"name":"halo_db"},{"name":"blog"}]}`)
 	case "/api/v2/backups/backup":
-		f.backups[body["taskID"].(string)] = 0
+		id := body["taskID"].(string)
+		f.backups[id] = 0
+		if f.backupIDs == nil {
+			f.backupIDs = map[string]uint{}
+		}
+		f.nextBackupID++
+		f.backupIDs[id] = f.nextBackupID
 		reply(`null`)
 	case "/api/v2/backups/record/search":
 		var items []string
@@ -77,9 +87,23 @@ func (f *fakeApps) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				status = "Success"
 			}
 			f.backups[id] = n + 1
-			items = append(items, fmt.Sprintf(`{"taskID":%q,"status":%q,"fileDir":"database/mysql/mysql/%s","fileName":"x.sql.gz"}`, id, status, body["detailName"]))
+			fileName := "x.sql.gz"
+			if f.emptyBackupFile {
+				fileName = ""
+			}
+			items = append(items, fmt.Sprintf(`{"id":%d,"taskID":%q,"status":%q,"fileDir":"database/mysql/mysql/%s","fileName":%q}`, f.backupIDs[id], id, status, body["detailName"], fileName))
 		}
 		reply(`{"total":1,"items":[` + strings.Join(items, ",") + `]}`)
+	case "/api/v2/backups/record/size":
+		var items []string
+		for _, id := range f.backupIDs {
+			size := 1024
+			if f.emptyBackupSize {
+				size = 0
+			}
+			items = append(items, fmt.Sprintf(`{"id":%d,"size":%d}`, id, size))
+		}
+		reply(`[` + strings.Join(items, ",") + `]`)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = io.WriteString(w, `{"code":404,"message":"not found"}`)
@@ -154,6 +178,30 @@ func TestBackupWaitsForEveryDatabase(t *testing.T) {
 	}
 	if r.Cap.Reversible {
 		t.Fatal("a backup has nothing to undo")
+	}
+}
+
+func TestBackupNeedsFileRecord(t *testing.T) {
+	f := &fakeApps{backups: map[string]int{}, emptyBackupFile: true}
+	env := panelEnv(t, f)
+	r, err := Resolve("backup.create", map[string]any{"app": "halo"}, "1panel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := Apply(context.Background(), env, r, nil); out.Status != StatusFailed {
+		t.Fatalf("backup without file name marked successful: %+v", out)
+	}
+}
+
+func TestBackupNeedsNonemptyStoredFile(t *testing.T) {
+	f := &fakeApps{backups: map[string]int{}, emptyBackupSize: true}
+	env := panelEnv(t, f)
+	r, err := Resolve("backup.create", map[string]any{"app": "halo"}, "1panel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := Apply(context.Background(), env, r, nil); out.Status != StatusFailed {
+		t.Fatalf("zero byte backup marked successful: %+v", out)
 	}
 }
 

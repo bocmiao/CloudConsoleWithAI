@@ -388,11 +388,34 @@ func (c *Client) Backup(ctx context.Context, kind, name, detail, taskID string) 
 
 // BackupRecord is one entry in 1Panel's backup list.
 type BackupRecord struct {
+	ID       uint   `json:"id"`
 	TaskID   string `json:"taskID"`
 	Status   string `json:"status"` // Waiting, Success, Failed
 	Message  string `json:"message"`
 	FileDir  string `json:"fileDir"`
 	FileName string `json:"fileName"`
+}
+
+// BackupSize checks the stored file through 1Panel's backup account.
+func (c *Client) BackupSize(ctx context.Context, kind, name, detail string, id uint) (int64, error) {
+	if id == 0 {
+		return 0, fmt.Errorf("1Panel 备份记录没有 ID")
+	}
+	var list []struct {
+		ID   uint  `json:"id"`
+		Size int64 `json:"size"`
+	}
+	err := c.do(ctx, http.MethodPost, "/backups/record/size",
+		map[string]any{"page": 1, "pageSize": 20, "type": kind, "name": name, "detailName": detail}, &list)
+	if err != nil {
+		return 0, err
+	}
+	for _, item := range list {
+		if item.ID == id {
+			return item.Size, nil
+		}
+	}
+	return 0, fmt.Errorf("1Panel 没有返回备份记录 %d 的文件大小", id)
 }
 
 // FindBackup looks up the record of the backup started with taskID.

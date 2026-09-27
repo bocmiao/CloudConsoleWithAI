@@ -206,7 +206,7 @@ func durationText(hours int) string {
 
 // forgetAutoBlocked hands IPs over to the user: a block or unblock they
 // chose themselves is not undone when the automatic one runs out.
-func (a *App) forgetAutoBlocked(ips []string) {
+func (a *App) forgetAutoBlocked(zone string, ips []string) {
 	want := map[string]bool{}
 	for _, ip := range ips {
 		want[strings.TrimSpace(ip)] = true
@@ -217,7 +217,7 @@ func (a *App) forgetAutoBlocked(ips []string) {
 	kept := st.Blocked[:0]
 	changed := false
 	for _, b := range st.Blocked {
-		if want[b.IP] {
+		if b.Zone == zone && want[b.IP] {
 			changed = true
 			continue
 		}
