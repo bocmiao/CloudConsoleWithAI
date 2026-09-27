@@ -97,23 +97,10 @@ jobs:
           curl -fsS -H 'X-Miao: 1' http://127.0.0.1:18765/api/auth/state | grep -q '"setup":true'
           curl -fsS -H 'X-Miao: 1' -H 'X-Forwarded-Proto: https' \
             http://127.0.0.1:18765/api/auth/state | grep -q '"https":true'
-      - name: Check the browser mounts the login page
-        run: |
-          timeout 30s google-chrome --headless --no-sandbox --disable-dev-shm-usage \
-            --virtual-time-budget=5000 --dump-dom http://127.0.0.1:18765/ \
-            > /tmp/miaopanel-login.html 2>/tmp/chrome.log
-          if grep -q 'v-cloak' /tmp/miaopanel-login.html; then
-            cat /tmp/chrome.log
-            echo 'Vue did not mount the login page'
-            exit 1
-          fi
-          grep -q '初始化码' /tmp/miaopanel-login.html
+      - name: Check browser setup and password login
+        run: python3 scripts/browser_smoke.py
       - name: Restore a stopped data volume
         run: |
-          code=$(docker exec miaopanel cat /data/setup-code)
-          curl -fsS -X POST -H 'X-Miao: 1' -H 'Content-Type: application/json' \
-            -d "{\"code\":\"${code}\",\"name\":\"admin\",\"password\":\"correct horse battery\"}" \
-            http://127.0.0.1:18765/api/auth/setup > /dev/null
           docker stop miaopanel
           mkdir -p /tmp/miaopanel-backup
           docker run --rm --user 0 --volumes-from miaopanel -v /tmp/miaopanel-backup:/backup \
