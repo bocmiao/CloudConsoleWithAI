@@ -13,12 +13,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net"
@@ -400,25 +402,52 @@ func (s *Server) listTerminals(_ http.ResponseWriter, _ *http.Request) (any, err
 
 // terminalOutput streams what the terminal prints, as raw bytes: the
 // recent backlog, then new output as it comes, until the shell ends.
+// terminalOutput streams a terminal's output as server-sent events: each
+// piece base64-encoded, with the offset after it as the event id so a page
+// that loses the connection can pick up where it was (?from=offset);
+// "reset" first when the stream does not start where the page asked, so it
+// clears the screen before the replay; a comment line every few seconds
+// so proxies do not close an idle stream; and "end" when the shell ended.
+// X-Accel-Buffering stops Nginx (1Panel, 宝塔) from holding the output
+// back until a buffer fills.
 func (s *Server) terminalOutput(w http.ResponseWriter, r *http.Request) (any, error) {
+	from := int64(-1)
+	if v := r.URL.Query().Get("from"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			from = n
+		}
+	}
 	rc := http.NewResponseController(w)
 	started := false
-	err := s.app.TerminalOutput(r.Context(), r.PathValue("tid"), func(p []byte) error {
+	ended, err := s.app.TerminalOutput(r.Context(), r.PathValue("tid"), from, func(p []byte, next int64) error {
+		var b bytes.Buffer
 		if !started {
 			started = true
-			w.Header().Set("Content-Type", "application/octet-stream")
-			w.Header().Set("Cache-Control", "no-store")
+			h := w.Header()
+			h.Set("Content-Type", "text/event-stream")
+			h.Set("Cache-Control", "no-cache, no-store, no-transform")
+			h.Set("X-Accel-Buffering", "no")
 			w.WriteHeader(http.StatusOK)
+			if next != from {
+				b.WriteString("event: reset\ndata:\n\n")
+			}
 		}
 		if len(p) > 0 {
-			if _, err := w.Write(p); err != nil {
-				return err
-			}
+			fmt.Fprintf(&b, "id: %d\ndata: %s\n\n", next, base64.StdEncoding.EncodeToString(p))
+		} else if b.Len() == 0 {
+			b.WriteString(": ping\n\n")
+		}
+		if _, err := w.Write(b.Bytes()); err != nil {
+			return err
 		}
 		return rc.Flush()
 	})
 	if err != nil && !started {
 		return nil, err
+	}
+	if ended && started {
+		_, _ = io.WriteString(w, "event: end\ndata:\n\n")
+		_ = rc.Flush()
 	}
 	return streamed{}, nil
 }
@@ -784,6 +813,7 @@ func (s *Server) chatStream(w http.ResponseWriter, r *http.Request) (any, error)
 			started = true
 			w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("X-Accel-Buffering", "no")
 			w.WriteHeader(http.StatusOK)
 		}
 		data, _ := json.Marshal(v)

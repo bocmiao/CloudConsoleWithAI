@@ -2,6 +2,7 @@ package api
 
 import (
 	"bufio"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -159,28 +160,36 @@ func TestTerminalOverHTTP(t *testing.T) {
 	if term.ID == "" {
 		t.Fatalf("open: %d", resp.StatusCode)
 	}
-	req, _ := http.NewRequest("GET", srv.URL+"/api/terminals/"+term.ID+"/output", nil)
-	req.Host = "127.0.0.1:18765"
-	req.AddCookie(&http.Cookie{Name: cookieName, Value: "tok"})
-	req.Header.Set("X-Miao", "1")
-	out, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer out.Body.Close()
-	if ct := out.Header.Get("Content-Type"); ct != "application/octet-stream" {
-		t.Fatalf("content type %q", ct)
-	}
-	post(t, srv.URL, "/api/terminals/"+term.ID+"/input", `{"data":"echo via-$((6*7))\n"}`).Body.Close()
-	got := make([]byte, 0, 1024)
-	buf := make([]byte, 1024)
-	for !strings.Contains(string(got), "via-42") {
-		n, err := out.Body.Read(buf)
-		got = append(got, buf[:n]...)
+	events := func(from string) (*http.Response, *termEvents) {
+		t.Helper()
+		req, _ := http.NewRequest("GET", srv.URL+"/api/terminals/"+term.ID+"/output"+from, nil)
+		req.Host = "127.0.0.1:18765"
+		req.AddCookie(&http.Cookie{Name: cookieName, Value: "tok"})
+		req.Header.Set("X-Miao", "1")
+		out, err := http.DefaultClient.Do(req)
 		if err != nil {
-			t.Fatalf("output ended early: %q %v", got, err)
+			t.Fatal(err)
 		}
+		if ct := out.Header.Get("Content-Type"); ct != "text/event-stream" || out.Header.Get("X-Accel-Buffering") != "no" {
+			t.Fatalf("headers %v", out.Header)
+		}
+		return out, &termEvents{r: bufio.NewReader(out.Body)}
 	}
+	out, ev := events("")
+	defer out.Body.Close()
+	post(t, srv.URL, "/api/terminals/"+term.ID+"/input", `{"data":"echo via-$((6*7))\n"}`).Body.Close()
+	ev.until(t, "via-42")
+	if !ev.reset {
+		t.Fatal("a first attach did not start with reset")
+	}
+	// Picking up from the last offset: no reset, no repeat.
+	out2, ev2 := events("?from=" + ev.id)
+	post(t, srv.URL, "/api/terminals/"+term.ID+"/input", `{"data":"echo then-$((6+1))\n"}`).Body.Close()
+	ev2.until(t, "then-7")
+	if ev2.reset || strings.Contains(ev2.text, "via-42") {
+		t.Fatalf("resumed stream: reset %v, %q", ev2.reset, ev2.text)
+	}
+	out2.Body.Close()
 	if w := do(s, "POST", "/api/terminals/"+term.ID+"/resize", "127.0.0.1:18765", `{"cols":120,"rows":40}`, true); w.Code != 200 {
 		t.Fatalf("resize: %d %s", w.Code, w.Body.String())
 	}
@@ -189,5 +198,49 @@ func TestTerminalOverHTTP(t *testing.T) {
 	}
 	if w := do(s, "POST", "/api/terminals/"+term.ID+"/input", "127.0.0.1:18765", `{"data":"ls\n"}`, true); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "关闭") {
 		t.Fatalf("input after close: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// termEvents reads a terminal's event stream.
+type termEvents struct {
+	r     *bufio.Reader
+	text  string // decoded output so far
+	id    string // last offset
+	reset bool
+	end   bool
+}
+
+func (e *termEvents) until(t *testing.T, want string) {
+	t.Helper()
+	event, data := "", ""
+	for !strings.Contains(e.text, want) {
+		line, err := e.r.ReadString('\n')
+		if err != nil {
+			t.Fatalf("stream ended before %q: %q %v", want, e.text, err)
+		}
+		line = strings.TrimSuffix(line, "\n")
+		switch {
+		case line == "":
+			switch event {
+			case "reset":
+				e.reset = true
+			case "end":
+				e.end = true
+			default:
+				b, err := base64.StdEncoding.DecodeString(data)
+				if err != nil {
+					t.Fatalf("data %q: %v", data, err)
+				}
+				e.text += string(b)
+			}
+			event, data = "", ""
+		case strings.HasPrefix(line, ":"):
+		case strings.HasPrefix(line, "event: "):
+			event = line[len("event: "):]
+		case strings.HasPrefix(line, "id: "):
+			e.id = line[len("id: "):]
+		case strings.HasPrefix(line, "data:"):
+			data = strings.TrimPrefix(line[len("data:"):], " ")
+		}
 	}
 }

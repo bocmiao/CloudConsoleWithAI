@@ -1302,14 +1302,15 @@ const TerminalPage = {
     }
     function send(key, data) {
       const l = live.get(key), t = tabOf(key);
-      if (!l || !t || t.state !== 'open') return;
+      // Typing still reaches the shell while the output reconnects.
+      if (!l || !t || !(t.state === 'open' || t.state === 'reconnecting')) return;
       l.queue += data;
       if (!l.sending) flush(key);
     }
     async function flush(key) {
       const l = live.get(key), t = tabOf(key);
       l.sending = true;
-      while (l.queue && t && t.state === 'open') {
+      while (l.queue && t && (t.state === 'open' || t.state === 'reconnecting')) {
         const data = l.queue;
         l.queue = '';
         try { await api('POST', `/api/terminals/${t.id}/input`, { data }); }
@@ -1317,26 +1318,82 @@ const TerminalPage = {
       }
       l.sending = false;
     }
-    // attach streams the terminal's output into the tab until it ends.
+    // attach streams the terminal's output into the tab. The stream is
+    // server-sent events: output in base64 with its offset as the id,
+    // "reset" when the replay does not start where we asked, a ping every
+    // 15 seconds, "end" when the shell has ended. When the stream drops
+    // while the shell is still running (a proxy timing out, the network
+    // changing, a laptop waking up) it picks up again from the last
+    // offset, so nothing is lost or printed twice.
     async function attach(key) {
       const t = tabOf(key), l = live.get(key);
-      l.ctl = new AbortController();
-      t.state = 'open';
+      if (!t || !l || !t.id) return;
+      if (l.ctl) l.ctl.abort();
+      clearTimeout(l.retry);
+      const ctl = new AbortController();
+      l.ctl = ctl;
+      let heard = Date.now(), ended = false, gone = '';
+      // A connection that went quiet without closing (pings stopped).
+      const watch = setInterval(() => { if (Date.now() - heard > 40000) ctl.abort(); }, 5000);
       try {
-        const res = await fetch(`/api/terminals/${t.id}/output`, { headers: { 'X-Miao': '1' }, credentials: 'same-origin', signal: l.ctl.signal });
-        if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `连接失败（${res.status}）`); }
-        const reader = res.body.getReader();
+        const from = l.offset == null ? -1 : l.offset;
+        const res = await fetch(`/api/terminals/${t.id}/output?from=${from}`, { headers: { 'X-Miao': '1' }, credentials: 'same-origin', signal: ctl.signal });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          // 400: the terminal is gone on the server; anything else may pass.
+          if (res.status === 400) gone = d.error || '会话已结束';
+          else if (res.status === 401 && window.MIAO_MODE === 'server') { location.reload(); return; }
+          throw new Error(d.error || `连接失败（${res.status}）`);
+        }
+        t.state = 'open'; t.error = ''; l.tries = 0;
+        const reader = res.body.getReader(), dec = new TextDecoder();
+        let text = '', ev = {};
         for (;;) {
           const { value, done } = await reader.read();
           if (done) break;
-          l.term.write(value);
+          heard = Date.now();
+          text += dec.decode(value, { stream: true });
+          let i;
+          while ((i = text.indexOf('\n')) >= 0) {
+            const line = text.slice(0, i);
+            text = text.slice(i + 1);
+            if (line === '') {
+              if (ev.event === 'reset') l.term.reset();
+              else if (ev.event === 'end') ended = true;
+              else if (ev.data) {
+                const bin = atob(ev.data), bytes = new Uint8Array(bin.length);
+                for (let j = 0; j < bin.length; j++) bytes[j] = bin.charCodeAt(j);
+                l.term.write(bytes);
+                if (ev.id) l.offset = Number(ev.id);
+              }
+              ev = {};
+            } else if (line[0] !== ':') {
+              const c = line.indexOf(':');
+              ev[c < 0 ? line : line.slice(0, c)] = c < 0 ? '' : line.slice(c + 1).replace(/^ /, '');
+            }
+          }
         }
-        t.state = 'ended';
       } catch (e) {
-        if (e.name === 'AbortError') return;
-        t.state = 'error'; t.error = e.message;
+        if (e.name === 'AbortError' && l.ctl !== ctl) return; // replaced or closed
+        if (!gone) t.error = e.name === 'AbortError' ? '连接没有响应' : e.message;
+      } finally {
+        clearInterval(watch);
       }
+      if (l.ctl !== ctl || !tabOf(key)) return;
+      if (ended || gone) { t.state = 'ended'; t.error = gone && !ended ? gone : ''; return; }
+      // Dropped: try again, soon at first, then less often.
+      t.state = 'reconnecting';
+      const wait = Math.min(1000 * 2 ** (l.tries || 0), 15000);
+      l.tries = (l.tries || 0) + 1;
+      l.retry = setTimeout(() => { if (tabOf(key) && t.state === 'reconnecting') attach(key); }, wait);
     }
+    // Back online or back to the page: reconnect now rather than after the wait.
+    function retryNow() {
+      for (const t of tabs.value) if (t.state === 'reconnecting') { const l = live.get(t.key); if (l) l.tries = 0; attach(t.key); }
+    }
+    const onVisible = () => { if (document.visibilityState === 'visible') retryNow(); };
+    window.addEventListener('online', retryNow);
+    document.addEventListener('visibilitychange', onVisible);
     async function open(serverId) {
       const sv = props.servers.find(s => s.id === serverId);
       if (!sv) return;
@@ -1354,26 +1411,22 @@ const TerminalPage = {
         // Closed while it was connecting: end the new one on the server too.
         if (!tabOf(key)) { api('DELETE', `/api/terminals/${v.id}`).catch(() => {}); return; }
         t.id = v.id;
+        l.offset = 0; // a new shell: keep what the tab already shows
+        l.tries = 0;
         attach(key);
         l.term.focus();
       } catch (e) { if (tabOf(key)) { t.state = 'error'; t.error = e.message; } }
     }
-    // After a network hiccup the shell is usually still running on the
-    // server (with whatever command was in it): pick it up again rather
-    // than starting a new one.
+    // The button on a tab that ended or failed: pick up the same shell if
+    // it is still running on the server, otherwise start a new one.
     async function reconnect(key) {
       const t = tabOf(key), l = live.get(key);
-      if (t && t.id && l && l.term) {
-        try {
-          const alive = (await api('GET', '/api/terminals')).some(v => v.id === t.id && !v.ended);
-          if (alive) {
-            l.term.reset(); // the server sends the recent output again
-            t.error = '';
-            attach(key);
-            l.term.focus();
-            return;
-          }
-        } catch { /* start a new one below */ }
+      if (!t) return;
+      if (t.id && l && l.term && t.state !== 'ended') {
+        l.tries = 0;
+        t.state = 'reconnecting';
+        attach(key);
+        return;
       }
       if (l && l.term) l.term.write('\r\n\x1b[90m[重新连接……]\x1b[0m\r\n');
       connect(key);
@@ -1381,10 +1434,13 @@ const TerminalPage = {
     async function close(key) {
       const t = tabOf(key);
       if (!t) return;
-      if (t.state === 'open' && !confirm(`关闭「${t.name}」的终端？正在运行的命令会被结束。`)) return;
+      if ((t.state === 'open' || t.state === 'reconnecting') && !confirm(`关闭「${t.name}」的终端？正在运行的命令会被结束。`)) return;
       const l = live.get(key);
       if (l) {
-        if (l.ctl) l.ctl.abort();
+        clearTimeout(l.retry);
+        const ctl = l.ctl;
+        l.ctl = null;
+        if (ctl) ctl.abort();
         if (l.ro) l.ro.disconnect();
         if (l.term) l.term.dispose();
         live.delete(key);
@@ -1414,13 +1470,17 @@ const TerminalPage = {
     });
     function onRequest(r) {
       if (!r) return;
-      const existing = tabs.value.find(t => t.serverId === r.serverId && t.state === 'open');
+      const existing = tabs.value.find(t => t.serverId === r.serverId && (t.state === 'open' || t.state === 'reconnecting'));
       if (existing) show(existing.key); else open(r.serverId);
     }
     watch(() => props.request, onRequest);
     watch(() => props.active, on => { if (on && current.value) show(current.value); });
-    onUnmounted(() => { for (const [, l] of live) { if (l.ctl) l.ctl.abort(); if (l.ro) l.ro.disconnect(); if (l.term) l.term.dispose(); } });
-    const stateText = t => ({ connecting: '正在连接……', ended: '已结束', error: '出错' }[t.state] || '');
+    onUnmounted(() => {
+      window.removeEventListener('online', retryNow);
+      document.removeEventListener('visibilitychange', onVisible);
+      for (const [, l] of live) { clearTimeout(l.retry); const ctl = l.ctl; l.ctl = null; if (ctl) ctl.abort(); if (l.ro) l.ro.disconnect(); if (l.term) l.term.dispose(); }
+    });
+    const stateText = t => ({ connecting: '正在连接……', reconnecting: '重新连接中……', ended: '已结束', error: '出错' }[t.state] || '');
     return { tabs, current, pick, setBox, open, close, show, reconnect, stateText };
   },
   template: `
@@ -1446,8 +1506,9 @@ const TerminalPage = {
       </div>
       <div v-for="t in tabs" :key="t.key" class="term-wrap" v-show="current === t.key">
         <div class="term-box" :ref="el => setBox(t.key, el)"></div>
+        <div class="term-note" v-if="t.state === 'reconnecting'" role="status">连接断了，正在重新连接{{ t.error ? '（' + t.error + '）' : '' }}……<button class="plain" @click="reconnect(t.key)">现在重试</button></div>
         <div class="term-over" v-if="t.state === 'error' || t.state === 'ended'">
-          <span :class="t.state === 'error' ? 'st-crit' : ''">{{ t.state === 'error' ? t.error : '会话已结束' }}</span>
+          <span :class="t.state === 'error' ? 'st-crit' : ''">{{ t.state === 'error' ? t.error : (t.error || '会话已结束') }}</span>
           <button @click="reconnect(t.key)"><ui-icon name="refresh"></ui-icon>重新连接</button>
         </div>
       </div>

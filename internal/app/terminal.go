@@ -21,8 +21,18 @@ import (
 // attaches again (after a reload) can redraw it.
 const termBacklog = 256 << 10
 
-// termIdle closes a terminal no page has been attached to for this long.
-var termIdle = 2 * time.Minute
+// termIdle closes a terminal no page has been attached to for this long:
+// long enough to ride out a laptop lid or a phone locking, short enough
+// that a forgotten one does not stay logged in.
+var termIdle = 10 * time.Minute
+
+// termKeepAlive is how often an idle terminal's SSH connection is checked.
+var termKeepAlive = 30 * time.Second
+
+// termBeat is how often an output stream says it is still there while the
+// terminal prints nothing, so proxies on the way (Nginx, EdgeOne) do not
+// close it for being idle.
+var termBeat = 15 * time.Second
 
 // TerminalView describes an open terminal.
 type TerminalView struct {
@@ -72,6 +82,7 @@ func (a *App) OpenTerminal(ctx context.Context, serverID int64, cols, rows int) 
 		client.Close()
 		return TerminalView{}, userErr("打开终端失败：%v", err)
 	}
+	client.KeepAlive(termKeepAlive)
 	t := &terminal{
 		view:    TerminalView{ID: newID(), ServerID: sv.ID, ServerName: sv.Name, StartedAt: now()},
 		shell:   sh,
@@ -185,20 +196,24 @@ func (a *App) Terminals() []TerminalView {
 	return out
 }
 
-// TerminalOutput streams a terminal's output to w: the recent backlog
-// first, then everything new, until the shell ends or ctx is done. w is
-// first called with nil once the terminal is found.
-func (a *App) TerminalOutput(ctx context.Context, id string, w func([]byte) error) error {
+// TerminalOutput streams a terminal's output to out, from byte offset
+// from (a negative one, or one whose output is no longer kept, starts at
+// the oldest output still kept), then everything new, until the shell ends
+// or ctx is done. out gets each piece with the offset just after it. It
+// is first called with no bytes and the offset the stream starts at, once
+// the terminal is found, and again with no bytes every termBeat, so the
+// connection never sits idle. It reports whether the shell has ended.
+func (a *App) TerminalOutput(ctx context.Context, id string, from int64, out func(p []byte, next int64) error) (bool, error) {
 	t, err := a.terminal(id)
 	if err != nil {
-		return err
-	}
-	if err := w(nil); err != nil {
-		return err
+		return false, err
 	}
 	t.mu.Lock()
+	pos := from
+	if start := t.total - int64(len(t.buf)); pos < start || pos > t.total {
+		pos = start
+	}
 	t.attached++
-	pos := t.total - int64(len(t.buf))
 	t.mu.Unlock()
 	defer func() {
 		t.mu.Lock()
@@ -206,6 +221,11 @@ func (a *App) TerminalOutput(ctx context.Context, id string, w func([]byte) erro
 		t.detached = time.Now()
 		t.mu.Unlock()
 	}()
+	if err := out(nil, pos); err != nil {
+		return false, err
+	}
+	beat := time.NewTicker(termBeat)
+	defer beat.Stop()
 	for {
 		t.mu.Lock()
 		start := t.total - int64(len(t.buf))
@@ -217,17 +237,29 @@ func (a *App) TerminalOutput(ctx context.Context, id string, w func([]byte) erro
 		ended, changed := t.ended, t.changed
 		t.mu.Unlock()
 		if len(data) > 0 {
-			if err := w(data); err != nil {
-				return err
+			if err := out(data, pos); err != nil {
+				return false, err
 			}
 		}
 		if ended {
-			return nil
+			return true, nil
 		}
 		select {
 		case <-changed:
+			// Output tends to come in a burst of small pieces (a paste
+			// echoed back, a screen redrawn): let the rest of the burst
+			// arrive and send it as one.
+			select {
+			case <-time.After(4 * time.Millisecond):
+			case <-ctx.Done():
+				return false, nil
+			}
+		case <-beat.C:
+			if err := out(nil, pos); err != nil {
+				return false, err
+			}
 		case <-ctx.Done():
-			return nil
+			return false, nil
 		}
 	}
 }

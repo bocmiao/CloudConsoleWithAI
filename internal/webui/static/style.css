@@ -524,6 +524,9 @@ button.th-sort:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .term-box { width: 100%; height: 100%; }
 .term-over { position: absolute; left: 50%; bottom: 24px; transform: translateX(-50%); display: flex; align-items: center; gap: 12px;
   padding: 8px 10px 8px 16px; border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-lg); font-size: 13px; }
+.term-note { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; max-width: calc(100% - 32px);
+  padding: 6px 8px 6px 14px; border-radius: 10px; background: rgba(255, 159, 10, 0.16); color: #ffd28a; font-size: 12.5px; backdrop-filter: blur(8px); }
+.term-note button { height: 26px; padding: 0 10px; color: #ffd28a; }
 .term-empty { max-width: 520px; margin: 12vh auto 0; text-align: center; color: var(--text-2); padding: 0 16px; }
 .term-empty > .icon { color: var(--accent); width: 32px; height: 32px; }
 .term-empty p { margin: 10px 0; }

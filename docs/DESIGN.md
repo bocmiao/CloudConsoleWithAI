@@ -1317,13 +1317,14 @@ EdgeOne 的统计接口只有请求数、流量、带宽这类总量和排行，
 
 侧边栏「终端」页，或者服务器页的「终端」按钮，打开服务器的交互式命令行。
 
-- 后端：`sshx.Client.Shell` 在 SSH 连接上申请伪终端（`xterm-256color`）并启动登录 shell；`app` 为每个终端保存最近 256KB 输出，页面断开再连上（刷新页面、切换页面）时先重放这部分，再继续实时输出；2 分钟没有页面连着就自动关闭；
-- 接口：`POST /api/servers/{id}/terminal` 打开，`GET /api/terminals/{id}/output` 以原始字节流的形式持续输出，`POST …/input` 输入，`POST …/resize` 调整大小，`DELETE` 关闭，`GET /api/terminals` 列出（页面刷新后重新接上）。和其他接口一样要求登录 Cookie 和 `X-Miao` 请求头，所以用 fetch 读流、用 POST 发送输入，而不用 WebSocket（浏览器的 WebSocket 不能带自定义请求头）；
-- 页面：xterm.js（MIT，放在 `internal/webui/static/xterm/`，打开终端时才加载），多个标签页；Ctrl+C 在有选中文字时复制，Ctrl+V 粘贴；会话结束后可以一键重新连接；
+- 后端：`sshx.Client.Shell` 在 SSH 连接上申请伪终端（`xterm-256color`）并启动登录 shell；`app` 为每个终端保存最近 256KB 输出，页面断开再连上（刷新页面、切换页面）时先重放这部分，再继续实时输出；10 分钟没有页面连着就自动关闭（合上笔记本、手机锁屏一会儿再回来还在）；
+- 保活：终端的 SSH 连接每 30 秒问一次服务器还在不在（`keepalive@openssh.com`），免得路上的防火墙、NAT 把空闲连接悄悄断掉；连续 3 次没有回答就关闭连接，页面上显示「连接已断开」，而不是一直卡着；
+- 接口：`POST /api/servers/{id}/terminal` 打开，`GET /api/terminals/{id}/output?from=位置` 以 server-sent events 持续输出（每段输出 base64 编码，事件 id 是这段之后的字节位置；从页面要求的位置开始，做不到时先发 `reset` 让页面清屏再重放；没有输出时每 15 秒发一行注释当心跳，免得 Nginx、EdgeOne 把空闲的连接断掉；shell 结束时发 `end`；响应头 `X-Accel-Buffering: no` 让 Nginx 不缓冲，输出立刻到浏览器），`POST …/input` 输入，`POST …/resize` 调整大小，`DELETE` 关闭，`GET /api/terminals` 列出（页面刷新后重新接上）。和其他接口一样要求登录 Cookie 和 `X-Miao` 请求头，所以用 fetch 读流、用 POST 发送输入，而不用 WebSocket（浏览器的 WebSocket 不能带自定义请求头）；
+- 页面：xterm.js（MIT，放在 `internal/webui/static/xterm/`，打开终端时才加载），多个标签页；Ctrl+C 在有选中文字时复制，Ctrl+V 粘贴；输出流断了（代理超时、网络切换、电脑休眠醒来）会自动从断开的位置接着连，不清屏、不重复，重连期间敲的字照样发到服务器，40 秒收不到心跳也当作断了；会话真正结束后可以一键重新连接；
 - **安全边界**：终端是用户自己在操作服务器，AI 不能使用；命令直接执行，不经过清单、备份和检查，页面上有提示；审计日志只记录打开和关闭（不记录输入内容，里面可能有密码）；
 - 用腾讯云自动化助手连接的服务器没有 SSH，不能打开终端，会提示改用 SSH 或腾讯云控制台的 OrcaTerm。
 
-测试：测试用的 SSH 服务器支持 pty-req、window-change 和 shell 请求；测试覆盖输入输出、调整大小、第二个页面接上时拿到之前的输出、shell 退出后结束、没有页面连着时自动关闭、手动关闭和审计记录，以及通过 HTTP 接口的完整流程。浏览器里检查了输入中文和彩色输出、多个标签页、切换页面和刷新页面后重新接上。
+测试：测试用的 SSH 服务器支持 pty-req、window-change 和 shell 请求；测试覆盖输入输出、调整大小、第二个页面接上时拿到之前的输出、从某个位置接着输出（不重复）、心跳、SSH 保活发现死连接（一个会突然不再转发的 TCP 代理）、shell 退出后结束、没有页面连着时自动关闭、手动关闭和审计记录，以及通过 HTTP 接口的完整流程。浏览器里检查了输入中文和彩色输出、多个标签页、切换页面和刷新页面后重新接上；通过一个会掐断输出流的代理检查了自动重连（原来的 shell、输出不重复、重连时输入不丢）和 28KB 的粘贴。
 
 ### 文件管理（已完成）
 
