@@ -93,6 +93,7 @@ func Apply(ctx context.Context, env *Env, r Resolved, progress Progress) Outcome
 func confirmGuard(ctx context.Context, env *Env, out *Outcome) {
 	guard, restore := out.Undo["guard"], out.Undo["restore"]
 	if !strings.HasSuffix(restore, "/restore.sh") {
+		out.Status = StatusFailed
 		out.logf("没有找到 5 分钟保险的记录，无法确认")
 		return
 	}
@@ -315,8 +316,13 @@ func runScript(ctx context.Context, env *Env, r Resolved, mode string, undo map[
 			continue
 		}
 		_, _ = env.SSH.Run(ctx, cleanup, "", 1024)
-		code, _ := strconv.Atoi(rc)
-		parsed.Status = statusForExit(code)
+		status, parseErr := statusForExit(rc)
+		if parseErr != nil {
+			parsed.Status = StatusFailed
+			parsed.logf("远端脚本返回了无效退出码 %q，无法确认执行结果", rc)
+		} else {
+			parsed.Status = status
+		}
 		parsed.Commands, parsed.ScriptName, parsed.Script = out.Commands, out.ScriptName, out.Script
 		for k := range parsed.Undo {
 			if strings.HasPrefix(k, "backup:") {
@@ -374,16 +380,20 @@ func RetireRollbackFile(ctx context.Context, env *Env, path string) string {
 	return cmd
 }
 
-func statusForExit(code int) string {
+func statusForExit(raw string) (string, error) {
+	code, err := strconv.Atoi(raw)
+	if err != nil {
+		return StatusFailed, err
+	}
 	switch code {
 	case 0:
-		return StatusDone
+		return StatusDone, nil
 	case 10:
-		return StatusRefused
+		return StatusRefused, nil
 	case 20:
-		return StatusRolledBack
+		return StatusRolledBack, nil
 	}
-	return StatusFailed
+	return StatusFailed, nil
 }
 
 // parseProtocol reads the MIAO_* lines an action script prints. Other

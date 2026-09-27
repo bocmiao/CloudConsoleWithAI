@@ -12,6 +12,7 @@ import (
 
 	"github.com/bocmiao/CloudConsoleWithAI/internal/actions"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/core"
+	"github.com/bocmiao/CloudConsoleWithAI/internal/tencent"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/visits"
 )
 
@@ -379,14 +380,19 @@ func (a *App) blockPicked(ctx context.Context, s AutoBlockSettings) string {
 	if a.tencentClient() == nil {
 		return "腾讯云密钥没有填写，没法封禁"
 	}
-	blockedNow := map[string]bool{}
+	zones, err := a.tencentClient().Zones(ctx)
+	if err != nil {
+		return "读取 EdgeOne 站点失败：" + err.Error()
+	}
+	blockedNow := map[string]map[string]bool{}
 	list, err := a.Blocked(ctx)
 	if err != nil {
 		return "读取 EdgeOne 封禁列表失败：" + err.Error()
 	}
 	for _, z := range list {
+		blockedNow[z.Zone] = map[string]bool{}
 		for _, ip := range z.IPs {
-			blockedNow[ip] = true
+			blockedNow[z.Zone][ip] = true
 		}
 	}
 	sources, err := a.VisitSources()
@@ -413,9 +419,10 @@ func (a *App) blockPicked(ctx context.Context, s AutoBlockSettings) string {
 			continue
 		}
 		var picked []visits.IPProfile
+		defaultSites := v.SiteNames()
 		for _, p := range v.Range(1).IPs {
 			switch {
-			case blockedNow[p.IP], p.EdgeOne, p.Crawler != "", visits.Private(p.IP), allowed(s.Allow, p.IP):
+			case blockedOnSites(blockedNow, zones, p, defaultSites), p.EdgeOne, p.Crawler != "", visits.Private(p.IP), allowed(s.Allow, p.IP):
 				continue
 			case lifted[p.IP] != "" && p.Last <= stampIn(lifted[p.IP], v.Zone): // not back since its block ran out
 				continue
@@ -464,8 +471,17 @@ func (a *App) blockPicked(ctx context.Context, s AutoBlockSettings) string {
 		if err != nil {
 			did = append(did, src.Title+"：封禁没有全部完成："+err.Error())
 		}
-		for _, ip := range ips {
-			blockedNow[ip] = true
+		for _, step := range plan.StepList {
+			if step.Capability != "eo.ip.block" {
+				continue
+			}
+			zone := fmt.Sprint(step.Params["domain"])
+			if blockedNow[zone] == nil {
+				blockedNow[zone] = map[string]bool{}
+			}
+			for _, ip := range strings.Split(fmt.Sprint(step.Params["ips"]), ",") {
+				blockedNow[zone][ip] = true
+			}
 		}
 		total += n
 		if n > 0 {
@@ -476,6 +492,26 @@ func (a *App) blockPicked(ctx context.Context, s AutoBlockSettings) string {
 		return "没有需要封禁的 IP"
 	}
 	return strings.Join(did, "；")
+}
+
+func blockedOnSites(blocked map[string]map[string]bool, zones []tencent.Zone, p visits.IPProfile, defaultSites []string) bool {
+	sites := defaultSites
+	if len(p.Sites) > 0 {
+		sites = nil
+		for _, site := range p.Sites {
+			sites = append(sites, site.Value)
+		}
+	}
+	found := false
+	for _, site := range sites {
+		if zone, ok := tencent.ZoneFor(zones, site); ok {
+			found = true
+			if !blocked[zone.ZoneName][p.IP] {
+				return false
+			}
+		}
+	}
+	return found
 }
 
 // stampIn turns a local time stamp into the time zone a log is written
@@ -621,7 +657,7 @@ func (a *App) recordAutoBlocked(plan PlanView, s AutoBlockSettings, why map[stri
 			continue
 		}
 		zone := fmt.Sprint(step.Params["domain"])
-		for _, ip := range strings.Split(fmt.Sprint(step.Params["ips"]), ",") {
+		for _, ip := range strings.Split(step.Undo["changed"], ",") {
 			if ip = strings.TrimSpace(ip); ip == "" {
 				continue
 			}
