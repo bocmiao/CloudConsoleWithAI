@@ -223,6 +223,17 @@ func TestSMSLogin(t *testing.T) {
 	if w := post("PUT", "/api/account/bind", `{"channel":"sms","code":"`+f.SMS[0].Params[0]+`"}`, me); w.Code != 200 || !strings.Contains(w.Body.String(), "+8613800138000") {
 		t.Fatalf("confirm bind: %d %s", w.Code, w.Body)
 	}
+	// Only the administrator's phone gets messages now, test ones too.
+	if w := post("POST", "/api/account/sms/test", smsForm+`,"phone":"13900000000"}`, me); w.Code != 400 || !strings.Contains(w.Body.String(), "只给管理员") {
+		t.Fatalf("test to another phone: %d %s", w.Code, w.Body)
+	}
+	if w := post("POST", "/api/account/sms/test", smsForm+`,"phone":"13800138000"}`, me); w.Code != 200 {
+		t.Fatalf("test to the admin phone: %d %s", w.Code, w.Body)
+	}
+	f.SMS = f.SMS[:1]
+	if w := post("GET", "/api/account", "", me); !strings.Contains(w.Body.String(), `"adminOnly":true`) {
+		t.Fatalf("account: %s", w.Body)
+	}
 	if w := post("PUT", "/api/account/methods", `{"password":true,"sms":true}`, me); w.Code != 200 {
 		t.Fatalf("methods: %d %s", w.Code, w.Body)
 	}

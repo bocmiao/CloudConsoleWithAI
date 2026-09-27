@@ -289,3 +289,63 @@ func TestSendLimits(t *testing.T) {
 		t.Fatalf("next day: %v", err)
 	}
 }
+
+// With the restriction on (the default), codes go only to the
+// administrator's email and phone.
+func TestAdminOnly(t *testing.T) {
+	s, c, o, _, u := withAccount(t)
+	ctx := context.Background()
+	if !s.AdminOnly() {
+		t.Fatal("the restriction is off by default")
+	}
+	// Before anything is bound: test messages anywhere, and the first
+	// binding works (it makes the address the administrator's).
+	if err := s.CheckTestTarget(u.ID, "email", "any@example.com"); err != nil {
+		t.Fatalf("test before binding: %v", err)
+	}
+	if err := s.BeginBind(ctx, u.ID, "1.1.1.1", "email", "owner@example.com", "correct horse"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ConfirmBind(u.ID, "1.1.1.1", "email", o.last(t).code); err != nil {
+		t.Fatal(err)
+	}
+	// Now only there.
+	if err := s.CheckTestTarget(u.ID, "email", "other@example.com"); code(t, err) != "restricted" {
+		t.Fatalf("test elsewhere: %v", err)
+	}
+	if err := s.CheckTestTarget(u.ID, "email", "owner@example.com"); err != nil {
+		t.Fatalf("test to the admin: %v", err)
+	}
+	n := len(o.sent)
+	if err := s.BeginBind(ctx, u.ID, "1.1.1.1", "email", "new@example.com", "correct horse"); code(t, err) != "restricted" || len(o.sent) != n {
+		t.Fatalf("change while restricted: %v", err)
+	}
+	// Login codes for other addresses are not sent (and the page answers
+	// the same, so nobody learns which address is the admin's).
+	_ = s.SetMethods(u.ID, Methods{Password: true, Email: true})
+	if err := s.SendLoginCode(ctx, "2.2.2.2", "email", "other@example.com"); err != nil || len(o.sent) != n {
+		t.Fatalf("login code elsewhere: %v, sent %d", err, len(o.sent)-n)
+	}
+	logs, _ := s.Store.ListAudit(5)
+	if !strings.Contains(logs[0].Detail, "拒发") {
+		t.Fatalf("refusal not logged: %+v", logs[0])
+	}
+	// Turning it off needs the password; then the email can be changed.
+	if err := s.SetAdminOnly(u.ID, "1.1.1.1", false, "wrong"); code(t, err) != "bad_login" || !s.AdminOnly() {
+		t.Fatalf("off with a wrong password: %v", err)
+	}
+	if err := s.SetAdminOnly(u.ID, "1.1.1.1", false, "correct horse"); err != nil || s.AdminOnly() {
+		t.Fatalf("off: %v", err)
+	}
+	c.add(sendGap)
+	if err := s.BeginBind(ctx, u.ID, "1.1.1.1", "email", "new@example.com", "correct horse"); err != nil {
+		t.Fatalf("change after turning it off: %v", err)
+	}
+	if err := s.CheckTestTarget(u.ID, "email", "other@example.com"); err != nil {
+		t.Fatalf("test while off: %v", err)
+	}
+	// On again needs no password.
+	if err := s.SetAdminOnly(u.ID, "1.1.1.1", true, ""); err != nil || !s.AdminOnly() {
+		t.Fatalf("on: %v", err)
+	}
+}

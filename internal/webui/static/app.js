@@ -4310,6 +4310,21 @@ const AccountPanel = {
     };
     const canOn = k => { const a = acct.value; return k === 'email' ? a.mail.configured && !!a.email : a.sms.configured && !!a.phone; };
 
+    // Codes only to the administrator's email and phone: on at once, off
+    // with the password.
+    const scope = reactive({ asking: false, password: '', busy: false, error: '' });
+    function scopeOff() { if (acct.value.adminOnly) Object.assign(scope, { asking: true, password: '', error: '' }); }
+    async function setScope(on) {
+      if (on && acct.value.adminOnly) return;
+      scope.busy = true; scope.error = '';
+      try {
+        const r = await api('PUT', '/api/account/send-scope', { on, password: on ? '' : scope.password });
+        acct.value.adminOnly = r.adminOnly;
+        Object.assign(scope, { asking: false, password: '' });
+        notify(on ? '已开启：验证码只发给管理员邮箱和手机号' : '已关闭发送限制');
+      } catch (e) { scope.error = e.message; if (on) notify(e.message, 'error'); } finally { scope.busy = false; }
+    }
+
     // Binding: the password, then a code sent to the new address.
     const bd = reactive({ open: false, channel: 'email', mode: 'bind', step: 1, target: '', password: '', code: '', busy: false, error: '' });
     function openBind(channel, mode) { Object.assign(bd, { open: true, channel, mode, step: 1, target: '', password: '', code: '', busy: false, error: '' }); }
@@ -4422,7 +4437,7 @@ const AccountPanel = {
     const SMS_REGIONS = [['ap-guangzhou', '广州'], ['ap-beijing', '北京'], ['ap-nanjing', '南京']];
 
     return { acct, pw, tf, savePassword, beginTOTP, enableTOTP, disableTOTP, endSession, logout, when, uaText,
-      methodBusy, setMethod, methodNote, canOn, bd, openBind, bindSend, bindConfirm, unbind,
+      methodBusy, setMethod, methodNote, canOn, bd, openBind, bindSend, bindConfirm, unbind, scope, scopeOff, setScope,
       ml, openMail, mailPreset, mailRun, sm, openSMS, smsRun, smsFilled, mailText, smsText, SMS_REGIONS };
   },
   template: `
@@ -4470,13 +4485,24 @@ const AccountPanel = {
         <button role="radio" :aria-checked="acct.methods[k]" :class="{ on: acct.methods[k] }" @click="setMethod(k, true)" :disabled="methodBusy || (!acct.methods[k] && !canOn(k))">开启</button></span></div>
     <div class="row small tertiary">验证码 10 分钟内有效、只能用一次；开了两步验证的账号，用验证码登录后还要输入 App 里的验证码。</div>
   </div>
-  <div class="group-title">邮箱和手机号</div>
+  <div class="group-title">管理员邮箱和手机号</div>
   <div class="group">
+    <div class="row"><div class="grow"><div>只给管理员邮箱和手机号发送</div>
+        <div class="small tertiary">{{ acct.adminOnly ? '已开启：登录验证码和测试邮件、短信只发到下面这两个，其他的一律拒发（记在操作记录里）；要更换邮箱或手机号，先关闭它' : '已关闭：可以更换绑定，测试邮件、短信可以发到别的地址。登录验证码仍然只发给绑定的邮箱和手机号' }}</div></div>
+      <span class="segmented" role="radiogroup" aria-label="只给管理员邮箱和手机号发送"><button role="radio" :aria-checked="!acct.adminOnly" :class="{ on: !acct.adminOnly }" @click="scopeOff" :disabled="scope.busy">关闭</button>
+        <button role="radio" :aria-checked="acct.adminOnly" :class="{ on: acct.adminOnly }" @click="setScope(true)" :disabled="scope.busy">开启</button></span></div>
+    <div class="row" v-if="scope.asking"><span class="k">输入密码关闭</span>
+      <span class="v"><input type="password" v-model="scope.password" autocomplete="current-password" aria-label="关闭发送限制的账号密码" @keydown.enter="setScope(false)"></span>
+      <button class="small destructive" @click="setScope(false)" :disabled="scope.busy || !scope.password">关闭限制</button>
+      <button class="plain small" @click="scope.asking = false; scope.error = ''">取消</button></div>
+    <div class="row small st-crit" v-if="scope.asking && scope.error">{{ scope.error }}</div>
     <div class="row"><span class="k">邮箱</span><span class="grow" :class="{ tertiary: !acct.email }">{{ acct.email || '未绑定' }}</span>
-      <button class="small" @click="openBind('email', 'bind')" :disabled="!acct.mail.configured" :title="acct.mail.configured ? '' : '先设置发信邮箱'">{{ acct.email ? '更换' : '绑定' }}</button>
+      <button class="small" @click="openBind('email', 'bind')" :disabled="!acct.mail.configured || (acct.adminOnly && !!acct.email)"
+        :title="!acct.mail.configured ? '先设置发信邮箱' : acct.adminOnly && acct.email ? '先关闭「只给管理员邮箱和手机号发送」' : ''">{{ acct.email ? '更换' : '绑定' }}</button>
       <button class="small plain" v-if="acct.email" @click="openBind('email', 'unbind')">解绑</button></div>
     <div class="row"><span class="k">手机号</span><span class="grow" :class="{ tertiary: !acct.phone }">{{ acct.phone || '未绑定' }}</span>
-      <button class="small" @click="openBind('sms', 'bind')" :disabled="!acct.sms.configured" :title="acct.sms.configured ? '' : '先设置短信'">{{ acct.phone ? '更换' : '绑定' }}</button>
+      <button class="small" @click="openBind('sms', 'bind')" :disabled="!acct.sms.configured || (acct.adminOnly && !!acct.phone)"
+        :title="!acct.sms.configured ? '先设置短信' : acct.adminOnly && acct.phone ? '先关闭「只给管理员邮箱和手机号发送」' : ''">{{ acct.phone ? '更换' : '绑定' }}</button>
       <button class="small plain" v-if="acct.phone" @click="openBind('sms', 'unbind')">解绑</button></div>
   </div>
   <div class="group-title">验证码从哪里发出</div>
@@ -5088,7 +5114,7 @@ const app = createApp({
       'terminal.open': '打开终端', 'terminal.close': '关闭终端', 'settings.autoblock': '修改自动封禁', 'settings.notices': '修改通知设置',
       'settings.webhook': '修改推送地址', 'visits.judge': 'AI 研判 IP',
       'auth.setup': '创建管理员账号', 'auth.login': '登录', 'auth.fail': '登录失败', 'auth.password': '修改密码', 'auth.reset': '命令行重设密码', 'auth.totp': '两步验证',
-      'auth.methods': '修改登录方式', 'auth.bind': '绑定邮箱或手机号', 'auth.code': '发送登录验证码', 'settings.mail': '修改发信邮箱', 'settings.sms': '修改短信设置',
+      'auth.methods': '修改登录方式', 'auth.scope': '修改验证码发送范围', 'auth.bind': '绑定邮箱或手机号', 'auth.code': '发送登录验证码', 'settings.mail': '修改发信邮箱', 'settings.sms': '修改短信设置',
       'cos.upload': '上传到存储桶', 'cos.mkdir': '存储桶新建文件夹', 'cos.delete': '删除存储桶文件', 'cos.rename': '存储桶文件改名', 'cos.link': '生成存储桶文件链接' }[a] || a);
     // Unread notices, for the sidebar; checked every minute.
     const unread = ref(0);

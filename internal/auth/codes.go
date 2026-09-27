@@ -28,6 +28,7 @@ import (
 // which ones are.
 
 const (
+	scopeSetting   = "auth.send_scope" // admin (the default) or any
 	methodsSetting = "auth.methods"
 	codeTTL        = 10 * time.Minute
 	codeTries      = 5
@@ -114,6 +115,64 @@ func (s *Service) SetMethods(uid int64, m Methods) error {
 	}
 	_ = s.Store.Audit(u.Name, "auth.methods", u.Name, "登录方式："+strings.Join(on, "、"))
 	return nil
+}
+
+// ---- Where codes may go ----
+
+// AdminOnly says whether codes (login, binding, test messages) go only to
+// the email and phone number bound to an account, the administrator's,
+// and are refused for anything else. It is on unless turned off.
+func (s *Service) AdminOnly() bool {
+	v, _ := s.Store.Setting(scopeSetting)
+	return v != "any"
+}
+
+// SetAdminOnly turns the restriction on or off; off needs the password,
+// since it lets codes go to new places.
+func (s *Service) SetAdminOnly(uid int64, ip string, on bool, password string) error {
+	u, err := s.Store.GetUser(uid)
+	if err != nil {
+		return err
+	}
+	if !on {
+		if err := s.checkOwn(ip, u, password, "密码不对"); err != nil {
+			return err
+		}
+	}
+	v, text := "admin", "只给管理员邮箱和手机号发送验证码"
+	if !on {
+		v, text = "any", "允许给新的邮箱和手机号发送验证码（更换绑定、测试）"
+	}
+	if err := s.Store.SetSetting(scopeSetting, v); err != nil {
+		return err
+	}
+	_ = s.Store.Audit(u.Name, "auth.scope", u.Name, text)
+	return nil
+}
+
+// adminTarget says whether an email or phone is bound to an account.
+func (s *Service) adminTarget(channel, target string) bool {
+	_, err := s.userByTarget(channel, target)
+	return err == nil
+}
+
+// CheckTestTarget says whether a test message may go to target: with the
+// restriction on, only to the administrator's email or phone, or to any
+// while the account has none bound yet (setting up the first time).
+func (s *Service) CheckTestTarget(uid int64, channel, target string) error {
+	if !s.AdminOnly() {
+		return nil
+	}
+	u, err := s.Store.GetUser(uid)
+	if err != nil {
+		return err
+	}
+	bound := map[string]string{"email": u.Email, "sms": u.Phone}[channel]
+	if bound == "" || s.adminTarget(channel, target) {
+		return nil
+	}
+	_ = s.Store.Audit(u.Name, "auth.code", Mask(target), "拒发：不是管理员的"+channelName[channel]+"（测试）")
+	return refuse("restricted", "开启了「只给管理员邮箱和手机号发送」，测试%s只能发到 %s", map[string]string{"email": "邮件", "sms": "短信"}[channel], Mask(bound))
 }
 
 // ---- Emails and phone numbers ----
@@ -320,7 +379,7 @@ func (s *Service) SendLoginCode(ctx context.Context, ip, channel, raw string) er
 	}
 	u, err := s.userByTarget(channel, target)
 	if err != nil {
-		_ = s.Store.Audit("-", "auth.code", Mask(target), ip+"（没有绑定这个"+channelName[channel]+"，没有发送）")
+		_ = s.Store.Audit("-", "auth.code", Mask(target), ip+"（拒发：不是管理员的"+channelName[channel]+"）")
 		return nil
 	}
 	code := newCode()
@@ -415,6 +474,12 @@ func (s *Service) BeginBind(ctx context.Context, uid int64, ip, channel, raw, pa
 			return refuse("same", "已经绑定了这个%s", channelName[channel])
 		}
 		return refuse("taken", "这个%s已经绑定了别的账号", channelName[channel])
+	}
+	// With the restriction on, a first email or phone may be bound (that
+	// makes it the administrator's), but not a new one in its place.
+	if u, _ := s.Store.GetUser(uid); s.AdminOnly() && map[string]string{"email": u.Email, "sms": u.Phone}[channel] != "" {
+		_ = s.Store.Audit(u.Name, "auth.code", Mask(target), ip+"（拒发：不是管理员的"+channelName[channel]+"，更换绑定）")
+		return refuse("restricted", "开启了「只给管理员邮箱和手机号发送」，不会往新的%s发验证码。要更换，先在「登录方式」里关闭它", channelName[channel])
 	}
 	if err := s.allowSend(ip, "bind", target); err != nil {
 		return err

@@ -49,6 +49,7 @@ func (s *Server) authRoutes() {
 	api("POST /api/account/totp/off", s.disableTOTP)
 	api("DELETE /api/account/sessions/{key}", s.endSession)
 	api("PUT /api/account/methods", s.setMethods)
+	api("PUT /api/account/send-scope", s.setSendScope)
 	api("POST /api/account/bind", s.beginBind)
 	api("PUT /api/account/bind", s.confirmBind)
 	api("POST /api/account/unbind", s.unbind)
@@ -224,7 +225,7 @@ func (s *Server) account(_ http.ResponseWriter, r *http.Request) (any, error) {
 	}
 	return map[string]any{"name": u.Name, "totp": u.TOTP, "changedAt": u.ChangedAt, "sessions": sessions,
 		"email": u.Email, "phone": u.Phone, "methods": s.auth.SavedMethods(), "active": s.auth.ActiveMethods(),
-		"mail": s.app.GetMailSettings(), "sms": s.app.GetSMSSettings(), "presets": app.MailPresets()}, nil
+		"mail": s.app.GetMailSettings(), "sms": s.app.GetSMSSettings(), "presets": app.MailPresets(), "adminOnly": s.auth.AdminOnly()}, nil
 }
 
 func (s *Server) changePassword(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -326,6 +327,24 @@ func (s *Server) setMethods(_ http.ResponseWriter, r *http.Request) (any, error)
 	return map[string]any{"methods": s.auth.SavedMethods(), "active": s.auth.ActiveMethods()}, nil
 }
 
+func (s *Server) setSendScope(_ http.ResponseWriter, r *http.Request) (any, error) {
+	u, _, err := s.me(r)
+	if err != nil {
+		return nil, err
+	}
+	var req struct {
+		On       bool
+		Password string
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	if err := s.auth.SetAdminOnly(u.ID, s.clientIP(r), req.On, req.Password); err != nil {
+		return nil, err
+	}
+	return map[string]bool{"adminOnly": s.auth.AdminOnly()}, nil
+}
+
 func (s *Server) beginBind(_ http.ResponseWriter, r *http.Request) (any, error) {
 	u, _, err := s.me(r)
 	if err != nil {
@@ -405,13 +424,22 @@ func (s *Server) clearMail(_ http.ResponseWriter, r *http.Request) (any, error) 
 }
 
 func (s *Server) testMail(_ http.ResponseWriter, r *http.Request) (any, error) {
-	if _, _, err := s.me(r); err != nil {
+	u, _, err := s.me(r)
+	if err != nil {
 		return nil, err
 	}
 	var req mailRequest
 	if err := decode(r, &req); err != nil {
 		return nil, err
 	}
+	to, err := auth.NormEmail(req.To)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.auth.CheckTestTarget(u.ID, "email", to); err != nil {
+		return nil, err
+	}
+	req.To = to
 	req.SMTP.Password = req.SMTPPassword
 	return map[string]bool{"ok": true}, s.app.TestMail(r.Context(), req.SMTP, req.To)
 }
@@ -453,7 +481,8 @@ func (s *Server) clearSMS(_ http.ResponseWriter, r *http.Request) (any, error) {
 }
 
 func (s *Server) testSMS(_ http.ResponseWriter, r *http.Request) (any, error) {
-	if _, _, err := s.me(r); err != nil {
+	u, _, err := s.me(r)
+	if err != nil {
 		return nil, err
 	}
 	var req smsRequest
@@ -462,6 +491,9 @@ func (s *Server) testSMS(_ http.ResponseWriter, r *http.Request) (any, error) {
 	}
 	phone, err := auth.NormPhone(req.Phone)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.auth.CheckTestTarget(u.ID, "sms", phone); err != nil {
 		return nil, err
 	}
 	return map[string]bool{"ok": true}, s.app.TestSMS(r.Context(), req.SMSSettings, phone)
