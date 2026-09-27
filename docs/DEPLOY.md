@@ -99,7 +99,7 @@ client_max_body_size 0;
 这几行的作用：`X-Real-IP` 让登录失败按访客 IP 限制；`X-Forwarded-Proto` 让 Miao Panel 知道是 HTTPS；
 关闭缓冲让 AI 的回答和终端输出实时显示；超时时间让终端能长时间开着；`client_max_body_size 0` 让「文件」和「存储」页能上传大文件。
 
-默认只信任来自本机回环地址的反向代理。如果反向代理从另一台机器或 Docker 私有网络连接 Miao Panel，设置 `MIAO_TRUSTED_PROXIES` 为该代理的 IP（或尽量小的 CIDR），多个地址用逗号分隔；例如 `MIAO_TRUSTED_PROXIES=172.20.0.5`。不要把整个局域网填进去，也不要让代理原样转发客户端提供的 `X-Real-IP` 和 `X-Forwarded-Proto`。
+直接运行程序时，默认只信任来自本机回环地址的反向代理。Docker Compose 的端口只绑定主机回环地址，但容器里看到的主机代理连接来自 Docker 网桥，因此 `docker-compose.yml` 已信任常见的 Docker 网桥网段。如果你的网桥不在该网段，或反向代理从另一台机器连接，设置 `MIAO_TRUSTED_PROXIES` 为代理的 IP（或尽量小的 CIDR），多个地址用逗号分隔；例如 `MIAO_TRUSTED_PROXIES=172.20.0.5`。如果把 Docker 端口改成对公网开放，必须移除 Compose 里的网桥信任配置，并用程序自带的 HTTPS。不要让代理原样转发客户端提供的 `X-Real-IP` 和 `X-Forwarded-Proto`。
 
 不想用反向代理，也可以让 Miao Panel 自己提供 HTTPS：`miaopanel serve --listen 0.0.0.0:443 --tls-cert 证书.pem --tls-key 私钥.pem`。
 

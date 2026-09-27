@@ -90,10 +90,13 @@ jobs:
         run: docker build --build-arg VERSION="${RELEASE:-dev-${GITHUB_SHA::7}}" -t miaopanel:ci .
       - name: Start it and check the login page answers
         run: |
-          docker run -d --name miaopanel -p 127.0.0.1:18765:18765 -v miaopanel-ci-data:/data miaopanel:ci
+          docker run -d --name miaopanel -p 127.0.0.1:18765:18765 -v miaopanel-ci-data:/data \
+            -e MIAO_TRUSTED_PROXIES=172.16.0.0/12 miaopanel:ci
           for i in $(seq 1 20); do curl -fsS -H 'X-Miao: 1' http://127.0.0.1:18765/api/auth/state && break; sleep 1; done
           docker logs miaopanel 2>&1 | grep -q '初始化码'
           curl -fsS -H 'X-Miao: 1' http://127.0.0.1:18765/api/auth/state | grep -q '"setup":true'
+          curl -fsS -H 'X-Miao: 1' -H 'X-Forwarded-Proto: https' \
+            http://127.0.0.1:18765/api/auth/state | grep -q '"https":true'
       - name: Check the browser mounts the login page
         run: |
           timeout 30s google-chrome --headless --no-sandbox --disable-dev-shm-usage \
@@ -120,7 +123,7 @@ jobs:
             --entrypoint sh miaopanel:ci -c 'tar -C /data -xzf /backup/miaopanel.tar.gz'
           docker rm miaopanel
           docker run -d --name miaopanel-restored -p 127.0.0.1:18765:18765 \
-            -v miaopanel-ci-restored:/data miaopanel:ci
+            -v miaopanel-ci-restored:/data -e MIAO_TRUSTED_PROXIES=172.16.0.0/12 miaopanel:ci
           for i in $(seq 1 20); do
             if curl -fsS -H 'X-Miao: 1' http://127.0.0.1:18765/api/auth/state | grep -q '"setup":false'; then exit 0; fi
             sleep 1

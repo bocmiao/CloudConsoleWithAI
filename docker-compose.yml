@@ -14,6 +14,9 @@ services:
       - miaopanel-data:/data   # 数据库和密钥都在这里，请定期备份
     environment:
       TZ: Asia/Shanghai        # 日报按这个时区生成
+      # 端口仅绑定主机回环地址；容器里看到的主机代理连接来自 Docker 网桥。
+      # 如改成向公网发布端口，须去掉此项，并用 --tls-cert/--tls-key 提供 HTTPS。
+      MIAO_TRUSTED_PROXIES: ${MIAO_TRUSTED_PROXIES:-172.16.0.0/12}
 
 volumes:
   miaopanel-data:
