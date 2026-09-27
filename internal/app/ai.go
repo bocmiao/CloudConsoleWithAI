@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -79,8 +80,21 @@ func (a *App) SaveAISettings(s AISettings, apiKey string) (AISettings, error) {
 
 // validBaseURL requires HTTPS, except for models running on this machine.
 func validBaseURL(u string) bool {
-	return strings.HasPrefix(u, "https://") ||
-		strings.HasPrefix(u, "http://127.0.0.1") || strings.HasPrefix(u, "http://localhost")
+	parsed, err := url.ParseRequestURI(u)
+	if err != nil || parsed.Host == "" || parsed.User != nil {
+		return false
+	}
+	if parsed.Scheme == "https" {
+		return true
+	}
+	if parsed.Scheme != "http" {
+		return false
+	}
+	switch strings.ToLower(parsed.Hostname()) {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
 }
 
 func (a *App) sessionConfig(tools []ai.ToolDef, system string) (ai.Config, AISettings, error) {

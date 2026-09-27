@@ -568,6 +568,24 @@ func TestChatShowsSaveFailureWithoutLosingGeneratedAnswer(t *testing.T) {
 	}
 }
 
+func TestAIBaseURLValidation(t *testing.T) {
+	for address, want := range map[string]bool{
+		"https://api.example.com/v1":        true,
+		"http://localhost:1234/v1":          true,
+		"http://127.0.0.1:1234/v1":          true,
+		"http://[::1]:1234/v1":              true,
+		"http://localhost.evil.com/v1":      false,
+		"http://127.0.0.1.evil.com/v1":      false,
+		"https://name:pass@api.example.com": false,
+		"https://":                          false,
+		"ftp://localhost/v1":                false,
+	} {
+		if got := validBaseURL(address); got != want {
+			t.Errorf("validBaseURL(%q) = %v, want %v", address, got, want)
+		}
+	}
+}
+
 func TestTencentCloudPlanWithoutServer(t *testing.T) {
 	a := newApp(t)
 	f := tencenttest.Start(t)
