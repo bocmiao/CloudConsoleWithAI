@@ -547,6 +547,27 @@ func TestChatIsSavedAndRestored(t *testing.T) {
 	}
 }
 
+func TestChatShowsSaveFailureWithoutLosingGeneratedAnswer(t *testing.T) {
+	a := newApp(t)
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = a.Store.Close() // storage becomes unavailable after the question was saved
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"回答已生成"}}],"usage":{"prompt_tokens":10,"completion_tokens":5}}`)
+	}))
+	defer model.Close()
+	s, err := a.AISettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.BaseURL = model.URL
+	if _, err := a.SaveAISettings(s, "sk-test"); err != nil {
+		t.Fatal(err)
+	}
+	r, err := a.Chat(context.Background(), "", "测试保存失败")
+	if err != nil || r.Reply.Text != "回答已生成" || !strings.Contains(r.Error, "保存记录失败") || !strings.Contains(r.Error, "费用统计") {
+		t.Fatalf("reply = %+v, err = %v", r, err)
+	}
+}
+
 func TestTencentCloudPlanWithoutServer(t *testing.T) {
 	a := newApp(t)
 	f := tencenttest.Start(t)
