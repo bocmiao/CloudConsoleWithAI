@@ -220,6 +220,18 @@ func init() {
 			Undo: "把删掉的放行规则加回去"}},
 	})
 	register(&Capability{
+		Name: "cloud.firewall.tighten", Title: "收紧 CVM 全端口安全组规则", Risk: core.R3, Reversible: true,
+		Params: []Param{
+			{Name: "instance", Kind: "instance", Required: true},
+			{Name: "region", Kind: "region", Required: true},
+			{Name: "group", Kind: "name", Required: true},
+			{Name: "admin_cidr", Kind: "cidr", Required: true, Desc: "管理者当前可达的公网 IP/32 或固定网段，不能是全网"},
+			{Name: "ssh_port", Kind: "int", Min: 1, Max: 65535, Required: true},
+		},
+		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "firewall_tighten", Downtime: "只保留 80/443 全网可达，SSH 和管理端口仅管理网段可达；其他服务可能中断",
+			Undo: "恢复原来的全端口放行规则并删除本次新增的规则"}},
+	})
+	register(&Capability{
 		Name: "cloud.snapshot.create", Title: "创建服务器快照", Risk: core.R1,
 		NoUndo: "快照是新增的整盘备份，不需要回滚；不再需要时可以在腾讯云控制台删除（超出免费额度的快照会产生费用）",
 		Params: []Param{
@@ -511,6 +523,13 @@ func init() {
 		Impls: map[string]Impl{
 			"1panel": {Via: "1Panel 接口", Panel: "backup", Downtime: "不影响网站，大的数据库需要几分钟"},
 		},
+	})
+	register(&Capability{
+		Name: "ssh.harden", Title: "关闭 SSH 密码与 root 直连", Risk: core.R3, Reversible: true,
+		Params: []Param{{Name: "login_user", Kind: "name", Required: true, Hidden: true}},
+		Impls: map[string]Impl{"*": {Via: "系统脚本", Script: "ssh_harden.sh", Args: []string{"login_user"}, Guarded: true,
+			Downtime: "SSH 服务平滑重载；已有连接通常不受影响，新连接只能用非 root 密钥登录",
+			Undo:     "恢复原来的 SSH 配置并重载 SSH 服务"}},
 	})
 	register(&Capability{
 		Name: "php_fpm.set", Title: "调整 PHP-FPM 进程数", Risk: core.R2, Reversible: true,

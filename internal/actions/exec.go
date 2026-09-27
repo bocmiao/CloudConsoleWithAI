@@ -23,8 +23,9 @@ import (
 
 // Env is what running an action on one server needs.
 type Env struct {
-	SSH  sshx.Conn
-	User string // login user; others than root go through passwordless sudo
+	SSH      sshx.Conn
+	User     string // login user; others than root go through passwordless sudo
+	AuthKind string // password | key | tat; SSH hardening requires key
 	// OnePanel is set when the server's 1Panel API is configured.
 	OnePanel *onepanel.Client
 	// PanelApps is the 1Panel app list from discovery, e.g. "mysql/mysql".
@@ -70,6 +71,9 @@ type Progress func(log []string)
 
 // Apply runs a validated step.
 func Apply(ctx context.Context, env *Env, r Resolved, progress Progress) Outcome {
+	if r.Cap.Name == "ssh.harden" && (env.AuthKind != "key" || env.User == "root" || env.User != r.Values["login_user"] || env.Reconnect == nil) {
+		return Outcome{Status: StatusRefused, Log: []string{"SSH 加固只允许从非 root 密钥连接执行，并且必须能够重新连接验证"}}
+	}
 	switch {
 	case r.Impl.Script != "":
 		out := runScript(ctx, env, r, "apply", nil, progress)
@@ -91,6 +95,16 @@ func confirmGuard(ctx context.Context, env *Env, out *Outcome) {
 	if !strings.HasSuffix(restore, "/restore.sh") {
 		out.logf("没有找到 5 分钟保险的记录，无法确认")
 		return
+	}
+	if env.Reconnect != nil {
+		fresh, err := env.Reconnect(ctx)
+		if err != nil {
+			out.Status = StatusFailed
+			out.logf("修改后无法重新连接（%v）：保留 5 分钟保险，服务器会自动恢复原状", err)
+			return
+		}
+		env.SSH.Close()
+		env.SSH = fresh
 	}
 	flag := shq(path.Dir(restore) + "/guard.cancelled")
 	cmd := "touch " + flag

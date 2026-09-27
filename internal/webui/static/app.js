@@ -657,6 +657,8 @@ const VisitStats = {
     const judging = ref(false);
     const judgements = reactive({}); // source|days -> {summary, verdicts, cost, currency}
     const picked = ref(new Set());
+    const manualIPs = ref('');
+    const manualZone = ref('');
     const showAll = ref(false);
     const drawer = ref(null); // IP profile shown on the side
     const plan = ref(null); // checklist being confirmed
@@ -754,6 +756,7 @@ const VisitStats = {
 
     const siteNames = computed(() => ((data.value && data.value.sites) || []).map(s => s.name).filter(n => n !== '*'));
     watch(siteNames, names => { if (names.length && site.value !== '*' && !names.includes(site.value)) site.value = '*'; });
+    watch(siteNames, names => { if (!names.includes(manualZone.value)) manualZone.value = ''; });
     const range = computed(() => data.value && data.value.ranges ? data.value.ranges[String(days.value)] : null);
     const cur = computed(() => range.value && range.value.sites ? (range.value.sites[site.value] || range.value.sites['*'] || null) : null);
     const total = computed(() => cur.value ? cur.value.total : {});
@@ -802,11 +805,16 @@ const VisitStats = {
       finally { judging.value = false; }
     }
     const loadSpendSoon = inject('loadSpend', () => {});
-    async function block(list) {
+    async function block(list, zone = '') {
       planning.value = true;
-      try { plan.value = await api('POST', '/api/visits/block', { source: source.value, ips: list }); }
+      try { plan.value = await api('POST', '/api/visits/block', { source: source.value, ips: list, zone }); }
       catch (e) { notify(e.message, 'error'); }
       finally { planning.value = false; }
+    }
+    function blockManual() {
+      const list = [...new Set(manualIPs.value.split(/[\s,，]+/).map(s => s.trim()).filter(Boolean))];
+      if (!list.length) return;
+      block(list, manualZone.value);
     }
     async function unblock(zone, ip) {
       planning.value = true;
@@ -919,7 +927,7 @@ const VisitStats = {
       emit('ask', `我的网站有这些死链（有人点链接打开却是 404，← 后面是链接所在的页面或网站）：\n${list}\n帮我看看这些地址原来是什么、应该怎么修（改链接、做 301 跳转还是恢复页面）。`);
     }
     return { sources, source, days, site, section, series, data, loading, error, load, siteNames, range, cur, total, top, siteInfo, siteRows,
-      ips, risky, ipRows, counts, judgement, verdictOf, blockable, blockedSet, picked, togglePick, pickSuggested, judge, judging, showAll,
+      ips, risky, ipRows, counts, judgement, verdictOf, blockable, blockedSet, picked, togglePick, pickSuggested, judge, judging, showAll, manualIPs, manualZone, blockManual,
       block, unblock, plan, planning, planDone, realIP, planServerName, fromServer, directRows, blocked, drawer, openIP, alerts, trend, dayRows, hourRows, delta, yesterday, pct, SERIES, sourceTitle,
       askAI, askIP, shortUA, deadLinks, askDead, auto, autoEdit, autoBusy, autoForm, editAuto, saveAuto, turnOffAuto, runAuto, autoRule, autoUntil, untilText, VISIT_RANGES, VISIT_SECTIONS, RISK, VERDICT, fmtCount, fmtBytes, whenText };
   },
@@ -1095,6 +1103,7 @@ const VisitStats = {
               <button class="small" @click="judge" :disabled="judging || !ips.length"><span class="spinner inline" v-if="judging"></span><ui-icon name="sparkles" v-else></ui-icon>{{ picked.size ? 'AI 研判选中的 ' + picked.size + ' 个' : 'AI 研判' }}</button>
               <button class="primary small" @click="block([...picked])" :disabled="!picked.size || planning || !tencent" :title="tencent ? '' : '封禁通过 EdgeOne 进行，需要先填写腾讯云密钥'">封禁选中的 {{ picked.size }} 个</button>
             </header>
+            <div class="row form" v-if="tencent"><label class="k" for="manual-block-ips">手动封禁</label><span class="v"><select v-model="manualZone" aria-label="封禁的网站"><option value="">选择网站</option><option v-for="name in siteNames" :key="name" :value="name">{{ name }}</option></select><input id="manual-block-ips" v-model="manualIPs" placeholder="多个 IP 用逗号或空格隔开" autocomplete="off" spellcheck="false"><span class="small secondary block">只在所选网站的 EdgeOne 站点封禁；会核对节点和搜索引擎，再显示确认清单。</span></span><button @click="blockManual" :disabled="planning || !manualZone || !manualIPs.trim()">生成封禁清单</button></div>
             <p class="small secondary card-note" v-if="directRows">{{ directRows }} 个 IP 标了「直连服务器」：它们直接访问服务器的 IP，没经过 EdgeOne。在 EdgeOne 封禁只能挡住它们经过 EdgeOne 的访问，挡不住直接访问服务器。</p>
             <div class="table-wrap">
               <table class="table ip-table" v-if="ipRows.length">
@@ -1900,10 +1909,10 @@ const DnsPage = {
       planning.value = true; formError.value = '';
       try {
         plan.value = await api('POST', '/api/dns/plan', { domain: domain.value, ...body });
-        editor.open = false; quick.open = false;
+        editor.open = false; quick.open = false; originEdit.open = false;
         return true;
       } catch (e) {
-        if (editor.open || quick.open) formError.value = e.message; else notify(e.message, 'error');
+        if (editor.open || quick.open || originEdit.open) formError.value = e.message; else notify(e.message, 'error');
         return false;
       } finally { planning.value = false; }
     }
@@ -1947,6 +1956,9 @@ const DnsPage = {
 
     // One click: a name to a server, an IP or a host, through EdgeOne if wanted.
     const quick = reactive({ open: false, sub: '', target: 'server', serverId: 0, value: '', edgeone: false, https: true, protocol: 'HTTP', area: 'mainland' });
+    const originEdit = reactive({ open: false, sub: '', protocol: 'HTTPS' });
+    function openOrigin(r) { formError.value = ''; Object.assign(originEdit, { open: true, sub: r.name, protocol: 'HTTPS' }); }
+    function submitOrigin() { propose({ op: 'eo_origin', sub: originEdit.sub, protocol: originEdit.protocol }); }
     function openQuick(pre) {
       formError.value = '';
       const s = props.servers[0];
@@ -1958,7 +1970,7 @@ const DnsPage = {
         edgeone: quick.edgeone, https: quick.https, protocol: quick.protocol, area: quick.area });
     }
     // An error is about what was sent; editing the form clears it.
-    watch(() => JSON.stringify([editor, quick]), () => { if (!planning.value) formError.value = ''; });
+    watch(() => JSON.stringify([editor, quick, originEdit]), () => { if (!planning.value) formError.value = ''; });
     const quickName = computed(() => ((quick.sub.trim() || '@') === '@' ? '' : quick.sub.trim() + '.') + domain.value);
 
     const del = r => propose({ op: 'delete', id: r.id });
@@ -1970,7 +1982,7 @@ const DnsPage = {
     const planServerName = computed(() => '腾讯云');
 
     return { RECORD_TYPES, EO_AREAS, VALUE_HINT, domains, domainsLoaded, eoError, domain, data, loading, error, q, typeFilter, plan, planning, lines, formError,
-      current, zone, eoUsable, shown, load, planDone, closePlan, editor, openEditor, editorTTLs, submitEditor, quick, openQuick, submitQuick, quickName,
+      current, zone, eoUsable, shown, load, planDone, closePlan, editor, openEditor, editorTTLs, submitEditor, quick, openQuick, submitQuick, quickName, originEdit, openOrigin, submitOrigin,
       del, toggle, eoPoint, eoOff, eoOn, canEO, ttlText, planServerName };
   },
   template: `
@@ -2045,6 +2057,7 @@ const DnsPage = {
                     <button class="link small" @click="toggle(r)" :disabled="planning" :aria-label="(r.enabled ? '暂停 ' : '启用 ') + r.full + ' 的 ' + r.type + ' 记录'">{{ r.enabled ? '暂停' : '启用' }}</button>
                     <button class="link small danger" @click="del(r)" :disabled="planning" :aria-label="'删除 ' + r.full + ' 的 ' + r.type + ' 记录'">删除</button>
                     <button class="link small" v-if="r.edgeone && r.edgeone.points" @click="eoOff(r)" :disabled="planning">不走 EdgeOne</button>
+                    <button class="link small" v-if="r.edgeone && r.edgeone.points" @click="openOrigin(r)">回源设置</button>
                     <button class="link small" v-else-if="r.edgeone && r.line === '默认'" @click="eoPoint(r.name)" :disabled="planning">解析到 EdgeOne</button>
                     <button class="link small" v-else-if="canEO(r)" @click="eoOn(r)">开启 EdgeOne</button>
                   </template>
@@ -2056,6 +2069,16 @@ const DnsPage = {
         </div>
       </div>
     </template>
+
+    <div class="sheet-mask" v-if="originEdit.open" @click.self="originEdit.open = false">
+      <div class="sheet" role="dialog" aria-label="EdgeOne 回源设置">
+        <h2>回源设置 · {{ originEdit.sub === '@' ? domain : originEdit.sub + '.' + domain }}</h2>
+        <p>如果出现 525，先检查源站证书和 HTTPS 端口。临时改用 HTTP 回源会取消 EdgeOne 到源站的加密，修好证书后建议改回 HTTPS。</p>
+        <div class="group"><div class="row form"><span class="k">回源协议</span><span class="v"><select v-model="originEdit.protocol" aria-label="回源协议"><option value="HTTPS">HTTPS</option><option value="HTTP">HTTP</option></select><span class="small secondary block">源站地址保持当前配置；执行前会重新读取确认。</span></span></div></div>
+        <div class="notice" v-if="formError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ formError }}</div>
+        <div class="sheet-actions"><button @click="originEdit.open = false">取消</button><button class="primary" @click="submitOrigin" :disabled="planning">生成清单</button></div>
+      </div>
+    </div>
 
     <!-- One click -->
     <div class="sheet-mask" v-if="quick.open" @click.self="quick.open = false">
@@ -2980,7 +3003,7 @@ const EO_SERIES = {
 // or one of its domains, in the same sections as 访问分析.
 const EoStats = {
   props: { configured: Boolean, active: Boolean },
-  emits: ['ask', 'settings'],
+  emits: ['ask', 'settings', 'origin'],
   setup(props, { emit }) {
     const sites = ref([]);
     const domain = ref(pref('miao.eoDomain', ''));
@@ -3099,6 +3122,8 @@ const EoStats = {
     const alerts = computed(() => {
       const d = data.value, out = [];
       if (!d || !d.requests) return out;
+      const tls525 = tops('status').find(t => String(t.key) === '525');
+      if (tls525 && tls525.value > 0) out.push({ level: 'warn', text: `EdgeOne 出现 ${fmtCount(tls525.value)} 次 525（与源站 TLS 握手失败）。请检查源站证书和 HTTPS 端口；必要时可在解析页临时切换回源协议。`, go: 'dns' });
       const { e5 } = errors.value;
       if (d.requests > 100 && e5 / d.requests > 0.01) out.push({ level: 'warn', text: `源站出错（5xx）${fmtCount(e5)} 次，占请求的 ${pct(e5, d.requests)}，看看源站是不是有问题`, go: 'content' });
       const up = change('requests', 'prevRequests');
@@ -3164,7 +3189,7 @@ const EoStats = {
           <div class="alerts" v-if="alerts.length">
             <div class="alert" v-for="(a, i) in alerts" :key="i" :class="'al-' + a.level">
               <ui-icon :name="a.level === 'warn' ? 'warn' : 'info'"></ui-icon><span class="grow">{{ a.text }}</span>
-              <button class="link small" v-if="a.go" @click="section = a.go">查看</button>
+              <button class="link small" v-if="a.go" @click="a.go === 'dns' ? $emit('origin') : section = a.go">{{ a.go === 'dns' ? '回源设置' : '查看' }}</button>
             </div>
           </div>
           <div class="kpi-group">
@@ -4678,6 +4703,14 @@ const app = createApp({
       });
     }
     const cloud = ref(null);          // Tencent Cloud instance behind the selected server
+    const securityForm = reactive({ databaseApp: 'mysql', haloApp: 'halo', adminCidr: '' });
+    const securityPlan = ref(null);
+    async function proposeSecurity(op) {
+      await guarded('正在核对安全配置……', async () => {
+        securityPlan.value = await api('POST', `/api/servers/${selectedId.value}/security/plan`, { op, ...securityForm });
+      });
+    }
+    function securityDone() { select(selectedId.value, true); }
     const cloudList = ref([]);        // instances offered when adding a server
     const cloudPick = ref('');
     const suggestions = [
@@ -4714,6 +4747,10 @@ const app = createApp({
         const prof = await api('GET', `/api/servers/${id}/profile`);
         if (selectedId.value !== id) return;
         current.value = prof;
+        const installed = (prof.profile && prof.profile.panel && prof.profile.panel.apps) || [];
+        const appName = key => { const entry = installed.find(x => x.toLowerCase().startsWith(key + '/')); return entry ? entry.split('/').slice(1).join('/') : ''; };
+        securityForm.databaseApp = appName('mysql') || appName('mariadb') || securityForm.databaseApp;
+        securityForm.haloApp = appName('halo') || securityForm.haloApp;
         if (prof.server.adapter === '1panel') {
           const o = await api('GET', `/api/servers/${id}/onepanel`);
           if (selectedId.value === id) Object.assign(op, o, { apiKey: '', info: '' });
@@ -5139,7 +5176,7 @@ const app = createApp({
       select, openAdd, addServer, testConn, discover, removeServer, askAbout, send, onEnter, onChatScroll, newChat, applyPreset, saveAI, testAI,
       convs, showConvs, conversationId, openConv, deleteConv, relTime,
       op, saveOnePanel, testOnePanel, tc, saveTencent, testTencent, clearTencent, freeCmd, setFree, seen, statsView, statsSeen, termRequest, openTerminal, filesRequest, openFiles, unread, me, logout,
-      cloud, cloudList, cloudPick, pickCloud, askAI, daysTo, fmtBytes,
+      cloud, cloudList, cloudPick, pickCloud, askAI, daysTo, fmtBytes, securityForm, securityPlan, proposeSecurity, securityDone,
       memPct, rootDisk, envSub, dockerText, money, mb, meterClass, levelClass, levelIcon, levelName, riskName, adapterName,
       fmtTime, serverName, parseSteps, toolName, toolDetail, actorName, actionName, md, live, liveStatus, thinkTail, stopAnswer,
     };

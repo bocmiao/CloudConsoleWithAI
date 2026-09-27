@@ -199,7 +199,7 @@ func (a *App) env(ctx context.Context, id int64) (store.Server, *actions.Env, er
 	if err != nil {
 		return sv, nil, err
 	}
-	env := &actions.Env{SSH: c, User: sv.Username, PollInterval: a.PollInterval}
+	env := &actions.Env{SSH: c, User: sv.Username, AuthKind: sv.AuthKind, PollInterval: a.PollInterval}
 	env.Reconnect = func(ctx context.Context) (sshx.Conn, error) {
 		_, nc, err := a.connect(ctx, id)
 		return nc, err

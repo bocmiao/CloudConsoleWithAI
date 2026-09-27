@@ -124,6 +124,7 @@ func (s *Server) routes() {
 	api("POST /api/settings/tencent/test", s.testTencent)
 	api("GET /api/tencent/servers", s.tencentServers)
 	api("GET /api/servers/{id}/cloud", s.serverCloud)
+	api("POST /api/servers/{id}/security/plan", s.serverSecurityPlan)
 	api("GET /api/visits/sources", s.visitSources)
 	api("GET /api/visits", s.getVisits)
 	api("GET /api/visits/blocked", s.blockedIPs)
@@ -465,6 +466,9 @@ func (s *Server) blockIPs(_ http.ResponseWriter, r *http.Request) (any, error) {
 	if err := decode(r, &req); err != nil {
 		return nil, err
 	}
+	if req.Zone != "" {
+		return s.app.ProposeBlockInZone(r.Context(), req.Source, req.Zone, req.IPs)
+	}
 	return s.app.ProposeBlock(r.Context(), req.Source, req.IPs)
 }
 
@@ -659,6 +663,18 @@ func (s *Server) serverCloud(_ http.ResponseWriter, r *http.Request) (any, error
 		return map[string]string{"error": err.Error()}, nil
 	}
 	return map[string]any{"instance": cs}, nil
+}
+
+func (s *Server) serverSecurityPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	var req app.SecurityRequest
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.ProposeServerSecurity(r.Context(), id, req)
 }
 
 func (s *Server) eoSites(_ http.ResponseWriter, r *http.Request) (any, error) {

@@ -212,6 +212,28 @@
               </div>
             </template>
 
+            <div class="group-title">安全与备份</div>
+            <div class="group">
+              <div class="row stack security-block">
+                <b>数据库、Halo 与整盘快照</b>
+                <span class="small secondary">先在 1Panel 备份数据库和 Halo，再创建腾讯云快照。每一步会出现在确认清单中；CVM 快照可能产生费用。</span>
+                <div class="row form"><label class="k" for="security-db-app">数据库应用</label><span class="v"><input id="security-db-app" v-model="securityForm.databaseApp" placeholder="1Panel 中的应用名，例如 mysql"></span></div>
+                <div class="row form"><label class="k" for="security-halo-app">Halo 应用</label><span class="v"><input id="security-halo-app" v-model="securityForm.haloApp" placeholder="1Panel 中的应用名，例如 halo"></span></div>
+                <div><button @click="proposeSecurity('backup')" :disabled="busy || !cloud || current.server.adapter !== '1panel'">生成备份清单</button> <button @click="proposeSecurity('snapshot')" :disabled="busy || !cloud">仅创建快照</button><span class="small secondary" v-if="!cloud || current.server.adapter !== '1panel'"> 完整备份需要腾讯云实例和 1Panel API</span></div>
+              </div>
+              <div class="row stack security-block" v-if="cloud && cloud.kind === 'cvm' && cloud.securityGroups && cloud.securityGroups.length">
+                <b>收紧安全组 {{ cloud.securityGroups[0] }}</b>
+                <span class="small secondary">先补端口规则，再移除全端口放行。80/443 对外开放；SSH 端口 {{ current.server.port }}、13940、8090、8080 仅管理网段可访问；3306 不对外开放。若站点依赖其他端口，请先检查回源配置。</span>
+                <div class="row form"><label class="k" for="security-admin-cidr">管理网段</label><span class="v"><input id="security-admin-cidr" v-model="securityForm.adminCidr" placeholder="你的公网 IP/32，例如 203.0.113.4/32" autocomplete="off" spellcheck="false"></span></div>
+                <div><button @click="proposeSecurity('firewall')" :disabled="busy || !securityForm.adminCidr.trim()">生成安全组清单</button></div>
+              </div>
+              <div class="row stack security-block">
+                <b>SSH 登录加固</b>
+                <span class="small secondary">关闭密码和 root 直连前，先用非 root 用户的密钥添加并测试连接。执行时设置 5 分钟自动恢复保险，并重新连接验证。</span>
+                <div><button @click="proposeSecurity('ssh')" :disabled="busy || current.server.authKind !== 'key' || current.server.username === 'root'">生成 SSH 加固清单</button><span class="small secondary" v-if="current.server.authKind !== 'key' || current.server.username === 'root'"> 当前连接方式不满足前提</span></div>
+              </div>
+            </div>
+
             <div class="group">
               <details class="raw-box">
                 <summary><ui-icon name="chevron"></ui-icon>原始识别结果（已脱敏）</summary>
@@ -222,6 +244,15 @@
         </template>
       </div>
     </template>
+
+    <div class="sheet-mask" v-if="securityPlan" @click.self="securityPlan = null">
+      <div class="sheet plan-sheet" role="dialog" aria-label="安全与备份确认清单">
+        <h2>{{ securityPlan.title }}</h2>
+        <p>逐项核对后再执行。高风险操作会显示影响和回滚方式。</p>
+        <plan-card :plan="securityPlan" :server-name="current ? current.server.name : ''" @done="securityDone"></plan-card>
+        <div class="sheet-actions"><button @click="securityPlan = null">关闭</button></div>
+      </div>
+    </div>
 
     <!-- AI assistant -->
     <template v-if="tab === 'chat'">
@@ -322,7 +353,7 @@
           <visit-stats :servers="servers" :tencent="tc.configured" :active="tab === 'stats' && statsView === 'logs'" @ask="askAI"></visit-stats>
         </div>
         <div v-if="statsSeen.eo" v-show="statsView === 'eo'">
-          <eo-stats :configured="tc.configured" :active="tab === 'stats' && statsView === 'eo'" @ask="askAI" @settings="go('settings')"></eo-stats>
+          <eo-stats :configured="tc.configured" :active="tab === 'stats' && statsView === 'eo'" @ask="askAI" @settings="go('settings')" @origin="go('dns')"></eo-stats>
         </div>
       </div>
     </div>
