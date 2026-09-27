@@ -4282,13 +4282,13 @@ const AccountPanel = {
     }
     async function beginTOTP() {
       tf.error = ''; tf.busy = true;
-      try { tf.setup = await api('POST', '/api/account/totp'); tf.code = ''; } catch (e) { notify(e.message, 'error'); } finally { tf.busy = false; }
+      try { tf.setup = await api('POST', '/api/account/totp', { password: tf.password }); tf.code = ''; } catch (e) { tf.error = e.message; } finally { tf.busy = false; }
     }
     async function enableTOTP() {
       tf.error = ''; tf.busy = true;
       try {
-        await api('PUT', '/api/account/totp', { code: tf.code });
-        tf.setup = null;
+        await api('PUT', '/api/account/totp', { code: tf.code, password: tf.password });
+        Object.assign(tf, { setup: null, off: false, password: '', code: '' });
         notify('两步验证已开启，以后登录要输入 App 里的验证码');
         load();
       } catch (e) { tf.error = e.message; } finally { tf.busy = false; }
@@ -4302,6 +4302,7 @@ const AccountPanel = {
         load();
       } catch (e) { tf.error = e.message; } finally { tf.busy = false; }
     }
+    function cancelTOTP() { Object.assign(tf, { setup: null, off: false, password: '', code: '', error: '' }); }
     async function endSession(s) {
       try { await api('DELETE', `/api/account/sessions/${s.key}`); notify('已让这个设备退出登录'); load(); } catch (e) { notify(e.message, 'error'); }
     }
@@ -4461,7 +4462,7 @@ const AccountPanel = {
     });
     const SMS_REGIONS = [['ap-guangzhou', '广州'], ['ap-beijing', '北京'], ['ap-nanjing', '南京']];
 
-    return { acct, pw, tf, savePassword, beginTOTP, enableTOTP, disableTOTP, endSession, logout, when, uaText,
+    return { acct, pw, tf, savePassword, beginTOTP, enableTOTP, disableTOTP, cancelTOTP, endSession, logout, when, uaText,
       methodBusy, setMethod, methodNote, canOn, bd, openBind, bindSend, bindConfirm, unbind, scope, scopeOff, setScope,
       ml, openMail, mailPreset, mailRun, sm, openSMS, smsRun, smsFilled, mailText, smsText, SMS_REGIONS };
   },
@@ -4478,8 +4479,13 @@ const AccountPanel = {
     </template>
     <div class="row"><span class="k">两步验证</span>
       <span class="grow small" :class="acct.totp ? 'st-ok' : 'st-warn'">{{ acct.totp ? '已开启：登录时还要输入手机 App 里的验证码' : '未开启。建议开启：就算密码泄露，别人也登录不了' }}</span>
-      <button class="small" v-if="!acct.totp && !tf.setup" @click="beginTOTP" :disabled="tf.busy">开启两步验证</button>
+      <button class="small" v-if="!acct.totp && !tf.setup && !tf.off" @click="tf.off = true; tf.error = ''">开启两步验证</button>
       <button class="small" v-if="acct.totp && !tf.off" @click="tf.off = true">关闭</button></div>
+    <div class="row" v-if="!acct.totp && tf.off && !tf.setup"><span class="k">输入密码开启</span>
+      <span class="v"><input type="password" v-model="tf.password" autocomplete="current-password" aria-label="密码" @keydown.enter="beginTOTP"></span>
+      <button class="primary small" @click="beginTOTP" :disabled="tf.busy || !tf.password">继续</button>
+      <button class="plain small" @click="tf.off = false; tf.password = ''; tf.error = ''">取消</button></div>
+    <div class="row small st-crit" v-if="!acct.totp && tf.off && !tf.setup && tf.error">{{ tf.error }}</div>
     <div class="row totp-setup" v-if="tf.setup">
       <img :src="tf.setup.qr" alt="两步验证二维码" width="168" height="168">
       <div class="grow">
@@ -4488,15 +4494,15 @@ const AccountPanel = {
         <p class="small">2. 输入 App 显示的 6 位验证码：</p>
         <div class="totp-confirm"><input v-model="tf.code" inputmode="numeric" maxlength="6" placeholder="123456" aria-label="验证码" @keydown.enter="enableTOTP">
           <button class="primary small" @click="enableTOTP" :disabled="tf.busy || tf.code.length !== 6">确认开启</button>
-          <button class="plain small" @click="tf.setup = null">取消</button></div>
+          <button class="plain small" @click="cancelTOTP">取消</button></div>
         <p class="small st-crit" v-if="tf.error">{{ tf.error }}</p>
       </div>
     </div>
-    <div class="row" v-if="tf.off"><span class="k">输入密码关闭</span>
+    <div class="row" v-if="acct.totp && tf.off"><span class="k">输入密码关闭</span>
       <span class="v"><input type="password" v-model="tf.password" autocomplete="current-password" aria-label="密码" @keydown.enter="disableTOTP"></span>
       <button class="small destructive" @click="disableTOTP" :disabled="tf.busy || !tf.password">关闭两步验证</button>
       <button class="plain small" @click="tf.off = false; tf.error = ''">取消</button></div>
-    <div class="row small st-crit" v-if="tf.off && tf.error">{{ tf.error }}</div>
+    <div class="row small st-crit" v-if="acct.totp && tf.off && tf.error">{{ tf.error }}</div>
   </div>
   <template v-if="acct">
   <div class="group-title">登录方式</div>

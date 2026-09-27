@@ -88,37 +88,75 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+      - name: Validate the production Compose file
+        run: docker compose config --quiet
       - name: Build the image
         run: docker build --build-arg VERSION="${RELEASE:-dev-${GITHUB_SHA::7}}" -t miaopanel:ci .
-      - name: Start it and check the login page answers
+      - name: Start it behind an exact trusted HTTPS proxy
         run: |
-          docker run -d --name miaopanel -p 127.0.0.1:18765:18765 -v miaopanel-ci-data:/data \
-            -e MIAO_TRUSTED_PROXIES=172.16.0.0/12 miaopanel:ci
-          for i in $(seq 1 20); do curl -fsS -H 'X-Miao: 1' http://127.0.0.1:18765/api/auth/state && break; sleep 1; done
+          mkdir -p /tmp/miaopanel-proxy
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -keyout /tmp/miaopanel-proxy/key.pem -out /tmp/miaopanel-proxy/cert.pem \
+            -subj '/CN=127.0.0.1' -addext 'subjectAltName=IP:127.0.0.1'
+          cat > /tmp/miaopanel-proxy/default.conf <<'EOF'
+          server {
+            listen 443 ssl;
+            ssl_certificate /etc/nginx/tls/cert.pem;
+            ssl_certificate_key /etc/nginx/tls/key.pem;
+            location / {
+              proxy_pass http://172.30.0.20:18765;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_buffering off;
+            }
+          }
+          EOF
+          docker network create --subnet 172.30.0.0/24 miaopanel-ci
+          docker run -d --name miaopanel --network miaopanel-ci --ip 172.30.0.20 \
+            -v miaopanel-ci-data:/data -e MIAO_TRUSTED_PROXIES=172.30.0.10 miaopanel:ci
+          docker run -d --name miaopanel-proxy --network miaopanel-ci --ip 172.30.0.10 \
+            -p 127.0.0.1:18443:443 -v /tmp/miaopanel-proxy/default.conf:/etc/nginx/conf.d/default.conf:ro \
+            -v /tmp/miaopanel-proxy:/etc/nginx/tls:ro nginx:alpine
+          for i in $(seq 1 20); do curl -kfsS -H 'X-Miao: 1' https://127.0.0.1:18443/api/auth/state && break; sleep 1; done
           docker logs miaopanel 2>&1 | grep -q '初始化码'
-          curl -fsS -H 'X-Miao: 1' http://127.0.0.1:18765/api/auth/state | grep -q '"setup":true'
-          curl -fsS -H 'X-Miao: 1' -H 'X-Forwarded-Proto: https' \
-            http://127.0.0.1:18765/api/auth/state | grep -q '"https":true'
-      - name: Check browser setup and password login
+          curl -kfsS -H 'X-Miao: 1' https://127.0.0.1:18443/api/auth/state | grep -q '"setup":true'
+          curl -kfsS -H 'X-Miao: 1' https://127.0.0.1:18443/api/auth/state | grep -q '"https":true'
+      - name: Check HTTPS setup, secure cookie, password, 2FA, and browser scrolling
+        env:
+          MIAO_TEST_BASE_URL: https://127.0.0.1:18443
+          MIAO_TEST_ENABLE_TOTP: "1"
+          MIAO_TEST_TOTP_FILE: /tmp/miaopanel-totp
         run: python3 scripts/browser_smoke.py
-      - name: Restore a stopped data volume
+      - name: Restore a checked backup into a new volume
         run: |
+          docker exec miaopanel sha256sum /data/secrets.json | cut -d' ' -f1 > /tmp/miaopanel-secrets.sha256
           docker stop miaopanel
           mkdir -p /tmp/miaopanel-backup
           docker run --rm --user 0 --volumes-from miaopanel -v /tmp/miaopanel-backup:/backup \
             --entrypoint sh miaopanel:ci -c 'umask 077; tar -C /data -czf /backup/miaopanel.tar.gz .'
+          sudo sha256sum /tmp/miaopanel-backup/miaopanel.tar.gz > /tmp/miaopanel-backup/miaopanel.tar.gz.sha256
+          sudo sha256sum -c /tmp/miaopanel-backup/miaopanel.tar.gz.sha256
           docker volume create miaopanel-ci-restored
           docker run --rm --user 0 -v miaopanel-ci-restored:/data -v /tmp/miaopanel-backup:/backup:ro \
-            --entrypoint sh miaopanel:ci -c 'tar -C /data -xzf /backup/miaopanel.tar.gz'
+            --entrypoint sh miaopanel:ci -c 'test -z "$(ls -A /data)"; tar -C /data -xzf /backup/miaopanel.tar.gz'
           docker rm miaopanel
-          docker run -d --name miaopanel-restored -p 127.0.0.1:18765:18765 \
-            -v miaopanel-ci-restored:/data -e MIAO_TRUSTED_PROXIES=172.16.0.0/12 miaopanel:ci
+          docker run -d --name miaopanel-restored --network miaopanel-ci --ip 172.30.0.20 \
+            -v miaopanel-ci-restored:/data -e MIAO_TRUSTED_PROXIES=172.30.0.10 miaopanel:ci
           for i in $(seq 1 20); do
-            if curl -fsS -H 'X-Miao: 1' http://127.0.0.1:18765/api/auth/state | grep -q '"setup":false'; then exit 0; fi
+            if curl -kfsS -H 'X-Miao: 1' https://127.0.0.1:18443/api/auth/state | grep -q '"setup":false'; then break; fi
             sleep 1
           done
-          docker logs miaopanel-restored
-          exit 1
+          curl -kfsS -H 'X-Miao: 1' https://127.0.0.1:18443/api/auth/state | grep -q '"setup":false'
+          test "$(docker exec miaopanel-restored sha256sum /data/secrets.json | cut -d' ' -f1)" = "$(cat /tmp/miaopanel-secrets.sha256)"
+          test "$(docker exec miaopanel-restored stat -c %a /data/secrets.json)" = 600
+      - name: Check restored account, 2FA, server record, key file, and secure cookie in a browser
+        env:
+          MIAO_TEST_BASE_URL: https://127.0.0.1:18443
+          MIAO_TEST_MODE: restored
+          MIAO_TEST_TOTP_FILE: /tmp/miaopanel-totp
+        run: python3 scripts/browser_smoke.py
 
   release:
     if: (github.ref_type == 'tag' && startsWith(github.ref_name, 'v')) || (github.event_name == 'workflow_dispatch' && startsWith(inputs.version, 'v'))

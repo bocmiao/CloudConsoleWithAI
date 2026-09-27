@@ -6,17 +6,14 @@ services:
     image: miaopanel:latest
     container_name: miaopanel
     restart: unless-stopped
-    ports:
-      # 只让本机的反向代理（1Panel、宝塔、Nginx、Caddy）访问，由它提供 HTTPS。
-      # 一定要直接从外面访问的话改成 "18765:18765"，并且只通过 HTTPS 使用。
-      - "127.0.0.1:18765:18765"
+    # Linux 服务器上直接使用主机网络，让本机反向代理的来源保持为 127.0.0.1，
+    # 不需要把整个 Docker 私网段列为可信代理。
+    network_mode: host
     volumes:
       - miaopanel-data:/data   # 数据库和密钥都在这里，请定期备份
     environment:
       TZ: Asia/Shanghai        # 日报按这个时区生成
-      # 端口仅绑定主机回环地址；容器里看到的主机代理连接来自 Docker 网桥。
-      # 如改成向公网发布端口，须去掉此项，并用 --tls-cert/--tls-key 提供 HTTPS。
-      MIAO_TRUSTED_PROXIES: ${MIAO_TRUSTED_PROXIES:-172.16.0.0/12}
+      MIAO_LISTEN: 127.0.0.1:18765
 
 volumes:
   miaopanel-data:

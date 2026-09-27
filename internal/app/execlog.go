@@ -57,6 +57,13 @@ func (a *App) startExec(e store.ExecLog) store.ExecLog {
 	return e
 }
 
+// startChange is fail-closed: no server or cloud mutation may start unless
+// its durable execution record exists first.
+func (a *App) startChange(e store.ExecLog) (store.ExecLog, error) {
+	e.Status = store.ExecRunning
+	return a.Store.AddExec(e)
+}
+
 func (a *App) finishExec(e *store.ExecLog, status, output string) {
 	e.Status, e.Output, e.FinishedAt = status, clip(output), now()
 	if e.ID > 0 {
@@ -64,11 +71,12 @@ func (a *App) finishExec(e *store.ExecLog, status, output string) {
 	}
 }
 
-func (a *App) finishAction(e *store.ExecLog, out actions.Outcome) {
+func (a *App) finishAction(e *store.ExecLog, out actions.Outcome) error {
 	e.Commands = strings.Join(out.Commands, "\n")
 	e.ScriptName, e.Script = out.ScriptName, out.Script
 	e.Undo, e.BackupDir, e.RollbackFile = out.Undo, out.BackupDir, out.RollbackFile
-	a.finishExec(e, out.Status, strings.Join(out.Log, "\n"))
+	e.Status, e.Output, e.FinishedAt = out.Status, clip(strings.Join(out.Log, "\n")), now()
+	return a.Store.UpdateExec(*e)
 }
 
 // paramText shows a step's parameters compactly, e.g. "size_gb=2".
@@ -215,20 +223,30 @@ func (a *App) rollback(ctx context.Context, e *store.ExecLog) (store.ExecLog, er
 		defer func() { env.SSH.Close() }()
 	}
 
-	rb := a.startExec(store.ExecLog{
+	rb, err := a.startChange(store.ExecLog{
 		ServerID: sv.ID, ServerName: sv.Name, Adapter: e.Adapter, Origin: OriginUser, Kind: store.ExecRollback,
 		Title: "回滚：" + e.Title, Capability: e.Capability, Params: e.Params, Via: e.Via,
 		PlanID: e.PlanID, StepIdx: e.StepIdx, UndoOf: e.ID,
 	})
-	out := actions.Undo(ctx, env, r, e.Undo)
-	if out.Status == actions.StatusUndone && e.RollbackFile != "" {
-		cmd := actions.RetireRollbackFile(ctx, env, e.RollbackFile)
-		out.Commands = append(out.Commands, "# 把服务器上的回滚文件改名，避免被再次执行", cmd)
+	if err != nil {
+		return store.ExecLog{}, userErr("无法写入回滚日志，已停止，服务器没有被修改：%v", err)
 	}
-	a.finishAction(&rb, out)
+	out := actions.Undo(ctx, env, r, e.Undo)
+	var retireErr error
+	if out.Status == actions.StatusUndone && e.RollbackFile != "" {
+		cmd, err := actions.RetireRollbackFile(ctx, env, e.RollbackFile)
+		out.Commands = append(out.Commands, "# 把服务器上的回滚文件改名，避免被再次执行", cmd)
+		if err != nil {
+			retireErr = err
+			out.Log = append(out.Log, err.Error())
+		}
+	}
+	logErr := a.finishAction(&rb, out)
 	if out.Status == actions.StatusUndone && e.ID > 0 {
 		e.UndoneBy = rb.ID
-		_ = a.Store.UpdateExec(*e)
+		if err := a.Store.UpdateExec(*e); err != nil && logErr == nil {
+			logErr = err
+		}
 	}
 	if e.PlanID > 0 {
 		if v, err := a.Plan(e.PlanID); err == nil && e.StepIdx >= 0 && e.StepIdx < len(v.StepList) && v.StepList[e.StepIdx].LogID == e.ID {
@@ -249,6 +267,12 @@ func (a *App) rollback(ctx context.Context, e *store.ExecLog) (store.ExecLog, er
 	_ = a.Store.Audit("user", "exec.rollback", e.Title, fmt.Sprintf("%s：%s", sv.Name, out.Status))
 	if out.Status != actions.StatusUndone {
 		return rb, userErr("回滚没有成功：%s", strings.Join(out.Log, "；"))
+	}
+	if logErr != nil {
+		return rb, userErr("回滚已经完成，但执行日志未能完整保存，请检查数据库和服务器上的回滚文件：%v", logErr)
+	}
+	if retireErr != nil {
+		return rb, userErr("%v；请确认服务器上的旧 rollback.sh，避免重复执行", retireErr)
 	}
 	return rb, nil
 }
