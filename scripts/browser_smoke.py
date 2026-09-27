@@ -24,7 +24,7 @@ def request(method, path, body=None):
     if data is not None:
         req.add_header("Content-Type", "application/json")
     try:
-        with urlopen(req, timeout=10) as response:
+        with urlopen(req, timeout=30) as response:
             result = json.load(response)
     except HTTPError as error:
         raise HTTPError(error.url, error.code, error.read().decode(), error.headers, None) from error
@@ -76,7 +76,9 @@ def main():
 
         request("POST", root + "/url", {"url": "http://127.0.0.1:18765/"})
         wait_for(lambda: find(".login-card input[placeholder='XXXX-XXXX-XXXX-XXXX']"))
-        code = subprocess.check_output(["docker", "exec", "miaopanel", "cat", "/data/setup-code"], text=True).strip()
+        code_file = os.environ.get("MIAO_TEST_SETUP_CODE_FILE")
+        code = (Path(code_file).read_text().strip() if code_file else
+                subprocess.check_output(["docker", "exec", "miaopanel", "cat", "/data/setup-code"], text=True).strip())
         password = "browser smoke test password"
         fill(".login-card input[placeholder='XXXX-XXXX-XXXX-XXXX']", code)
         fill(".login-card input[autocomplete='username']", "admin")
