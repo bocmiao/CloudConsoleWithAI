@@ -1180,3 +1180,25 @@ button.change-row:hover:not(:disabled) { background: var(--hover); }
 .ai-fab .icon { color: var(--accent); }
 .ai-fab:hover:not(:disabled) { background: var(--surface); box-shadow: var(--shadow-lg), 0 0 0 2px var(--accent-track); }
 body.nav-open .ai-fab { display: none; }
+
+/* Search and jump */
+button.side-search { width: calc(100% - 4px); margin: -6px 2px 14px; height: 32px; padding: 0 10px; gap: 8px; border-radius: 9px;
+  background: var(--fill); box-shadow: none; color: var(--text-3); font-size: 13px; }
+button.side-search:hover:not(:disabled) { background: var(--selected); }
+button.side-search .icon { color: var(--icon); }
+button.side-search .grow { flex: 1; text-align: left; }
+.pal-mask { align-items: flex-start; padding-top: 12vh; }
+.palette { width: min(620px, 94vw); max-height: 70vh; display: flex; flex-direction: column; border-radius: 16px; background: var(--surface); box-shadow: var(--shadow-lg); overflow: hidden; }
+.pal-input { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--sep); }
+.pal-input .icon { color: var(--icon); width: 18px; height: 18px; }
+.pal-input input { flex: 1; font-size: 16px; box-shadow: none; padding: 6px 0; background: transparent; }
+.pal-input input:focus { box-shadow: none; }
+.pal-input kbd, .pal-foot kbd { font: 11.5px/1 inherit; color: var(--text-3); padding: 3px 6px; border-radius: 5px; background: var(--fill); }
+.pal-list { overflow-y: auto; padding: 6px; }
+button.pal-item { width: 100%; height: 38px; gap: 10px; padding: 0 12px; border-radius: 9px; background: none; box-shadow: none; text-align: left; }
+button.pal-item .icon { color: var(--icon); }
+button.pal-item .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+button.pal-item.on, button.pal-item:hover:not(:disabled) { background: var(--selected); }
+button.pal-item.on .icon { color: var(--accent); }
+.pal-empty { padding: 14px 12px; }
+.pal-foot { display: flex; gap: 16px; padding: 8px 16px; border-top: 1px solid var(--sep); flex-wrap: wrap; }

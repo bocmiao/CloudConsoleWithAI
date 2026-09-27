@@ -20,6 +20,7 @@
   <!-- Sidebar -->
   <aside class="sidebar" id="side-nav" ref="navEl" tabindex="-1" :class="{open: navOpen}" aria-label="导航">
     <div class="app-title"><span class="app-mark"><miao-logo></miao-logo></span>Miao Panel</div>
+    <button class="side-search" @click="palette = true; closeNav()"><ui-icon name="search"></ui-icon><span class="grow">搜索</span><span class="side-kbd">{{ modKey }}K</span></button>
 
     <div class="side-section">
       <div class="side-item" :class="{active: tab === 'home'}" @click="go('home')"><ui-icon name="home"></ui-icon><span class="grow">总览</span></div>
@@ -337,7 +338,7 @@
       </div>
       </div>
     </div>
-    <button class="ai-fab" v-if="tab !== 'chat' && !aiPanel" @click="toggleAI(true)" title="问 AI（Ctrl+J / ⌘J）"><ui-icon name="sparkles"></ui-icon>问 AI</button>
+    <button class="ai-fab" v-if="tab !== 'chat' && !aiPanel" @click="toggleAI(true)" :title="'问 AI（' + modKey + 'J）'"><ui-icon name="sparkles"></ui-icon>问 AI</button>
 
     <!-- Websites on 1Panel -->
     <div class="tab-pane" v-if="seen.sites" v-show="tab === 'sites'">
@@ -555,6 +556,9 @@
       </div>
     </div>
   </div>
+
+  <command-palette :open="palette" :servers="servers" @close="palette = false" @go="go" @stats="openStats" @server="select" @terminal="openTerminal"
+    @files="id => openFiles(id)" @site="openSite" @ask="askAI" @add="openAdd" @newsite="newSite"></command-palette>
 
   <div class="toast" v-if="toast.text" :class="toast.kind" role="status">
     <ui-icon :name="toast.kind === 'error' ? 'alert' : 'check'" class="lg"></ui-icon><div>{{ toast.text }}</div>

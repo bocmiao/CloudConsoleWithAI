@@ -109,6 +109,7 @@ const ICONS = {
   shield: 'M12 3.5l7 2.7v5.3c0 4.2-2.9 7.6-7 9-4.1-1.4-7-4.8-7-9V6.2z',
   history: 'M4 12a8 8 0 1 0 2.4-5.7L4 8.5M4 4v4.5h4.5M12 8v4.2l2.8 1.8',
   expand: 'M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7',
+  search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4',
   gear: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.5a7.6 7.6 0 0 0-2.6 1.5l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 0 0 0 3l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.6 7.6 0 0 0 2.6-1.5l2.4 1 2-3.4z',
 };
 
@@ -2211,6 +2212,103 @@ const DnsPage = {
   </div>`,
 };
 
+// ⌘K / Ctrl+K: search servers, sites and pages, or type what to do
+// ("终端 blog", "新建网站"); anything else goes to the AI.
+const PALETTE_PAGES = [
+  { tab: 'home', label: '总览', icon: 'home', keys: 'home overview zonglan' },
+  { tab: 'chat', label: 'AI 助手', icon: 'sparkles', keys: 'ai chat' },
+  { tab: 'inbox', label: '待处理', icon: 'inbox', keys: 'inbox todo 建议 通知 清单 plans notices' },
+  { tab: 'sites', label: '网站管理', icon: 'window', keys: 'sites website 网站 1panel nginx https 反向代理 证书' },
+  { stats: ['logs', 'overview'], label: '访问统计', icon: 'chart', keys: 'stats visits pv uv 统计 流量' },
+  { stats: ['logs', 'security'], label: '安全', icon: 'shield', keys: 'security 封禁 ip 攻击' },
+  { tab: 'certs', label: '证书', icon: 'lock', keys: 'certs ssl https 证书 续签' },
+  { stats: ['eo'], label: 'EdgeOne', icon: 'bolt', keys: 'edgeone eo cdn 缓存 cache' },
+  { tab: 'dns', label: '解析', icon: 'globe', keys: 'dns dnspod 解析 域名' },
+  { tab: 'storage', label: '存储', icon: 'bucket', keys: 'cos storage bucket 存储桶' },
+  { tab: 'terminal', label: '终端', icon: 'prompt', keys: 'terminal ssh shell 终端' },
+  { tab: 'files', label: '文件', icon: 'folder', keys: 'files sftp 文件' },
+  { tab: 'logs', label: '记录', icon: 'history', keys: 'logs history 日志 记录 撤销' },
+  { tab: 'settings', label: '设置', icon: 'gear', keys: 'settings 设置 api key 模型' },
+];
+const CommandPalette = {
+  props: { open: Boolean, servers: { type: Array, default: () => [] } },
+  emits: ['close', 'go', 'stats', 'server', 'terminal', 'files', 'site', 'ask', 'add', 'newsite'],
+  setup(props, { emit }) {
+    const q = ref(''), pick = ref(0), input = ref(null), sites = ref([]);
+    let loaded = 0;
+    watch(() => props.open, v => {
+      if (!v) return;
+      q.value = ''; pick.value = 0;
+      nextTick(() => input.value && input.value.focus());
+      if (Date.now() - loaded > 60000) {
+        loaded = Date.now();
+        api('GET', '/api/websites').then(r => { sites.value = r.servers.flatMap(s => s.sites.map(x => ({ ...x, serverId: s.id, serverName: s.name }))); }).catch(() => {});
+      }
+    });
+    const norm = s => String(s || '').toLowerCase();
+    const items = computed(() => {
+      const raw = q.value.trim(), k = norm(raw);
+      const words = k.split(/\s+/).filter(Boolean);
+      const has = (...fields) => words.every(w => fields.some(f => norm(f).includes(w)));
+      const out = [];
+      // "终端 blog", "文件 blog": a tool on a server.
+      const tool = words[0] === '终端' || words[0] === 'ssh' ? 'terminal' : words[0] === '文件' ? 'files' : '';
+      const rest = tool ? words.slice(1) : words;
+      for (const s of props.servers) {
+        const hit = rest.every(w => norm(s.name).includes(w) || norm(s.host).includes(w));
+        if (tool && hit) out.push({ kind: tool, id: s.id, icon: tool === 'terminal' ? 'prompt' : 'folder', label: `${tool === 'terminal' ? '打开终端' : '管理文件'}：${s.name}`, note: s.host });
+        else if (!tool && (!k || has(s.name, s.host, '服务器 server'))) out.push({ kind: 'server', id: s.id, icon: 'server', label: s.name, note: '服务器 · ' + s.host });
+      }
+      if (!tool) {
+        for (const x of sites.value) if (k && has(x.domain, x.remark, x.serverName, '网站 site')) out.push({ kind: 'site', id: x.id, serverId: x.serverId, icon: 'window', label: x.domain, note: '网站 · ' + x.serverName });
+        for (const p of PALETTE_PAGES) if (!k || has(p.label, p.keys)) out.push({ kind: 'page', page: p, icon: p.icon, label: p.label, note: '页面' });
+        if (!k || has('新建网站 new site 建站')) out.push({ kind: 'newsite', icon: 'plus', label: '新建网站', note: '1Panel' });
+        if (!k || has('添加服务器 add server')) out.push({ kind: 'add', icon: 'plus', label: '添加服务器', note: '' });
+        if (raw) out.push({ kind: 'ask', icon: 'sparkles', label: '问 AI：' + raw, note: 'Enter', text: raw });
+      }
+      return out.slice(0, 40);
+    });
+    watch(items, () => { pick.value = 0; });
+    function run(it) {
+      if (!it) return;
+      emit('close');
+      if (it.kind === 'server') emit('server', it.id);
+      else if (it.kind === 'terminal') emit('terminal', it.id);
+      else if (it.kind === 'files') emit('files', it.id);
+      else if (it.kind === 'site') emit('site', it.serverId, it.id);
+      else if (it.kind === 'page') it.page.stats ? emit('stats', ...it.page.stats) : emit('go', it.page.tab);
+      else if (it.kind === 'ask') emit('ask', it.text);
+      else if (it.kind === 'add') emit('add');
+      else if (it.kind === 'newsite') emit('newsite');
+    }
+    function key(e) {
+      const n = items.value.length;
+      if (e.key === 'ArrowDown') { e.preventDefault(); pick.value = (pick.value + 1) % Math.max(n, 1); scroll(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); pick.value = (pick.value - 1 + n) % Math.max(n, 1); scroll(); }
+      else if (e.key === 'Enter') { e.preventDefault(); run(items.value[pick.value]); }
+      else if (e.key === 'Escape') { e.preventDefault(); emit('close'); }
+    }
+    const list = ref(null);
+    function scroll() { nextTick(() => { const el = list.value && list.value.querySelector('.pal-item.on'); if (el) el.scrollIntoView({ block: 'nearest' }); }); }
+    return { q, pick, input, items, run, key, list };
+  },
+  template: `
+  <div class="sheet-mask pal-mask" v-if="open" @click.self="$emit('close')">
+    <div class="palette" role="dialog" aria-label="搜索和跳转">
+      <div class="pal-input"><ui-icon name="search"></ui-icon>
+        <input ref="input" v-model="q" @keydown="key" placeholder="搜服务器、网站、页面，或者输入「终端 blog」" aria-label="搜索" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <kbd>Esc</kbd></div>
+      <div class="pal-list" ref="list" role="listbox">
+        <button v-for="(it, i) in items" :key="it.kind + (it.id || it.label)" class="pal-item" :class="{ on: i === pick }" role="option" :aria-selected="i === pick"
+          @click="run(it)" @mousemove="pick = i">
+          <ui-icon :name="it.icon"></ui-icon><span class="grow">{{ it.label }}</span><span class="small tertiary">{{ it.note }}</span></button>
+        <div class="pal-empty small secondary" v-if="!items.length">没有找到</div>
+      </div>
+      <div class="pal-foot small tertiary"><span>↑ ↓ 选择</span><span>Enter 打开</span><span>找不到的话，直接说想做什么，交给 AI</span></div>
+    </div>
+  </div>`,
+};
+
 // 总览: servers, sites, certificates and security at a glance, what needs
 // the user, and what changed lately. Built from what Miao Panel already
 // knows, so it opens at once.
@@ -2505,7 +2603,6 @@ const SitePage = {
       catch (e) { error.value = e.message; } finally { loading.value = false; }
     }
     watch(() => props.active, v => { if (v) { loadList(); if (open.value) loadDetail(); } }, { immediate: true });
-    watch(() => props.request, r => { if (r && r.serverId && r.siteId) openSite(r.serverId, r.siteId, r.section); });
 
     const panels = computed(() => list.value ? list.value.servers : []);
     const shownServers = computed(() => {
@@ -2737,6 +2834,11 @@ const SitePage = {
     });
     const eoDomains = computed(() => detail.value && detail.value.edgeone ? detail.value.edgeone.domains.map(d => d.name) : []);
     const onCachePlan = p => { plan.value = p; };
+    // Opening a site or the new-site sheet from elsewhere (search, the overview).
+    watch(() => props.request, r => {
+      if (r && r.serverId && r.siteId) openSite(r.serverId, r.siteId, r.section);
+      if (r && r.create) { open.value = null; detail.value = null; loadList().then(() => { if (usable.value.length) openCreate(); }); }
+    }, { immediate: true });
     const modeText = m => (HTTP_MODES.find(x => x.id === m) || { text: '已开启' }).text;
     const modeHint = m => (HTTP_MODES.find(x => x.id === m) || { hint: '' }).hint;
 
@@ -5705,6 +5807,7 @@ const app = createApp({
     function openFiles(serverId, path) { filesRequest.value = { serverId, path, at: Date.now() }; go('files'); }
     const sitesRequest = ref(null);
     function openSite(serverId, siteId, section) { sitesRequest.value = { serverId, siteId, section, at: Date.now() }; go('sites'); }
+    function newSite() { sitesRequest.value = { create: true, at: Date.now() }; go('sites'); }
     // 网站统计 shows the access logs or EdgeOne; remembered per viewer.
     const statsView = ref((() => { try { return localStorage.getItem('miao.statsView') || 'logs'; } catch { return 'logs'; } })());
     const statsSeen = reactive({ [statsView.value]: true });
@@ -5726,8 +5829,11 @@ const app = createApp({
       aiPanel.value = open == null ? !aiPanel.value : open;
       if (aiPanel.value) nextTick(() => { const el = document.querySelector('.ai-host.panel textarea'); if (el) el.focus(); });
     }
+    const palette = ref(false);
+    const modKey = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? '⌘' : 'Ctrl ';
     window.addEventListener('keydown', e => {
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === 'j' || e.key === 'J')) { e.preventDefault(); toggleAI(); }
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); palette.value = !palette.value; }
       if (e.key === 'Escape' && aiPanel.value && !document.querySelector('.sheet-mask')) aiPanel.value = false;
     });
     watch(tab, t => { if (t === 'chat') aiPanel.value = false; });
@@ -6128,8 +6234,8 @@ const app = createApp({
       spendText, plans, audit, logView, logFocus, loadAudit, openLog, showAdd, addForm, messages, draft, chatBusy, msgBox, suggestions,
       select, openAdd, addServer, testConn, discover, removeServer, askAbout, send, onEnter, newChat, applyPreset, saveAI, testAI,
       convs, showConvs, conversationId, openConv, deleteConv, relTime,
-      op, saveOnePanel, testOnePanel, tc, saveTencent, testTencent, clearTencent, freeCmd, setFree, seen, statsView, statsSeen, termRequest, openTerminal, filesRequest, openFiles, sitesRequest, openSite, unread, me, logout,
-      overview, loadOverview, inboxCount, inboxFocus, openInbox, aiPanel, toggleAI, pageContext, siteContext, serverDot, serverMeta, visitSection, statsRequest, openStats,
+      op, saveOnePanel, testOnePanel, tc, saveTencent, testTencent, clearTencent, freeCmd, setFree, seen, statsView, statsSeen, termRequest, openTerminal, filesRequest, openFiles, sitesRequest, openSite, newSite, unread, me, logout,
+      overview, loadOverview, inboxCount, inboxFocus, openInbox, aiPanel, toggleAI, pageContext, siteContext, palette, modKey, serverDot, serverMeta, visitSection, statsRequest, openStats,
       cloud, cloudList, cloudPick, pickCloud, askAI, daysTo, fmtBytes,
       memPct, rootDisk, envSub, dockerText, money, mb, meterClass, levelClass, levelIcon, levelName, riskName, adapterName,
       fmtTime, serverName, parseSteps, toolName, toolDetail, actorName, actionName, md, live, liveStatus, thinkTail, stopAnswer,
@@ -6149,6 +6255,7 @@ app.component('cert-page', CertPage);
 app.component('dns-page', DnsPage);
 app.component('site-page', SitePage);
 app.component('home-page', HomePage);
+app.component('command-palette', CommandPalette);
 app.component('inbox-page', InboxPage);
 app.component('eo-cache-form', EoCacheForm);
 app.component('storage-page', StoragePage);
