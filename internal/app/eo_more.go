@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/bocmiao/CloudConsoleWithAI/internal/actions"
+	"github.com/bocmiao/CloudConsoleWithAI/internal/onepanel"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/store"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/tencent"
 )
@@ -155,8 +156,29 @@ func (a *App) toolPanelWebsites(ctx context.Context, raw json.RawMessage) (strin
 		if len(sites) == 0 {
 			b.WriteString("1Panel 里还没有网站。\n")
 		}
+		https := map[uint]onepanel.SiteSummary{}
+		if list, err := op.SearchWebsites(ctx); err == nil {
+			for _, s := range list {
+				https[s.ID] = s
+			}
+		}
 		for _, s := range sites {
-			fmt.Fprintf(&b, "网站 %s 类型=%s 状态=%s 代理到=%s 目录=%s\n", s.PrimaryDomain, s.Type, s.Status, orDash(s.Proxy), orDash(s.SitePath))
+			fmt.Fprintf(&b, "网站 %s 类型=%s 状态=%s 代理到=%s 目录=%s", s.PrimaryDomain, s.Type, s.Status, orDash(s.Proxy), orDash(s.SitePath))
+			if x, ok := https[s.ID]; ok {
+				if strings.EqualFold(x.Protocol, "https") {
+					exp, d := certDays(x.SSLExpireDate)
+					fmt.Fprintf(&b, " HTTPS=开 证书到期=%s", orDash(exp))
+					if d != nil {
+						fmt.Fprintf(&b, "（剩 %d 天）", *d)
+					}
+				} else {
+					b.WriteString(" HTTPS=关")
+				}
+				if x.Remark != "" {
+					fmt.Fprintf(&b, " 备注=%s", x.Remark)
+				}
+			}
+			b.WriteString("\n")
 		}
 		if installed, aerr := op.InstalledApps(ctx); aerr != nil {
 			fmt.Fprintf(&b, "读取已安装应用失败：%v\n", aerr)

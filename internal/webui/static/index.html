@@ -23,6 +23,7 @@
 
     <div class="side-section">
       <div class="side-item" :class="{active: tab === 'chat'}" @click="go('chat')"><ui-icon name="sparkles"></ui-icon>AI 助手</div>
+      <div class="side-item" :class="{active: tab === 'sites'}" @click="go('sites')"><ui-icon name="window"></ui-icon>网站</div>
       <div class="side-item" :class="{active: tab === 'stats'}" @click="go('stats')"><ui-icon name="chart"></ui-icon>网站统计</div>
       <div class="side-item" :class="{active: tab === 'certs'}" @click="go('certs')"><ui-icon name="lock"></ui-icon>证书</div>
       <div class="side-item" :class="{active: tab === 'dns'}" @click="go('dns')"><ui-icon name="globe"></ui-icon>解析</div>
@@ -307,6 +308,14 @@
       </div>
       </div>
     </template>
+
+    <!-- Websites on 1Panel -->
+    <div class="tab-pane" v-if="seen.sites" v-show="tab === 'sites'">
+      <header class="toolbar"><h1>网站</h1></header>
+      <div class="page wide">
+        <site-page :servers="servers" :active="tab === 'sites'" :request="sitesRequest" @ask="askAI" @server="select"></site-page>
+      </div>
+    </div>
 
     <!-- Website statistics -->
     <!-- Kept alive once opened, so switching back shows it at once. -->

@@ -58,6 +58,7 @@ type App struct {
 	ipf       ipFacts
 	terms     terminals
 	fpool     filePool
+	ppool     panelPool
 	smsCount  smsCounter
 	eoReports eoReportCache
 	lines     dnsLines

@@ -47,6 +47,8 @@ type Fake struct {
 	Zones    []tencent.Zone
 	Domains  []*Domain
 	Calls    []string // "service Action"
+	// CacheTasks are the purge and prefetch requests EdgeOne was sent.
+	CacheTasks []map[string]any
 	// DeniedService makes every call to that service fail with a
 	// permission error.
 	DeniedService string

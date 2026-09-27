@@ -13,7 +13,7 @@ import (
 	"github.com/bocmiao/CloudConsoleWithAI/scripts"
 )
 
-const systemPrompt = `你是 Miao Panel（喵面板）里的服务器运维助手。用户可能完全看不懂命令，请用简体中文、通俗易懂地回答。
+const systemPrompt = `你是 Miao Panel 里的服务器运维助手。用户可能完全看不懂命令，请用简体中文、通俗易懂地回答。
 
 工作方式：
 1. 先用工具查数据，再下结论。只根据工具返回的数据回答，不要编造；数据不够就继续查，或者如实说明还不确定。
@@ -77,6 +77,14 @@ HTTPS 证书：先用 certificates 看现状。
 - 自动续签失败或快到期：cert.renew 立即续签；自动续签没开：cert.autorenew.set；
 - 证书 30 天内到期而且不会自动续签、已经过期、实际访问到的证书有问题，要主动提醒用户；
 - 宝塔和纯 Linux 服务器暂时不能自动申请证书，告诉用户在面板里申请，或者把网站接入 EdgeOne 用免费证书。
+
+1Panel 网站管理：用 panel_websites 看有哪些网站，panel_website 看一个网站的完整配置（域名、HTTPS 和证书、反向代理、伪静态、Nginx 配置文件、日志）。
+- 能执行：site.status（启动/停止）、site.domain.add / site.domain.remove（域名）、site.https.set（用 1Panel 里已有的证书开关 HTTPS、设置跳转、HSTS、HTTP/3；
+  没有合适的证书时用 cert.issue 申请，它会顺便开启 HTTPS）、site.proxy.set / site.proxy.remove / site.proxy.status（反向代理规则；反向代理网站的主规则叫 root）、
+  site.rewrite.set（伪静态）、site.conf.set（整个 Nginx 配置文件）、site.delete（删除网站：先备份，不能撤销，只在用户明确要求时使用）；
+- 优先用具体的操作。只有它们做不到时（比如开 gzip、限制上传大小、加响应头、限制访问 IP）才用 site.conf.set：先用 panel_website 读出完整配置，在原文基础上只改需要的几行，
+  content 写完整的新文件，保留 1Panel 生成的 include、listen、ssl 等内容。1Panel 会先用 nginx -t 检查，不通过自动恢复；
+- 1Panel 网站的配置不要用 free_command 改；宝塔和纯 Linux 服务器的网站还不能这样管理。
 
 AI 自由命令（free_command）：只有在没有合适的正式操作时才用，比如修改某个服务的配置文件、调整一个少见软件的参数。用户需要先在设置里开启。
 - 系统会先做静态检查，再在服务器上隔离试运行，再请另一个模型独立审查，都通过了才会显示给用户执行；执行前自动备份，失败自动恢复，还有 5 分钟保险；
@@ -201,9 +209,19 @@ func (a *App) tools() map[string]ai.Tool {
 		}, Run: a.toolTencentEOSecurity},
 		{Def: ai.ToolDef{
 			Name:        "panel_websites",
-			Description: "列出 1Panel 服务器上的网站（域名、类型、代理到哪里）和已安装的应用（状态、对外端口），用来判断要不要建站、反向代理到哪个应用。需要这台服务器配置了 1Panel 接口。",
+			Description: "列出 1Panel 服务器上的网站（域名、类型、运行状态、HTTPS 和证书到期、代理到哪里）和已安装的应用（状态、对外端口），用来判断要不要建站、反向代理到哪个应用。需要这台服务器配置了 1Panel 接口。",
 			Schema:      obj(map[string]any{"server_id": serverIDProp}, "server_id"),
 		}, Run: a.toolPanelWebsites},
+		{Def: ai.ToolDef{
+			Name: "panel_website",
+			Description: "查看 1Panel 上一个网站的详细配置（只读）：所有域名和端口、HTTPS 设置和证书（包含哪些域名、到期时间、自动续签）、可用的证书、反向代理规则、伪静态规则、" +
+				"完整的 Nginx 配置文件，以及访问日志和错误日志的最后几行。改网站用 site.* 操作：site.https.set、site.proxy.set、site.domain.add、site.conf.set（先读出完整配置再改）、site.rewrite.set 等。",
+			Schema: obj(map[string]any{
+				"server_id": serverIDProp,
+				"website":   map[string]any{"type": "string", "description": "网站主域名"},
+				"log_lines": map[string]any{"type": "integer", "description": "日志看最后多少行，默认 30，最多 200"},
+			}, "server_id", "website"),
+		}, Run: a.toolPanelWebsite},
 		{Def: ai.ToolDef{
 			Name: "tencent_servers",
 			Description: "列出腾讯云账号下所有地域的轻量应用服务器和云服务器 CVM（只读）：实例 id、地域、状态、配置、公网 IP、到期时间和剩余天数、自动续费、" +

@@ -103,6 +103,7 @@ const ICONS = {
   cloud: 'M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 8.6 4.5 4.5 0 0 1 17.5 18z',
   bucket: 'M4 7h16l-1.6 12.2a2 2 0 0 1-2 1.8H7.6a2 2 0 0 1-2-1.8zM4 7c0-1.7 3.6-3 8-3s8 1.3 8 3',
   bell: 'M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15zM10 20.5a2 2 0 0 0 4 0',
+  window: 'M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM3 9h18M6 7h.01M9 7h.01',
 };
 
 // In Miao Panel's own window, links that would open a new window go to
@@ -301,6 +302,10 @@ const PlanCard = {
           <details class="free-more" v-else-if="s.free && s.free.script">
             <summary><ui-icon name="chevron"></ui-icon>查看 AI 写的命令</summary>
             <div class="diff"><div v-for="(l, j) in scriptLines(s.free.script)" :key="j">{{ l || ' ' }}</div></div>
+          </details>
+          <details class="free-more" v-for="d in s.diffs || []" :key="'c' + d.path" :open="!s.status">
+            <summary><ui-icon name="chevron"></ui-icon>{{ d.path }} 的改动</summary>
+            <div class="diff"><div v-for="(l, j) in diffLines(d.diff)" :key="j" :class="l.cls">{{ l.t }}</div></div>
           </details>
           <div class="small" v-if="status(s)" :class="'st-' + status(s).cls">{{ status(s).text }}<button v-if="s.logId" class="link small log-link" @click="openLog(s.logId)">查看执行日志</button></div>
           <div class="step-log" v-if="s.log && s.log.length"><div v-for="(l, j) in s.log" :key="j">{{ l }}</div></div>
@@ -2189,6 +2194,638 @@ const DnsPage = {
   </div>`,
 };
 
+// 网站: the sites on each 1Panel server, and one site's domains, HTTPS,
+// reverse proxies, rewrite rules, config file and logs. Every change is
+// a checklist, confirmed first and undoable.
+const SITE_TYPES = { static: '静态网站', proxy: '反向代理', deployment: '一键部署', runtime: '运行环境', subsite: '子网站', stream: 'TCP/UDP 代理' };
+const HTTP_MODES = [
+  { id: 'HTTPAlso', text: 'HTTP 和 HTTPS 都能访问', hint: '网站在 EdgeOne 后面、EdgeOne 用 HTTP 回源时选这个' },
+  { id: 'HTTPToHTTPS', text: 'HTTP 自动跳转到 HTTPS', hint: '最常用：访客输入 http:// 也会进入 https://' },
+  { id: 'HTTPSOnly', text: '只能用 HTTPS', hint: 'http:// 直接打不开' },
+];
+const REWRITE_TEMPLATES = ['default', 'wordpress', 'wp2', 'thinkphp', 'laravel5', 'yii2', 'typecho', 'typecho2', 'zblog', 'emlog', 'discuz', 'discuzx',
+  'discuzx2', 'discuzx3', 'dedecms', 'phpcms', 'phpwind', 'ecshop', 'shopex', 'shopwind', 'niushop', 'crmeb', 'maccms', 'seacms', 'empirecms', 'edusoho',
+  'sablog', 'dbshop', 'dabr', 'drupal', 'mvc'];
+const SITE_SECTIONS = [{ id: 'overview', text: '概览' }, { id: 'domains', text: '域名' }, { id: 'https', text: 'HTTPS' }, { id: 'proxy', text: '反向代理' },
+  { id: 'rewrite', text: '伪静态' }, { id: 'conf', text: '配置文件' }, { id: 'logs', text: '日志' }, { id: 'cache', text: 'EdgeOne 缓存' }];
+const siteMemo = new Map(); // "server/site" → detail, shown at once when coming back
+const certLeft = d => d == null ? '' : d > 0 ? `剩 ${d} 天` : d === 0 ? '今天到期' : '已过期';
+const certLevel = d => d == null ? 'off' : d < 0 ? 'crit' : d <= 15 ? 'warn' : 'good';
+
+// Clearing or warming EdgeOne's cache for some domains; used on a site and
+// on the EdgeOne statistics page.
+const EoCacheForm = {
+  props: { domains: { type: Array, default: () => [] }, serverId: { type: Number, default: 0 } },
+  emits: ['plan'],
+  setup(props, { emit }) {
+    const f = reactive({ domain: props.domains[0] || '', type: 'url', method: 'invalidate', targets: '', warm: '' });
+    watch(() => props.domains, v => { if (!v.includes(f.domain)) f.domain = v[0] || ''; });
+    const busy = ref(''), error = ref('');
+    const lines = s => s.split(/[\n,，\s]+/).map(x => x.trim()).filter(Boolean);
+    async function send(body) {
+      busy.value = body.op; error.value = '';
+      try { emit('plan', await api('POST', '/api/eo/cache/plan', { serverId: props.serverId, domain: f.domain, ...body })); }
+      catch (e) { error.value = e.message; } finally { busy.value = ''; }
+    }
+    const purge = () => send({ op: 'purge', type: f.type, method: f.method, targets: ['url', 'prefix'].includes(f.type) ? lines(f.targets) : [] });
+    const warm = () => send({ op: 'prefetch', targets: lines(f.warm) });
+    return { f, busy, error, purge, warm, lines };
+  },
+  template: `
+  <div class="eo-cache">
+    <div class="group">
+      <div class="row form" v-if="domains.length > 1"><span class="k">域名</span><span class="v">
+        <select v-model="f.domain" aria-label="域名"><option v-for="d in domains" :key="d" :value="d">{{ d }}</option></select></span></div>
+      <div class="row stack">
+        <b>清除缓存</b>
+        <div class="small secondary">网站更新了文件、改版后，让访客马上看到新内容。一般几分钟内在全部节点生效，不中断访问。</div>
+      </div>
+      <div class="row form"><span class="k">范围</span><span class="v"><span class="segmented wrap">
+        <button :class="{on: f.type === 'url'}" @click="f.type = 'url'">指定网址</button>
+        <button :class="{on: f.type === 'prefix'}" @click="f.type = 'prefix'">目录</button>
+        <button :class="{on: f.type === 'host'}" @click="f.type = 'host'">整个域名</button>
+        <button :class="{on: f.type === 'all'}" @click="f.type = 'all'">整个站点</button></span>
+        <span class="small secondary block" v-if="f.type === 'host'">清除 {{ f.domain }} 下的所有缓存，之后一段时间回源会变多。</span>
+        <span class="small secondary block" v-if="f.type === 'all'">清除 EdgeOne 站点里所有域名的缓存，源站压力会突然变大，尽量少用。</span></span></div>
+      <div class="row form" v-if="f.type === 'url' || f.type === 'prefix'"><span class="k">{{ f.type === 'url' ? '网址' : '目录' }}</span><span class="v">
+        <textarea v-model="f.targets" rows="4" spellcheck="false" autocapitalize="off" :aria-label="f.type === 'url' ? '要清除的网址' : '要清除的目录'"
+          :placeholder="f.type === 'url' ? '每行一个，例如\\n/css/app.css\\nhttps://' + (f.domain || 'example.com') + '/index.html' : '每行一个，例如\\n/static/\\n/uploads/2026/'"></textarea>
+        <span class="small secondary block">可以只写路径，会自动加上 https://{{ f.domain }}</span></span></div>
+      <div class="row form"><span class="k">方式</span><span class="v"><span class="segmented">
+        <button :class="{on: f.method === 'invalidate'}" @click="f.method = 'invalidate'">标记过期</button>
+        <button :class="{on: f.method === 'delete'}" @click="f.method = 'delete'">直接删除</button></span>
+        <span class="small secondary block">{{ f.method === 'invalidate' ? '节点下次访问时向源站确认有没有更新，没变就继续用（推荐）' : '下次访问一定重新从源站拉取' }}</span></span></div>
+      <div class="row"><span class="grow"></span>
+        <button class="primary" @click="purge" :disabled="!!busy || !f.domain || ((f.type === 'url' || f.type === 'prefix') && !lines(f.targets).length)">{{ busy === 'purge' ? '正在生成……' : '生成清除清单' }}</button></div>
+    </div>
+    <div class="group">
+      <div class="row stack">
+        <b>预热</b>
+        <div class="small secondary">提前把文件缓存到 EdgeOne 节点，访客第一次访问也很快。适合发布新版本、大文件或活动页面之前。</div>
+      </div>
+      <div class="row form"><span class="k">网址</span><span class="v">
+        <textarea v-model="f.warm" rows="4" spellcheck="false" autocapitalize="off" aria-label="要预热的网址" :placeholder="'每行一个，例如\\n/download/app.zip\\nhttps://' + (f.domain || 'example.com') + '/'"></textarea></span></div>
+      <div class="row"><span class="grow"></span>
+        <button class="primary" @click="warm" :disabled="!!busy || !f.domain || !lines(f.warm).length">{{ busy === 'prefetch' ? '正在生成……' : '生成预热清单' }}</button></div>
+    </div>
+    <div class="notice" v-if="error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ error }}</div>
+  </div>`,
+};
+
+const SitePage = {
+  props: { servers: { type: Array, default: () => [] }, active: Boolean, request: Object },
+  emits: ['ask', 'server'],
+  setup(props, { emit }) {
+    const list = ref(null), loading = ref(false), error = ref('');
+    const serverFilter = ref(pref('miao.siteServer', ''));
+    watch(serverFilter, v => setPref('miao.siteServer', v));
+    const q = ref('');
+    const open = ref(null); // { serverId, siteId }
+    const detail = ref(null), dLoading = ref(false), dError = ref('');
+    const section = ref('overview');
+    const plan = ref(null), planning = ref(false), formError = ref('');
+    let seq = 0;
+
+    async function loadList() {
+      loading.value = true; error.value = '';
+      try { list.value = await api('GET', '/api/websites'); }
+      catch (e) { error.value = e.message; } finally { loading.value = false; }
+    }
+    watch(() => props.active, v => { if (v) { loadList(); if (open.value) loadDetail(); } }, { immediate: true });
+    watch(() => props.request, r => { if (r && r.serverId && r.siteId) openSite(r.serverId, r.siteId, r.section); });
+
+    const panels = computed(() => list.value ? list.value.servers : []);
+    const shownServers = computed(() => {
+      const k = q.value.trim().toLowerCase();
+      return panels.value.filter(s => !serverFilter.value || String(s.id) === serverFilter.value).map(s => ({
+        ...s, shown: s.sites.filter(x => !k || [x.domain, x.remark || '', x.alias, x.app || '', x.runtime || ''].some(v => v.toLowerCase().includes(k))),
+      }));
+    });
+    const total = computed(() => panels.value.reduce((n, s) => n + s.sites.length, 0));
+    const usable = computed(() => panels.value.filter(s => !s.noPanel && !s.error));
+
+    function openSite(serverId, siteId, sec) {
+      open.value = { serverId, siteId };
+      section.value = sec || 'overview';
+      // What was being edited belongs to the site left behind.
+      Object.assign(rw, { content: '', base: '', hash: '' });
+      Object.assign(conf, { content: '', base: '', hash: '' });
+      Object.assign(domainForm, { domain: '', port: 80 });
+      Object.assign(log, { text: '', path: '', error: '' });
+      const memo = siteMemo.get(serverId + '/' + siteId);
+      detail.value = memo || null;
+      if (memo) fill(memo);
+      loadDetail();
+    }
+    function back() { open.value = null; detail.value = null; loadList(); }
+    async function loadDetail() {
+      const o = open.value;
+      if (!o) return;
+      const n = ++seq;
+      dLoading.value = true; dError.value = '';
+      try {
+        const d = await api('GET', `/api/servers/${o.serverId}/websites/${o.siteId}`);
+        if (n !== seq) return;
+        siteMemo.set(o.serverId + '/' + o.siteId, d);
+        detail.value = d; fill(d);
+        if (section.value === 'logs') loadLog();
+      } catch (e) { if (n === seq) dError.value = e.message; }
+      finally { if (n === seq) dLoading.value = false; }
+    }
+
+    // The forms start from what the site has now.
+    const httpsForm = reactive({ enabled: false, cert: '', mode: 'HTTPAlso', hsts: false, http3: false });
+    const domainForm = reactive({ domain: '', port: 80 });
+    const rw = reactive({ content: '', base: '', hash: '', template: 'default', name: '' });
+    const conf = reactive({ content: '', base: '', hash: '', path: '' });
+    function fill(d) {
+      Object.assign(httpsForm, { enabled: d.https.enable, cert: d.https.cert || (d.certs[0] && d.certs[0].domain) || '', mode: d.https.mode || 'HTTPAlso',
+        hsts: d.https.hsts, http3: d.https.http3 });
+      // Text being edited is kept when the file itself has not changed.
+      if (rw.hash !== d.rewriteHash || rw.content === rw.base) Object.assign(rw, { content: d.rewrite, base: d.rewrite, hash: d.rewriteHash });
+      rw.name = d.rewriteName || 'default';
+      if (!REWRITE_TEMPLATES.includes(rw.template)) rw.template = 'default';
+      if (conf.hash !== d.confHash || conf.content === conf.base) Object.assign(conf, { content: d.conf, base: d.conf, hash: d.confHash });
+      conf.path = d.confPath;
+    }
+
+    const site = computed(() => detail.value && detail.value.site);
+    const sections = computed(() => SITE_SECTIONS.filter(s => s.id !== 'cache' || (detail.value && detail.value.edgeone)).filter(s =>
+      !(site.value && site.value.type === 'stream' && ['proxy', 'rewrite'].includes(s.id))));
+    watch(section, v => { if (v === 'logs' && !log.text) loadLog(); });
+
+    async function propose(body) {
+      planning.value = true; formError.value = '';
+      try {
+        const o = open.value || {};
+        plan.value = await api('POST', '/api/websites/plan', { serverId: o.serverId, site: site.value ? site.value.domain : '', ...body });
+        proxyEd.open = false; certForm.open = false; createForm.open = false;
+        return true;
+      } catch (e) {
+        if (proxyEd.open || certForm.open || createForm.open) formError.value = e.message; else notify(e.message, 'error');
+        return false;
+      } finally { planning.value = false; }
+    }
+    function planDone() { if (open.value) loadDetail(); loadList(); }
+    async function closePlan() {
+      const p = plan.value;
+      plan.value = null;
+      if (!p) return;
+      for (let i = 0; i < 200; i++) {
+        await new Promise(r => setTimeout(r, 3000));
+        try {
+          const now = await api('GET', `/api/plans/${p.id}`);
+          if (now.status === 'running') continue;
+          planDone();
+        } catch { /* checked again next time */ }
+        return;
+      }
+    }
+    const planServerName = computed(() => {
+      if (plan.value && plan.value.serverId === 0) return '腾讯云';
+      return detail.value ? detail.value.serverName : ((props.servers.find(s => s.id === createForm.serverId) || {}).name || '');
+    });
+
+    // Status and removal.
+    const setRunning = run => propose({ op: run ? 'start' : 'stop' });
+    function removeSite() {
+      if (!confirm(`确定要删除网站 ${site.value.domain} 吗？会先生成一份清单：删除前在 1Panel 里备份网站目录和配置，网站用的应用和数据库保留。删除后不能一键撤销。`)) return;
+      propose({ op: 'delete' });
+    }
+    function ask() {
+      const d = detail.value;
+      emit('ask', `帮我检查一下服务器「${d.serverName}」上的网站 ${d.site.domain}：配置、HTTPS 证书、反向代理和最近的错误日志有没有问题，需要修改的话给我一份清单。`);
+    }
+
+    // Domains.
+    const addDomain = () => propose({ op: 'domain_add', domain: domainForm.domain.trim(), port: Number(domainForm.port) || 80 });
+    const removeDomain = d => propose({ op: 'domain_remove', domain: d.domain, port: d.port });
+
+    // HTTPS.
+    const certOptions = computed(() => detail.value ? detail.value.certs.filter(c => c.ready) : []);
+    const httpsChanged = computed(() => {
+      const h = detail.value && detail.value.https;
+      if (!h) return false;
+      if (!httpsForm.enabled) return h.enable;
+      return !h.enable || httpsForm.cert !== h.cert || httpsForm.mode !== (h.mode || 'HTTPAlso') || httpsForm.hsts !== h.hsts || httpsForm.http3 !== h.http3;
+    });
+    // Only what was changed goes in the checklist; the rest stays as it is.
+    function saveHTTPS() {
+      const h = detail.value.https;
+      if (!httpsForm.enabled) return propose({ op: 'https', enabled: false });
+      const body = { op: 'https', enabled: true };
+      if (!h.enable || httpsForm.cert !== h.cert) body.cert = httpsForm.cert;
+      if (!h.enable || httpsForm.mode !== h.mode) body.httpMode = httpsForm.mode;
+      if (httpsForm.hsts !== h.hsts) body.hsts = httpsForm.hsts;
+      if (httpsForm.http3 !== h.http3) body.http3 = httpsForm.http3;
+      return propose(body);
+    }
+    const certForm = reactive({ open: false, picked: [], email: '', mode: 'HTTPAlso' });
+    const certNames = computed(() => {
+      if (!detail.value) return [];
+      const names = [detail.value.site.domain];
+      for (const d of detail.value.domains) if (!names.includes(d.domain) && !d.domain.startsWith('*.')) names.push(d.domain);
+      return names;
+    });
+    function openCert() {
+      formError.value = '';
+      Object.assign(certForm, { open: true, picked: [...certNames.value], email: '', mode: detail.value.edgeone ? 'HTTPAlso' : 'HTTPToHTTPS' });
+    }
+    function toggleCertName(n) {
+      const i = certForm.picked.indexOf(n);
+      if (i >= 0) certForm.picked.splice(i, 1); else certForm.picked.push(n);
+    }
+    const issueCert = () => {
+      const [first, ...rest] = certNames.value.filter(n => certForm.picked.includes(n));
+      propose({ op: 'cert', domain: first, otherDomains: rest, email: certForm.email.trim(), httpMode: certForm.mode });
+    };
+
+    // Reverse proxies.
+    const proxyEd = reactive({ open: false, editing: false, name: '', path: '/', target: '', hostMode: '$host', host: '' });
+    function openProxy(p) {
+      formError.value = '';
+      if (p) {
+        const hostMode = ['$host', '$proxy_host'].includes(p.host) ? p.host : 'custom';
+        Object.assign(proxyEd, { open: true, editing: true, name: p.name, path: p.path, target: p.target, hostMode, host: hostMode === 'custom' ? p.host : '' });
+      } else {
+        const used = new Set(detail.value.proxies.map(x => x.name));
+        let name = 'proxy';
+        for (let i = 2; used.has(name); i++) name = 'proxy' + i;
+        Object.assign(proxyEd, { open: true, editing: false, name, path: '/', target: 'http://127.0.0.1:', hostMode: '$host', host: '' });
+      }
+    }
+    const saveProxy = () => propose({ op: 'proxy_set', name: proxyEd.name.trim(), path: proxyEd.path.trim() || '/', target: proxyEd.target.trim(),
+      host: proxyEd.hostMode === 'custom' ? proxyEd.host.trim() : proxyEd.hostMode });
+    const toggleProxy = p => propose({ op: p.enabled ? 'proxy_off' : 'proxy_on', name: p.name });
+    function removeProxy(p) {
+      if (!confirm(`删除反向代理规则 ${p.name}（${p.path} → ${p.target}）？会先生成清单，确认后才删除，可以撤销。`)) return;
+      propose({ op: 'proxy_remove', name: p.name });
+    }
+
+    // Rewrite rules and the config file.
+    const rwDirty = computed(() => rw.content !== rw.base);
+    const confDirty = computed(() => conf.content !== conf.base);
+    async function useTemplate() {
+      if (rwDirty.value && !confirm('套用模板会替换现在编辑框里的内容，继续吗？')) return;
+      try {
+        const o = open.value;
+        const r = await api('GET', `/api/servers/${o.serverId}/websites/${o.siteId}/rewrite?name=${encodeURIComponent(rw.template)}`);
+        rw.content = r.content;
+      } catch (e) { notify(e.message, 'error'); }
+    }
+    const saveRewrite = () => propose({ op: 'rewrite', content: rw.content, template: rw.template !== 'default' && rw.content !== rw.base ? rw.template : '', baseHash: rw.hash });
+    const saveConf = () => propose({ op: 'conf', content: conf.content, baseHash: conf.hash });
+    function onConfKey(e) {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); if (confDirty.value && !planning.value) saveConf(); }
+      if (e.key === 'Tab' && !e.shiftKey) { // indent instead of leaving the box
+        e.preventDefault();
+        const t = e.target, s = t.selectionStart;
+        t.setRangeText('    ', s, t.selectionEnd, 'end');
+        t.dispatchEvent(new Event('input'));
+      }
+    }
+
+    // Logs.
+    const log = reactive({ kind: 'access', lines: 200, text: '', path: '', enabled: true, loading: false, error: '' });
+    async function loadLog() {
+      const o = open.value;
+      if (!o) return;
+      log.loading = true; log.error = '';
+      try {
+        const r = await api('GET', `/api/servers/${o.serverId}/websites/${o.siteId}/log?type=${log.kind}&lines=${log.lines}`);
+        Object.assign(log, { text: r.lines, path: r.path, enabled: r.enabled });
+      } catch (e) { log.error = e.message; } finally { log.loading = false; }
+    }
+    watch(() => [log.kind, log.lines], loadLog);
+
+    // A new site.
+    const createForm = reactive({ open: false, serverId: 0, domain: '', type: 'proxy', proxy: 'http://127.0.0.1:' });
+    function openCreate() {
+      formError.value = '';
+      const s = usable.value.find(x => String(x.id) === serverFilter.value) || usable.value[0];
+      Object.assign(createForm, { open: true, serverId: s ? s.id : 0, domain: '', type: 'proxy', proxy: 'http://127.0.0.1:' });
+    }
+    async function create() {
+      planning.value = true; formError.value = '';
+      try {
+        plan.value = await api('POST', '/api/websites/plan', { serverId: createForm.serverId, op: 'create', domain: createForm.domain.trim(),
+          type: createForm.type, proxy: createForm.type === 'proxy' ? createForm.proxy.trim() : '' });
+        createForm.open = false;
+      } catch (e) { formError.value = e.message; } finally { planning.value = false; }
+    }
+    watch(() => JSON.stringify([proxyEd, certForm, createForm]), () => { if (!planning.value) formError.value = ''; });
+
+    const visitURL = computed(() => site.value ? (site.value.https ? 'https://' : 'http://') + site.value.domain : '');
+    const eoDomains = computed(() => detail.value && detail.value.edgeone ? detail.value.edgeone.domains.map(d => d.name) : []);
+    const onCachePlan = p => { plan.value = p; };
+    const modeText = m => (HTTP_MODES.find(x => x.id === m) || { text: '已开启' }).text;
+    const modeHint = m => (HTTP_MODES.find(x => x.id === m) || { hint: '' }).hint;
+
+    return { SITE_TYPES, HTTP_MODES, REWRITE_TEMPLATES, list, loading, error, serverFilter, q, panels, shownServers, total, usable, open, detail, dLoading, dError,
+      section, sections, site, plan, planning, formError, loadList, openSite, back, loadDetail, planDone, closePlan, planServerName, setRunning, removeSite, ask,
+      domainForm, addDomain, removeDomain, httpsForm, certOptions, httpsChanged, saveHTTPS, certForm, certNames, openCert, toggleCertName, issueCert,
+      proxyEd, openProxy, saveProxy, toggleProxy, removeProxy, rw, rwDirty, useTemplate, saveRewrite, conf, confDirty, saveConf, onConfKey,
+      log, loadLog, createForm, openCreate, create, visitURL, eoDomains, onCachePlan, modeText, modeHint, certLeft, certLevel };
+  },
+  template: `
+  <div class="site-page">
+    <!-- The list -->
+    <template v-if="!open">
+      <div class="page-head"><p>1Panel 上的网站：域名、HTTPS 证书、反向代理、伪静态和 Nginx 配置。每次修改都会先生成一份清单，确认后才执行，执行后可以撤销。</p></div>
+      <div class="stat-bar site-bar">
+        <label class="field" v-if="panels.length > 1"><span>服务器</span>
+          <select v-model="serverFilter" aria-label="服务器"><option value="">全部</option><option v-for="s in panels" :key="s.id" :value="String(s.id)">{{ s.name }}</option></select></label>
+        <label class="field site-search"><span>搜索</span>
+          <input type="search" v-model="q" placeholder="域名或备注" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" @keydown.esc="q = ''"></label>
+        <span class="grow"></span>
+        <span class="small tertiary" v-if="list">{{ total }} 个网站</span>
+        <button class="plain icon-only" @click="loadList" :disabled="loading" title="刷新" aria-label="刷新"><ui-icon name="refresh"></ui-icon></button>
+        <button class="primary" @click="openCreate" :disabled="!usable.length"><ui-icon name="plus"></ui-icon>新建网站</button>
+      </div>
+      <div class="notice" v-if="error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ error }}</div>
+      <div class="notice" v-if="loading && !list"><span class="spinner"></span>正在读取各台服务器上的网站……</div>
+      <div class="group" v-if="list && !panels.length">
+        <div class="row"><ui-icon name="info" class="lg" style="color: var(--accent)"></ui-icon><div class="grow">还没有装了 1Panel 的服务器。网站管理目前支持 1Panel：添加服务器并识别环境后，在服务器页面填写 1Panel 的 API 密钥。
+          <span class="small secondary block" v-if="list.others && list.others.length">{{ list.others.join('、') }} 的网站请先在面板里管理。</span></div></div>
+      </div>
+
+      <section class="site-server" v-for="s in shownServers" :key="s.id">
+        <div class="group-title site-server-title">
+          <ui-icon name="server"></ui-icon><span>{{ s.name }}</span>
+          <span class="tertiary small" v-if="s.openresty && s.openresty.installed">OpenResty {{ s.openresty.version }}<span class="sdot" :class="s.openresty.running ? 'good' : 'crit'"></span>{{ s.openresty.running ? '运行中' : '没有运行' }}</span>
+          <span class="tertiary small" v-else-if="s.openresty">没有安装 OpenResty</span>
+          <span v-if="loading" class="spinner inline"></span>
+        </div>
+        <div class="group" v-if="s.noPanel">
+          <div class="row"><ui-icon name="plug" class="lg" style="color: var(--accent)"></ui-icon>
+            <div class="grow">还没有配置 1Panel 接口<span class="small secondary block">在服务器页面填写 1Panel 的端口和 API 密钥，就能在这里管理网站。</span></div>
+            <button @click="$emit('server', s.id)">去填写</button></div>
+        </div>
+        <div class="group" v-else-if="s.error"><div class="row"><ui-icon name="alert" class="st-crit"></ui-icon><div class="grow secondary">{{ s.error }}</div>
+          <button class="plain" @click="loadList">重试</button></div></div>
+        <div class="group site-group" v-else>
+          <div class="table-wrap">
+            <table class="table site-table">
+              <thead><tr><th>网站</th><th>类型</th><th>状态</th><th>HTTPS</th><th><span class="sr-only">操作</span></th></tr></thead>
+              <tbody>
+                <tr v-for="x in s.shown" :key="x.id" class="site-row" @click="openSite(s.id, x.id)">
+                  <td><div class="site-name">{{ x.domain }}</div><div class="small tertiary" v-if="x.remark || x.app || x.runtime">{{ [x.remark, x.app, x.runtime].filter(Boolean).join(' · ') }}</div></td>
+                  <td class="nowrap">{{ SITE_TYPES[x.type] || x.type }}</td>
+                  <td class="nowrap"><span class="sdot" :class="x.running ? 'good' : 'off'"></span>{{ x.running ? '运行中' : '已停止' }}</td>
+                  <td class="nowrap"><template v-if="x.https"><span class="sdot" :class="certLevel(x.certDays)"></span>{{ certLeft(x.certDays) || '已开启' }}</template>
+                    <span class="tertiary" v-else>未开启</span></td>
+                  <td class="site-ops"><button class="link small" @click.stop="openSite(s.id, x.id)" :aria-label="'管理 ' + x.domain">管理</button></td>
+                </tr>
+                <tr v-if="!s.shown.length"><td colspan="5" class="secondary">{{ s.sites.length ? '没有符合条件的网站' : '这台服务器上还没有网站，点「新建网站」开始' }}</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </template>
+
+    <!-- One site -->
+    <template v-else>
+      <div class="site-head">
+        <button class="plain" @click="back"><ui-icon name="chevron" class="flip"></ui-icon>网站</button>
+        <template v-if="site">
+          <div class="grow site-title">
+            <h2>{{ site.domain }}</h2>
+            <div class="small secondary"><span class="sdot" :class="site.running ? 'good' : 'off'"></span>{{ site.running ? '运行中' : '已停止' }} · {{ SITE_TYPES[site.type] || site.type }} · {{ detail.serverName }}</div>
+          </div>
+          <div class="site-actions">
+            <a class="btn plain" :href="visitURL" target="_blank" rel="noopener"><ui-icon name="link"></ui-icon>访问</a>
+            <button @click="ask"><ui-icon name="sparkles"></ui-icon>让 AI 检查</button>
+            <button @click="setRunning(!site.running)" :disabled="planning">{{ site.running ? '停止' : '启动' }}</button>
+            <button class="plain destructive icon-only" @click="removeSite" :disabled="planning" title="删除网站" aria-label="删除网站"><ui-icon name="trash"></ui-icon></button>
+          </div>
+        </template>
+        <span class="grow" v-else></span>
+        <span class="spinner inline" v-if="dLoading"></span>
+      </div>
+      <div class="notice" v-if="dError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ dError }}<button class="plain" @click="loadDetail">重试</button></div>
+      <div class="notice" v-if="dLoading && !detail"><span class="spinner"></span>正在读取网站……</div>
+
+      <template v-if="detail">
+        <nav class="subtabs site-tabs" role="tablist" aria-label="网站设置">
+          <button v-for="s in sections" :key="s.id" role="tab" :aria-selected="section === s.id" :class="{on: section === s.id}" @click="section = s.id">{{ s.text }}</button>
+        </nav>
+        <div class="alerts" v-if="detail.problems && detail.problems.length">
+          <div class="alert al-warn" v-for="p in detail.problems" :key="p"><ui-icon name="warn"></ui-icon><span class="grow">{{ p }}</span></div>
+        </div>
+
+        <!-- Overview -->
+        <div v-if="section === 'overview'">
+          <div class="group">
+            <div class="row"><span class="k">状态</span><span class="v"><span class="sdot" :class="site.running ? 'good' : 'off'"></span>{{ site.running ? '运行中' : '已停止（访客看到「网站已停止」页面）' }}</span></div>
+            <div class="row"><span class="k">类型</span><span class="v">{{ SITE_TYPES[site.type] || site.type }}<template v-if="site.runtime"> · {{ site.runtime }}</template></span></div>
+            <div class="row" v-if="detail.proxy"><span class="k">后端</span><span class="v mono">{{ detail.proxy }}</span></div>
+            <div class="row"><span class="k">域名</span><span class="v">{{ detail.domains.map(d => d.port === 80 ? d.domain : d.domain + ':' + d.port).join('、') }}</span></div>
+            <div class="row"><span class="k">HTTPS</span><span class="v">
+              <template v-if="detail.https.enable"><span class="sdot" :class="certLevel(detail.https.days)"></span>{{ modeText(detail.https.mode) }} · 证书{{ certLeft(detail.https.days) }}{{ detail.https.autoRenew ? '，自动续签' : '' }}</template>
+              <template v-else>未开启</template></span></div>
+            <div class="row" v-if="detail.edgeone"><span class="k">EdgeOne</span><span class="v">{{ detail.edgeone.domains.map(d => d.name).join('、') }} 经过 EdgeOne（站点 {{ detail.edgeone.zone }}）</span></div>
+            <div class="row"><span class="k">网站目录</span><span class="v mono">{{ site.sitePath || '—' }}</span></div>
+            <div class="row"><span class="k">日志</span><span class="v">访问日志{{ detail.accessLog ? '开' : '关' }} · 错误日志{{ detail.errorLog ? '开' : '关' }}</span></div>
+          </div>
+          <div class="alerts">
+            <div class="alert al-warn" v-if="detail.https.enable && detail.https.uncovered && detail.https.uncovered.length"><ui-icon name="warn"></ui-icon>
+              <span class="grow">证书不包含 {{ detail.https.uncovered.join('、') }}，用 https:// 访问它们时浏览器会报证书错误。</span>
+              <button class="link small" @click="section = 'https'; openCert()">重新申请证书</button></div>
+            <div class="alert al-warn" v-if="detail.https.enable && detail.https.days != null && detail.https.days <= 15 && !detail.https.autoRenew"><ui-icon name="warn"></ui-icon>
+              <span class="grow">证书{{ certLeft(detail.https.days) }}，而且不会自动续签。</span><button class="link small" @click="section = 'https'">去处理</button></div>
+            <div class="alert al-info" v-if="!detail.https.enable"><ui-icon name="info"></ui-icon><span class="grow">这个网站还没有开启 HTTPS。</span>
+              <button class="link small" @click="section = 'https'">开启 HTTPS</button></div>
+          </div>
+        </div>
+
+        <!-- Domains -->
+        <div v-if="section === 'domains'">
+          <div class="group">
+            <div class="row" v-for="d in detail.domains" :key="d.id">
+              <span class="grow"><b>{{ d.domain }}</b><span class="small tertiary"> · 端口 {{ d.port }}</span><span class="tag" v-if="d.domain === site.domain">主域名</span></span>
+              <button class="link small danger" v-if="d.domain !== site.domain" @click="removeDomain(d)" :disabled="planning" :aria-label="'删除域名 ' + d.domain">删除</button>
+            </div>
+          </div>
+          <div class="group-title">添加域名</div>
+          <div class="group">
+            <div class="row form"><span class="k">域名</span><span class="v"><input v-model="domainForm.domain" placeholder="例如 www.example.com" aria-label="要添加的域名" autocapitalize="off" spellcheck="false" @keydown.enter="domainForm.domain.trim() && addDomain()"></span></div>
+            <div class="row form"><span class="k">端口</span><span class="v"><input type="number" min="1" max="65535" v-model.number="domainForm.port" aria-label="端口"><span class="small secondary block">一般用 80；HTTPS 会自动加上 443</span></span></div>
+            <div class="row"><span class="grow small secondary">域名还要解析到这台服务器（或 EdgeOne）才能访问。</span>
+              <button class="primary" @click="addDomain" :disabled="planning || !domainForm.domain.trim()">生成清单</button></div>
+          </div>
+        </div>
+
+        <!-- HTTPS -->
+        <div v-if="section === 'https'">
+          <div class="group" v-if="detail.https.enable">
+            <div class="row"><span class="k">证书</span><span class="v">{{ (detail.https.certNames || []).join('、') }}</span></div>
+            <div class="row"><span class="k">到期</span><span class="v"><span class="sdot" :class="certLevel(detail.https.days)"></span>{{ detail.https.expires ? detail.https.expires.slice(0, 10) : '—' }}（{{ certLeft(detail.https.days) }}）</span></div>
+            <div class="row"><span class="k">自动续签</span><span class="v">{{ detail.https.autoRenew ? '开（1Panel 在到期前自动续签）' : '关' }}</span></div>
+          </div>
+          <div class="group">
+            <label class="row form site-check"><input type="checkbox" v-model="httpsForm.enabled"><span class="grow"><b>开启 HTTPS</b>
+              <span class="small secondary block">用 1Panel 里的证书。</span></span></label>
+            <template v-if="httpsForm.enabled">
+              <div class="row form"><span class="k">证书</span><span class="v">
+                <select v-model="httpsForm.cert" aria-label="证书" v-if="certOptions.length">
+                  <option v-for="c in certOptions" :key="c.domain" :value="c.domain">{{ c.names.join('、') }}（{{ certLeft(c.days) }}{{ c.covers < detail.domains.length ? '，不包含全部域名' : '' }}）</option></select>
+                <span class="small secondary block" v-else>1Panel 里没有能用于这个网站的证书。</span>
+                <button class="link small" @click="openCert">申请免费证书（Let's Encrypt）</button></span></div>
+              <div class="row form"><span class="k">访问方式</span><span class="v">
+                <select v-model="httpsForm.mode" aria-label="访问方式"><option v-for="m in HTTP_MODES" :key="m.id" :value="m.id">{{ m.text }}</option></select>
+                <span class="small secondary block">{{ modeHint(httpsForm.mode) }}</span></span></div>
+              <label class="row form site-check"><input type="checkbox" v-model="httpsForm.hsts"><span class="grow">HSTS<span class="small secondary block">浏览器记住以后只用 HTTPS 访问。开启后，就算关掉 HTTPS，访问过的浏览器也会在一段时间内打不开网站。</span></span></label>
+              <label class="row form site-check"><input type="checkbox" v-model="httpsForm.http3"><span class="grow">HTTP/3<span class="small secondary block">更快的新协议，需要防火墙放行 UDP 443 端口。</span></span></label>
+            </template>
+            <div class="alert al-warn site-inline" v-if="detail.edgeone && httpsForm.enabled && httpsForm.mode !== 'HTTPAlso'"><ui-icon name="warn"></ui-icon>
+              <span class="grow">这个网站经过 EdgeOne。如果 EdgeOne 用 HTTP 回源，跳转到 HTTPS 会让访问陷入循环，请选「HTTP 和 HTTPS 都能访问」。</span></div>
+            <div class="row"><span class="grow"></span>
+              <button class="primary" @click="saveHTTPS" :disabled="planning || !httpsChanged || (httpsForm.enabled && !httpsForm.cert)">生成清单</button></div>
+          </div>
+        </div>
+
+        <!-- Reverse proxies -->
+        <div v-if="section === 'proxy'">
+          <div class="group">
+            <div class="row" v-if="!detail.proxies.length"><span class="grow secondary">还没有反向代理规则。反向代理可以把某个路径（比如 /api）转给另一个程序。</span></div>
+            <div class="row site-proxy" v-for="p in detail.proxies" :key="p.name" :class="{off: !p.enabled}">
+              <div class="grow">
+                <div><b class="mono">{{ p.path }}</b> → <span class="mono">{{ p.target }}</span></div>
+                <div class="small tertiary">规则 {{ p.name }}{{ p.name === 'root' && site.type === 'proxy' ? '（网站的主规则）' : '' }} · Host {{ p.host }}<template v-if="!p.enabled"> · 已停用</template><template v-if="p.cache"> · 开了缓存</template><template v-if="p.cors"> · 允许跨域</template></div>
+              </div>
+              <button class="link small" @click="openProxy(p)" v-if="p.enabled">修改</button>
+              <button class="link small" @click="toggleProxy(p)" :disabled="planning">{{ p.enabled ? '停用' : '启用' }}</button>
+              <button class="link small danger" @click="removeProxy(p)" :disabled="planning">删除</button>
+            </div>
+          </div>
+          <div class="site-toolbar"><button class="primary" @click="openProxy()"><ui-icon name="plus"></ui-icon>添加规则</button></div>
+        </div>
+
+        <!-- Rewrite rules -->
+        <div v-if="section === 'rewrite'">
+          <div class="stat-bar site-bar">
+            <label class="field"><span>模板</span><select v-model="rw.template" aria-label="伪静态模板"><option v-for="t in REWRITE_TEMPLATES" :key="t" :value="t">{{ t }}</option></select></label>
+            <button @click="useTemplate">套用模板</button>
+            <span class="grow small tertiary">现在用的是 {{ rw.name }}</span>
+            <button class="plain" @click="rw.content = rw.base" :disabled="!rwDirty">还原</button>
+            <button class="primary" @click="saveRewrite" :disabled="planning || !rwDirty">生成清单</button>
+          </div>
+          <textarea class="site-code" v-model="rw.content" rows="14" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off" aria-label="伪静态规则"
+            placeholder="还没有伪静态规则。可以选一个模板套用，或者直接写 Nginx 的 location / rewrite 规则"></textarea>
+          <p class="small secondary">WordPress、ThinkPHP 这类程序需要伪静态规则，链接才能正常打开。1Panel 会先检查规则，有错误会拒绝并保留原来的。</p>
+        </div>
+
+        <!-- Config file -->
+        <div v-if="section === 'conf'">
+          <div class="stat-bar site-bar">
+            <span class="grow small tertiary mono ellipsis" :title="conf.path">{{ conf.path }}</span>
+            <span class="tag dirty" v-if="confDirty">未保存</span>
+            <button class="plain" @click="conf.content = conf.base" :disabled="!confDirty">还原</button>
+            <button class="primary" @click="saveConf" :disabled="planning || !confDirty" title="Ctrl+S">生成清单</button>
+          </div>
+          <textarea class="site-code tall" v-model="conf.content" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off" aria-label="Nginx 配置文件" @keydown="onConfKey"></textarea>
+          <p class="small secondary">这是 1Panel 为这个网站生成的 Nginx 配置。保存前会显示改了哪几行；1Panel 会先用 nginx -t 检查，不通过会自动恢复原文件。HTTPS、反向代理这些用上面对应的页面改更稳妥。</p>
+        </div>
+
+        <!-- Logs -->
+        <div v-if="section === 'logs'">
+          <div class="stat-bar site-bar">
+            <span class="segmented"><button :class="{on: log.kind === 'access'}" @click="log.kind = 'access'">访问日志</button><button :class="{on: log.kind === 'error'}" @click="log.kind = 'error'">错误日志</button></span>
+            <label class="field"><span>最后</span><select v-model.number="log.lines" aria-label="行数"><option :value="100">100 行</option><option :value="200">200 行</option><option :value="500">500 行</option><option :value="2000">2000 行</option></select></label>
+            <span class="grow small tertiary mono ellipsis" :title="log.path">{{ log.path }}</span>
+            <button class="plain icon-only" @click="loadLog" :disabled="log.loading" title="刷新" aria-label="刷新"><ui-icon name="refresh"></ui-icon></button>
+          </div>
+          <div class="notice" v-if="log.error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ log.error }}</div>
+          <div class="notice" v-if="!log.enabled"><ui-icon name="info"></ui-icon>这个网站关掉了{{ log.kind === 'access' ? '访问' : '错误' }}日志，可以在 1Panel 里打开。</div>
+          <pre class="site-log" v-if="log.text">{{ log.text }}</pre>
+          <div class="notice" v-else-if="!log.loading && !log.error"><ui-icon name="info"></ui-icon>日志是空的。</div>
+          <div class="notice" v-if="log.loading && !log.text"><span class="spinner"></span>正在读取日志……</div>
+        </div>
+
+        <!-- EdgeOne cache -->
+        <div v-if="section === 'cache' && detail.edgeone">
+          <p class="small secondary site-lead">{{ eoDomains.join('、') }} 经过 EdgeOne。清除或预热会先生成清单，确认后提交给 EdgeOne。</p>
+          <eo-cache-form :domains="eoDomains" :server-id="detail.serverId" @plan="onCachePlan"></eo-cache-form>
+        </div>
+      </template>
+    </template>
+
+    <!-- New site -->
+    <div class="sheet-mask" v-if="createForm.open" @click.self="createForm.open = false">
+      <div class="sheet" role="dialog" aria-label="新建网站">
+        <h2>新建网站</h2>
+        <p>由 1Panel 的 OpenResty 提供服务。会先生成清单，确认后才创建，可以撤销。</p>
+        <div class="group">
+          <div class="row form" v-if="usable.length > 1"><span class="k">服务器</span><span class="v"><select v-model.number="createForm.serverId" aria-label="服务器">
+            <option v-for="s in usable" :key="s.id" :value="s.id">{{ s.name }}</option></select></span></div>
+          <div class="row form"><span class="k">域名</span><span class="v"><input v-model="createForm.domain" placeholder="例如 blog.example.com" aria-label="域名" autocapitalize="off" spellcheck="false"></span></div>
+          <div class="row form"><span class="k">类型</span><span class="v"><span class="segmented">
+            <button :class="{on: createForm.type === 'proxy'}" @click="createForm.type = 'proxy'">反向代理</button>
+            <button :class="{on: createForm.type === 'static'}" @click="createForm.type = 'static'">静态网站</button></span>
+            <span class="small secondary block">{{ createForm.type === 'proxy' ? '转给服务器上的一个程序，比如 Docker 里的 Halo、Node 应用' : '直接提供 HTML、图片等文件' }}</span></span></div>
+          <div class="row form" v-if="createForm.type === 'proxy'"><span class="k">后端地址</span><span class="v"><input v-model="createForm.proxy" placeholder="http://127.0.0.1:8090" aria-label="后端地址" autocapitalize="off" spellcheck="false"></span></div>
+        </div>
+        <div class="notice" v-if="formError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ formError }}</div>
+        <div class="sheet-actions"><button @click="createForm.open = false">取消</button>
+          <button class="primary" @click="create" :disabled="planning || !createForm.domain.trim() || !createForm.serverId">{{ planning ? '正在生成……' : '生成清单' }}</button></div>
+      </div>
+    </div>
+
+    <!-- A reverse proxy rule -->
+    <div class="sheet-mask" v-if="proxyEd.open" @click.self="proxyEd.open = false">
+      <div class="sheet" role="dialog" :aria-label="proxyEd.editing ? '修改反向代理' : '添加反向代理'">
+        <h2>{{ proxyEd.editing ? '修改反向代理' : '添加反向代理' }}</h2>
+        <p>访问这个网站的某个路径时，由 OpenResty 转给后端程序。</p>
+        <div class="group">
+          <div class="row form"><span class="k">路径</span><span class="v"><input v-model="proxyEd.path" placeholder="/api；/ 表示整个网站" aria-label="路径" autocapitalize="off" spellcheck="false"></span></div>
+          <div class="row form"><span class="k">后端地址</span><span class="v"><input v-model="proxyEd.target" placeholder="http://127.0.0.1:8080" aria-label="后端地址" autocapitalize="off" spellcheck="false"></span></div>
+          <div class="row form"><span class="k">Host</span><span class="v"><span class="segmented wrap">
+            <button :class="{on: proxyEd.hostMode === '$host'}" @click="proxyEd.hostMode = '$host'">访客访问的域名</button>
+            <button :class="{on: proxyEd.hostMode === '$proxy_host'}" @click="proxyEd.hostMode = '$proxy_host'">后端地址里的域名</button>
+            <button :class="{on: proxyEd.hostMode === 'custom'}" @click="proxyEd.hostMode = 'custom'">自定义</button></span>
+            <input v-if="proxyEd.hostMode === 'custom'" v-model="proxyEd.host" placeholder="例如 api.example.com" aria-label="自定义 Host" autocapitalize="off" spellcheck="false">
+            <span class="small secondary block">后端是自己服务器上的程序选第一个；代理到别人的网站（例如 CDN、对象存储）选第二个。</span></span></div>
+          <div class="row form"><span class="k">规则名称</span><span class="v"><input v-model="proxyEd.name" :disabled="proxyEd.editing" aria-label="规则名称" autocapitalize="off" spellcheck="false">
+            <span class="small secondary block">字母、数字、_ 和 -</span></span></div>
+        </div>
+        <div class="notice" v-if="formError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ formError }}</div>
+        <div class="sheet-actions"><button @click="proxyEd.open = false">取消</button>
+          <button class="primary" @click="saveProxy" :disabled="planning || !proxyEd.target.trim() || !proxyEd.name.trim()">{{ planning ? '正在生成……' : '生成清单' }}</button></div>
+      </div>
+    </div>
+
+    <!-- A free certificate -->
+    <div class="sheet-mask" v-if="certForm.open" @click.self="certForm.open = false">
+      <div class="sheet" role="dialog" aria-label="申请免费证书">
+        <h2>申请免费证书</h2>
+        <p>让 1Panel 向 Let's Encrypt 申请，签发后自动开启 HTTPS，到期前 1Panel 会自动续签。</p>
+        <div class="group">
+          <div class="row form"><span class="k">包含的域名</span><span class="v">
+            <label class="site-pick" v-for="n in certNames" :key="n"><input type="checkbox" :checked="certForm.picked.includes(n)" @change="toggleCertName(n)">{{ n }}</label></span></div>
+          <div class="row form"><span class="k">访问方式</span><span class="v">
+            <select v-model="certForm.mode" aria-label="访问方式"><option v-for="m in HTTP_MODES" :key="m.id" :value="m.id">{{ m.text }}</option></select></span></div>
+          <div class="row form"><span class="k">邮箱</span><span class="v"><input v-model="certForm.email" type="email" placeholder="1Panel 里还没有 Let's Encrypt 账号时需要" aria-label="邮箱" autocapitalize="off" spellcheck="false"></span></div>
+        </div>
+        <p class="small secondary">Let's Encrypt 会访问 http://域名/.well-known/ 来验证，所以这些域名要已经解析到这台服务器（经过 EdgeOne 也可以），80 端口要能访问。</p>
+        <div class="notice" v-if="formError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ formError }}</div>
+        <div class="sheet-actions"><button @click="certForm.open = false">取消</button>
+          <button class="primary" @click="issueCert" :disabled="planning || !certForm.picked.length">{{ planning ? '正在生成……' : '生成清单' }}</button></div>
+      </div>
+    </div>
+
+    <!-- The checklist to confirm -->
+    <div class="sheet-mask" v-if="plan" @click.self="closePlan">
+      <div class="sheet plan-sheet" role="dialog" aria-label="确认清单">
+        <h2>{{ plan.title }}</h2>
+        <p>勾选后点「执行」，确认后才会生效；执行后可以在这里或「建议」页撤销。</p>
+        <plan-card :plan="plan" :server-name="planServerName" @done="planDone"></plan-card>
+        <div class="sheet-actions"><button @click="closePlan">关闭</button></div>
+      </div>
+    </div>
+  </div>`,
+};
+
 // 存储: COS buckets — their files, their settings, and how exposed each
 // one is. Files change at once (and go in the log); a setting saved here
 // runs as a one-step checklist, so it can be undone.
@@ -3188,8 +3825,12 @@ const EoStats = {
     }
     const askIP = ip => emit('ask', `IP ${ip} 最近${rangeText.value}访问 ${domain.value} 很多，帮我看看它在做什么，是正常访问还是爬虫、攻击，要不要封禁？`);
     const timeText = t => new Date(t * 1000).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    // Clearing or warming the cache of the site shown.
+    const cacheOpen = ref(false), cachePlan = ref(null);
+    const onCachePlan = p => { cacheOpen.value = false; cachePlan.value = p; };
     return { sites, domain, hours, section, series, data, loading, refreshing, error, updatedAt, every, load, ask, askIP, hit, errors, change, pct,
-      alerts, chart, rows, rank, tops, pickDomain, rangeText, EO_RANGES, EO_SECTIONS, EO_SERIES, fmtCount, fmtBytes, fmtBits, timeText, clockText };
+      alerts, chart, rows, rank, tops, pickDomain, rangeText, EO_RANGES, EO_SECTIONS, EO_SERIES, fmtCount, fmtBytes, fmtBits, timeText, clockText,
+      cacheOpen, cachePlan, onCachePlan };
   },
   template: `
   <div class="vs">
@@ -3208,6 +3849,7 @@ const EoStats = {
           <span class="spinner inline" v-if="refreshing"></span>更新于 {{ clockText(updatedAt) }} · {{ every === 30000 ? '每 30 秒' : '每分钟' }}自动更新
         </span>
         <button class="plain" @click="load(true)" :disabled="loading || refreshing || !domain" title="重新读取"><ui-icon name="refresh"></ui-icon>刷新</button>
+        <button @click="cacheOpen = true" :disabled="!domain"><ui-icon name="bolt"></ui-icon>清除 / 预热缓存</button>
         <button class="primary" @click="ask" :disabled="!domain"><ui-icon name="sparkles"></ui-icon>让 AI 分析</button>
       </div>
       <p class="source-note small tertiary">腾讯云 EdgeOne 自己的统计，有几分钟延迟{{ hours === 1 ? '（最近 1 小时按分钟统计，最右边几分钟可能还在补齐）' : '' }}。访客地区、IP 行为和风险在「访问分析」里。</p>
@@ -3312,6 +3954,23 @@ const EoStats = {
         </div>
       </template>
     </template>
+
+    <div class="sheet-mask" v-if="cacheOpen" @click.self="cacheOpen = false">
+      <div class="sheet" role="dialog" aria-label="清除或预热缓存">
+        <h2>{{ domain }} 的缓存</h2>
+        <p>会先生成清单，确认后才提交给 EdgeOne。</p>
+        <eo-cache-form :domains="[domain]" @plan="onCachePlan"></eo-cache-form>
+        <div class="sheet-actions"><button @click="cacheOpen = false">关闭</button></div>
+      </div>
+    </div>
+    <div class="sheet-mask" v-if="cachePlan" @click.self="cachePlan = null">
+      <div class="sheet plan-sheet" role="dialog" aria-label="确认清单">
+        <h2>{{ cachePlan.title }}</h2>
+        <p>勾选后点「执行」，确认后才会提交。</p>
+        <plan-card :plan="cachePlan" server-name="腾讯云"></plan-card>
+        <div class="sheet-actions"><button @click="cachePlan = null">关闭</button></div>
+      </div>
+    </div>
   </div>`,
 };
 
@@ -4825,6 +5484,8 @@ const app = createApp({
     function openTerminal(serverId) { termRequest.value = { serverId, at: Date.now() }; go('terminal'); }
     const filesRequest = ref(null);
     function openFiles(serverId, path) { filesRequest.value = { serverId, path, at: Date.now() }; go('files'); }
+    const sitesRequest = ref(null);
+    function openSite(serverId, siteId, section) { sitesRequest.value = { serverId, siteId, section, at: Date.now() }; go('sites'); }
     // 网站统计 shows the access logs or EdgeOne; remembered per viewer.
     const statsView = ref((() => { try { return localStorage.getItem('miao.statsView') || 'logs'; } catch { return 'logs'; } })());
     const statsSeen = reactive({ [statsView.value]: true });
@@ -5197,7 +5858,7 @@ const app = createApp({
       spendText, plans, audit, logView, logFocus, loadAudit, openLog, showAdd, addForm, messages, draft, chatBusy, msgBox, suggestions,
       select, openAdd, addServer, testConn, discover, removeServer, askAbout, send, onEnter, newChat, applyPreset, saveAI, testAI,
       convs, showConvs, conversationId, openConv, deleteConv, relTime,
-      op, saveOnePanel, testOnePanel, tc, saveTencent, testTencent, clearTencent, freeCmd, setFree, seen, statsView, statsSeen, termRequest, openTerminal, filesRequest, openFiles, unread, me, logout,
+      op, saveOnePanel, testOnePanel, tc, saveTencent, testTencent, clearTencent, freeCmd, setFree, seen, statsView, statsSeen, termRequest, openTerminal, filesRequest, openFiles, sitesRequest, openSite, unread, me, logout,
       cloud, cloudList, cloudPick, pickCloud, askAI, daysTo, fmtBytes,
       memPct, rootDisk, envSub, dockerText, money, mb, meterClass, levelClass, levelIcon, levelName, riskName, adapterName,
       fmtTime, serverName, parseSteps, toolName, toolDetail, actorName, actionName, md, live, liveStatus, thinkTail, stopAnswer,
@@ -5215,6 +5876,8 @@ app.component('rank-list', RankList);
 app.component('terminal-page', TerminalPage);
 app.component('cert-page', CertPage);
 app.component('dns-page', DnsPage);
+app.component('site-page', SitePage);
+app.component('eo-cache-form', EoCacheForm);
 app.component('storage-page', StoragePage);
 app.component('file-page', FilePage);
 const UiIcon = {

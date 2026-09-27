@@ -822,6 +822,13 @@ func paramValue(p Param, raw any) (string, error) {
 			return "", fmt.Errorf("参数 %s 要是 JSON（最多 20000 个字符）", p.Name)
 		}
 		return s, nil
+	case "conf":
+		// A whole config file: lines and tabs, no other control characters.
+		s = strings.ReplaceAll(s, "\r\n", "\n")
+		if len(s) > 128<<10 || strings.ContainsFunc(s, func(r rune) bool { return (r < 0x20 && r != '\n' && r != '\t') || r == 0x7f }) {
+			return "", fmt.Errorf("参数 %s 太长（最多 128KB）或含有控制字符", p.Name)
+		}
+		return s, nil
 	case "text":
 		if len(s) > 512 || strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
 			return "", fmt.Errorf("参数 %s 太长或含有控制字符", p.Name)

@@ -263,8 +263,10 @@ func (f *Fake) serveMore(w http.ResponseWriter, service, action, region string, 
 		ok(w, map[string]any{"Data": []map[string]any{{"TypeKey": "zone-abc", "DetailData": []map[string]any{
 			{"Key": "/wp-login.php", "Value": 4200}, {"Key": "/", "Value": 900}, {"Key": "/feed", "Value": 120}}}}})
 	case "teo CreatePurgeTask":
+		f.CacheTasks = append(f.CacheTasks, in)
 		ok(w, map[string]any{"JobId": "purge-1"})
 	case "teo CreatePrefetchTask":
+		f.CacheTasks = append(f.CacheTasks, in)
 		ok(w, map[string]any{"JobId": "prefetch-1"})
 	case "teo ModifyAccelerationDomain":
 		for _, d := range f.Domains {

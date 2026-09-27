@@ -129,6 +129,12 @@ func (s *Server) routes() {
 	api("GET /api/visits/blocked", s.blockedIPs)
 	api("POST /api/visits/block", s.blockIPs)
 	api("POST /api/servers/{id}/realip", s.proposeRealIP)
+	api("GET /api/websites", s.websites)
+	api("GET /api/servers/{id}/websites/{sid}", s.website)
+	api("GET /api/servers/{id}/websites/{sid}/log", s.websiteLog)
+	api("GET /api/servers/{id}/websites/{sid}/rewrite", s.websiteRewrite)
+	big("POST /api/websites/plan", 1<<20, s.websitePlan)
+	api("POST /api/eo/cache/plan", s.eoCachePlan)
 	api("GET /api/dns/domains", s.dnsDomains)
 	api("GET /api/dns/records", s.dnsRecords)
 	api("GET /api/dns/lines", s.dnsLines)
@@ -283,6 +289,72 @@ func pathID(r *http.Request) (int64, error) {
 		return 0, &app.UserError{Msg: "服务器编号不对"}
 	}
 	return id, nil
+}
+
+func siteID(r *http.Request) (uint, error) {
+	n, err := strconv.ParseUint(r.PathValue("sid"), 10, 32)
+	if err != nil || n == 0 {
+		return 0, &app.UserError{Msg: "网站编号不对"}
+	}
+	return uint(n), nil
+}
+
+func (s *Server) websites(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.Websites(r.Context())
+}
+
+func (s *Server) website(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	sid, err := siteID(r)
+	if err != nil {
+		return nil, err
+	}
+	return s.app.Website(r.Context(), id, sid)
+}
+
+func (s *Server) websiteLog(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	sid, err := siteID(r)
+	if err != nil {
+		return nil, err
+	}
+	lines, _ := strconv.Atoi(r.URL.Query().Get("lines"))
+	return s.app.WebsiteLog(r.Context(), id, sid, r.URL.Query().Get("type"), lines)
+}
+
+func (s *Server) websiteRewrite(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	sid, err := siteID(r)
+	if err != nil {
+		return nil, err
+	}
+	text, err := s.app.WebsiteRewriteTemplate(r.Context(), id, sid, r.URL.Query().Get("name"))
+	return map[string]string{"content": text}, err
+}
+
+func (s *Server) websitePlan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req app.SiteRequest
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.ProposeWebsite(r.Context(), req)
+}
+
+func (s *Server) eoCachePlan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req app.EOCacheRequest
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.ProposeEOCache(r.Context(), req)
 }
 
 func (s *Server) info(_ http.ResponseWriter, _ *http.Request) (any, error) {

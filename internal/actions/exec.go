@@ -450,6 +450,26 @@ func applyPanel(ctx context.Context, env *Env, r Resolved, progress Progress) Ou
 			return applyCertRenew(ctx, env, r.Values, out, report)
 		case "cert_autorenew":
 			return applyCertAutoRenew(ctx, env, r.Values, out, report)
+		case "site_status":
+			return applySiteStatus(ctx, env, r.Values, out, report)
+		case "site_domain_add":
+			return applySiteDomainAdd(ctx, env, r.Values, out, report)
+		case "site_domain_remove":
+			return applySiteDomainRemove(ctx, env, r.Values, out, report)
+		case "site_https":
+			return applySiteHTTPS(ctx, env, r.Values, out, report)
+		case "site_proxy_set":
+			return applySiteProxySet(ctx, env, r.Values, out, report)
+		case "site_proxy_remove":
+			return applySiteProxyRemove(ctx, env, r.Values, out, report)
+		case "site_proxy_status":
+			return applySiteProxyStatus(ctx, env, r.Values, out, report)
+		case "site_conf":
+			return applySiteConf(ctx, env, r.Values, out, report)
+		case "site_rewrite":
+			return applySiteRewrite(ctx, env, r.Values, out, report)
+		case "site_delete":
+			return applySiteDelete(ctx, env, r.Values, out, report)
 		}
 		out.Status = StatusFailed
 		out.logf("未知的面板操作 %s", r.Impl.Panel)
@@ -636,6 +656,24 @@ func undoPanel(ctx context.Context, env *Env, r Resolved, undo map[string]string
 			err = undoCertIssue(ctx, env.OnePanel, undo)
 		case "cert_autorenew":
 			err = undoCertAutoRenew(ctx, env.OnePanel, undo)
+		case "site_status":
+			err = undoSiteStatus(ctx, env.OnePanel, undo)
+		case "site_domain_add":
+			err = undoSiteDomainAdd(ctx, env.OnePanel, undo)
+		case "site_domain_remove":
+			err = undoSiteDomainRemove(ctx, env.OnePanel, undo)
+		case "site_https":
+			err = undoSiteHTTPS(ctx, env.OnePanel, undo)
+		case "site_proxy_set":
+			err = undoSiteProxySet(ctx, env.OnePanel, undo)
+		case "site_proxy_remove":
+			err = undoSiteProxyRemove(ctx, env.OnePanel, undo)
+		case "site_proxy_status":
+			err = undoSiteProxyStatus(ctx, env.OnePanel, undo)
+		case "site_conf":
+			err = undoSiteConf(ctx, env.OnePanel, undo)
+		case "site_rewrite":
+			err = undoSiteRewrite(ctx, env.OnePanel, undo)
 		case "java_heap":
 			id, _ := strconv.ParseUint(undo["install_id"], 10, 64)
 			var cfg onepanel.ContainerConfig

@@ -536,7 +536,8 @@ button.th-sort:focus-visible { outline: 2px solid var(--accent); outline-offset:
 /* 网站统计 → 访问分析: filter bar, sections, cards */
 .page.wide { max-width: 1180px; }
 .stat-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); padding: 10px 14px; }
-.stat-bar .field { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); white-space: nowrap; }
+.stat-bar .field { display: inline-flex; flex-direction: row; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); white-space: nowrap; }
+.stat-bar .field input { height: 30px; font-size: 13px; }
 .stat-bar .field > span { flex: none; }
 .stat-bar select { min-width: 150px; max-width: 260px; }
 .stat-bar .grow { flex: 1; }
@@ -984,3 +985,57 @@ textarea.cos-policy { width: 100%; font-size: 12.5px; margin-bottom: 14px; min-h
 .notice .icon.st-warn { color: var(--warn); }
 .sms-provider { display: flex; margin: 4px 0 12px; }
 .sms-provider button { flex: 1; justify-content: center; }
+
+/* 网站: sites on 1Panel */
+.sdot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin: 0 6px 1px 0; vertical-align: middle; background: var(--text-3); }
+.sdot.good { background: var(--good); }
+.sdot.warn { background: var(--warn); }
+.sdot.crit { background: var(--crit); }
+.sdot.off { background: var(--text-3); opacity: .6; }
+.icon.flip { transform: rotate(180deg); }
+a.btn { font-size: 13px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; height: 30px; padding: 0 12px; border-radius: 7px;
+  background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+a.btn.plain { background: transparent; box-shadow: none; }
+a.btn:hover { background: var(--hover); }
+.site-bar { margin-bottom: 16px; }
+.site-bar .site-search input { width: 220px; }
+.site-server { margin-bottom: 22px; }
+.site-server-title { display: flex; align-items: center; gap: 8px; }
+.site-server-title .icon { width: 15px; height: 15px; color: var(--text-3); }
+.site-server-title .small { font-weight: 400; margin-left: 4px; }
+.site-server-title .small .sdot { margin-left: 8px; }
+.site-group { overflow: hidden; }
+.site-table { font-size: 13px; min-width: 620px; }
+.site-table td { vertical-align: middle; }
+.site-row { cursor: pointer; }
+.site-row:hover td { background: var(--hover); }
+.site-name { font-weight: 500; }
+.site-ops { text-align: right; }
+.site-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.site-head > button.plain { padding-left: 6px; }
+.site-title h2 { font-size: 22px; letter-spacing: -.02em; overflow-wrap: anywhere; }
+.site-title { flex: 1; min-width: 200px; }
+.site-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.site-tabs { margin-bottom: 16px; overflow-x: auto; scrollbar-width: none; }
+.site-tabs::-webkit-scrollbar { display: none; }
+.site-tabs button { flex: none; }
+.site-check { align-items: flex-start; gap: 10px; cursor: pointer; }
+.site-check input { margin-top: 3px; }
+.site-inline { margin: 0 12px 10px; }
+.site-proxy.off > .grow { opacity: .55; }
+.site-proxy button + button { margin-left: 4px; }
+.site-toolbar { display: flex; justify-content: flex-end; margin: -8px 0 20px; }
+.site-code { width: 100%; min-height: 260px; resize: vertical; font: 12.5px/1.6 ui-monospace, "SF Mono", Menlo, Consolas, monospace; tab-size: 4; padding: 12px 14px; }
+.site-code.tall { min-height: 56vh; }
+.site-log { margin: 0 0 20px; padding: 12px 14px; max-height: 62vh; overflow: auto; border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow);
+  font: 12px/1.55 ui-monospace, "SF Mono", Menlo, Consolas, monospace; white-space: pre; }
+.site-pick { display: flex; align-items: center; gap: 8px; padding: 2px 0; color: var(--text); }
+.site-lead { margin: 0 4px 12px; }
+.site-bar .ellipsis { min-width: 0; }
+.segmented.wrap { flex-wrap: wrap; }
+.eo-cache textarea { width: 100%; font: 12.5px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+@media (max-width: 720px) {
+  .site-bar .site-search { flex: 1 1 100%; } .site-bar .site-search input { width: 100%; }
+  .site-actions { width: 100%; }
+  .site-tabs { gap: 16px; }
+}
