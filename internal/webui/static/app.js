@@ -4136,22 +4136,52 @@ function uaText(ua) {
 
 // LoginApp is the whole page until someone logs in to the web edition
 // (or, the first time, makes the account with the setup code).
+const LOGIN_WAYS = [{ id: 'password', text: '密码' }, { id: 'email', text: '邮箱验证码' }, { id: 'sms', text: '短信验证码' }];
 const LoginApp = {
   props: { state: Object },
   setup(props) {
     const setup = ref(!!props.state.setup);
-    const f = reactive({ code: '', name: setup.value ? 'admin' : '', password: '', password2: '', totp: '' });
-    const needCode = ref(false), busy = ref(false), error = ref('');
-    const codeEl = ref(null);
+    const methods = props.state.methods || { password: true };
+    // The ways turned on, the one used last time first.
+    const ways = LOGIN_WAYS.filter(w => methods[w.id]);
+    const last = pref('miao.loginWay', '');
+    const way = ref(ways.some(w => w.id === last) ? last : (ways[0] || LOGIN_WAYS[0]).id);
+    const f = reactive({ code: '', name: setup.value ? 'admin' : '', password: '', password2: '', totp: '', target: '', loginCode: '' });
+    const needCode = ref(false), busy = ref(false), error = ref(''), note = ref('');
+    const codeEl = ref(null), loginCodeEl = ref(null);
+    const wait = ref(0), sending = ref(false);
+    let timer = null;
     const local = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
     const insecure = !props.state.https && !local && location.protocol !== 'https:';
+    watch(way, v => { setPref('miao.loginWay', v); needCode.value = false; error.value = ''; note.value = ''; f.totp = ''; });
+    function countdown() {
+      clearInterval(timer);
+      wait.value = 60;
+      timer = setInterval(() => { if (--wait.value <= 0) clearInterval(timer); }, 1000);
+    }
+    async function sendCode() {
+      error.value = ''; note.value = '';
+      if (!f.target.trim()) { error.value = way.value === 'email' ? '请填写邮箱' : '请填写手机号'; return; }
+      sending.value = true;
+      try {
+        const r = await api('POST', '/api/auth/code', { channel: way.value, target: f.target });
+        note.value = r.done;
+        countdown();
+        nextTick(() => loginCodeEl.value && loginCodeEl.value.focus());
+      } catch (e) {
+        error.value = e.message;
+        const m = e.message.match(/(\d+) 秒后/);
+        if (e.code === 'too_soon' && m) { countdown(); wait.value = Number(m[1]); }
+      } finally { sending.value = false; }
+    }
     async function submit() {
       error.value = '';
       if (setup.value && f.password !== f.password2) { error.value = '两次输入的密码不一样'; return; }
       busy.value = true;
       try {
         if (setup.value) await api('POST', '/api/auth/setup', { code: f.code, name: f.name, password: f.password });
-        else await api('POST', '/api/auth/login', { name: f.name, password: f.password, code: f.totp });
+        else if (way.value === 'password') await api('POST', '/api/auth/login', { name: f.name, password: f.password, code: f.totp });
+        else await api('POST', '/api/auth/login', { channel: way.value, target: f.target, loginCode: f.loginCode, code: f.totp });
         location.reload();
         return;
       } catch (e) {
@@ -4162,11 +4192,12 @@ const LoginApp = {
           error.value = e.message;
           if (e.code === 'setup_done') setup.value = false;
           if (e.code === 'bad_code') f.totp = '';
+          if (e.code === 'method_off') location.reload();
         }
       }
       busy.value = false;
     }
-    return { setup, f, needCode, busy, error, codeEl, insecure, submit };
+    return { setup, ways, way, f, needCode, busy, error, note, codeEl, loginCodeEl, wait, sending, insecure, sendCode, submit };
   },
   template: `
   <div class="login-page">
@@ -4176,12 +4207,26 @@ const LoginApp = {
       <h1>{{ setup ? '创建管理员账号' : '登录' }}</h1>
       <p class="small secondary" v-if="setup">第一次使用，需要服务器上的初始化码：运行 <code>docker logs miaopanel</code> 或 <code>journalctl -u miaopanel</code> 就能看到，也保存在数据目录的 <code>setup-code</code> 文件里。</p>
       <div class="login-warn" v-if="insecure" role="alert"><ui-icon name="warn"></ui-icon><span>现在是 HTTP 连接，密码会明文传输。请改用 HTTPS 访问（部署说明里有设置方法）。</span></div>
+      <div class="segmented login-ways" v-if="!setup && ways.length > 1" role="tablist" aria-label="登录方式">
+        <button type="button" v-for="w in ways" :key="w.id" role="tab" :aria-selected="way === w.id" :class="{ on: way === w.id }" @click="way = w.id">{{ w.text }}</button>
+      </div>
       <label class="field" v-if="setup"><span>初始化码</span><input v-model="f.code" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX" required></label>
-      <label class="field"><span>用户名</span><input v-model="f.name" autocomplete="username" autocapitalize="off" spellcheck="false" required :autofocus="!setup"></label>
-      <label class="field"><span>密码</span><input type="password" v-model="f.password" :autocomplete="setup ? 'new-password' : 'current-password'" required></label>
-      <label class="field" v-if="setup"><span>再输一次密码</span><input type="password" v-model="f.password2" autocomplete="new-password" required></label>
-      <p class="small tertiary" v-if="setup">至少 10 个字符。这个账号能管理你所有的服务器，请用一个别处没用过的密码，登录后建议开启两步验证。</p>
-      <label class="field" v-if="needCode"><span>验证码</span><input ref="codeEl" v-model="f.totp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="身份验证器 App 里的 6 位数字"></label>
+      <template v-if="setup || way === 'password'">
+        <label class="field"><span>{{ setup ? '用户名' : '账号' }}</span><input v-model="f.name" autocomplete="username" autocapitalize="off" spellcheck="false" required :autofocus="!setup"
+          :placeholder="setup ? '' : '用户名，或者绑定的邮箱、手机号'"></label>
+        <label class="field"><span>密码</span><input type="password" v-model="f.password" :autocomplete="setup ? 'new-password' : 'current-password'" required></label>
+        <label class="field" v-if="setup"><span>再输一次密码</span><input type="password" v-model="f.password2" autocomplete="new-password" required></label>
+        <p class="small tertiary" v-if="setup">至少 10 个字符。这个账号能管理你所有的服务器，请用一个别处没用过的密码，登录后建议开启两步验证。</p>
+      </template>
+      <template v-else>
+        <label class="field"><span>{{ way === 'email' ? '邮箱' : '手机号' }}</span>
+          <span class="login-send"><input v-model="f.target" :type="way === 'email' ? 'email' : 'tel'" :autocomplete="way === 'email' ? 'email' : 'tel'" autocapitalize="off" spellcheck="false" required
+            :placeholder="way === 'email' ? '绑定的邮箱' : '绑定的手机号'" :aria-label="way === 'email' ? '邮箱' : '手机号'">
+            <button type="button" @click="sendCode" :disabled="sending || wait > 0">{{ wait > 0 ? wait + ' 秒后重发' : sending ? '正在发送……' : '获取验证码' }}</button></span></label>
+        <label class="field"><span>{{ way === 'email' ? '邮件' : '短信' }}里的验证码</span><input ref="loginCodeEl" v-model="f.loginCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6 位数字" required></label>
+        <p class="small secondary" v-if="note" role="status">{{ note }}</p>
+      </template>
+      <label class="field" v-if="needCode"><span>两步验证码</span><input ref="codeEl" v-model="f.totp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="身份验证器 App 里的 6 位数字"></label>
       <div class="login-error" v-if="error" role="alert"><ui-icon name="alert"></ui-icon><span>{{ error }}</span></div>
       <button class="primary login-btn" type="submit" :disabled="busy">{{ busy ? '请稍候……' : setup ? '创建并登录' : '登录' }}</button>
     </form>
@@ -4240,7 +4285,130 @@ const AccountPanel = {
       location.reload();
     }
     const when = t => t ? new Date(t).toLocaleString('zh-CN', { hour12: false }) : '';
-    return { acct, pw, tf, savePassword, beginTOTP, enableTOTP, disableTOTP, endSession, logout, when, uaText };
+
+    // ---- Ways of logging in ----
+    const methodBusy = ref(false);
+    async function setMethod(k, on) {
+      if (acct.value.methods[k] === on) return;
+      const m = { ...acct.value.methods, [k]: on };
+      if (k === 'password' && !on && !confirm('关闭密码登录后，只能用验证码登录。\n收不到验证码时（比如邮箱或短信设置出了问题），可以在服务器上运行 miaopanel reset-password 重新开启密码登录。确定关闭吗？')) return;
+      methodBusy.value = true;
+      try {
+        Object.assign(acct.value, await api('PUT', '/api/account/methods', m));
+        notify(on ? '已开启' : '已关闭');
+      } catch (e) { notify(e.message, 'error'); } finally { methodBusy.value = false; }
+    }
+    const methodNote = k => {
+      const a = acct.value, name = { email: '邮箱', sms: '手机号' }[k], sender = { email: a.mail.configured, sms: a.sms.configured }[k];
+      const bound = { email: a.email, sms: a.phone }[k];
+      if (a.methods[k] && !a.active[k]) return `已开启，但${k === 'email' ? '发信邮箱' : '短信'}设置不完整，暂时不能用`;
+      if (a.methods[k]) return `已开启：用绑定的${name}收验证码登录`;
+      if (!sender && !bound) return `先在下面设置${k === 'email' ? '发信邮箱' : '腾讯云短信'}，再绑定${name}`;
+      if (!sender) return `先在下面设置${k === 'email' ? '发信邮箱' : '腾讯云短信'}`;
+      if (!bound) return `先在下面绑定${name}`;
+      return '未开启';
+    };
+    const canOn = k => { const a = acct.value; return k === 'email' ? a.mail.configured && !!a.email : a.sms.configured && !!a.phone; };
+
+    // Binding: the password, then a code sent to the new address.
+    const bd = reactive({ open: false, channel: 'email', mode: 'bind', step: 1, target: '', password: '', code: '', busy: false, error: '' });
+    function openBind(channel, mode) { Object.assign(bd, { open: true, channel, mode, step: 1, target: '', password: '', code: '', busy: false, error: '' }); }
+    async function bindSend() {
+      bd.busy = true; bd.error = '';
+      try {
+        await api('POST', '/api/account/bind', { channel: bd.channel, target: bd.target, password: bd.password });
+        bd.step = 2; bd.password = '';
+      } catch (e) { bd.error = e.message; } finally { bd.busy = false; }
+    }
+    async function bindConfirm() {
+      bd.busy = true; bd.error = '';
+      try {
+        const r = await api('PUT', '/api/account/bind', { channel: bd.channel, code: bd.code });
+        bd.open = false;
+        notify('已绑定 ' + r.target);
+        load();
+      } catch (e) { bd.error = e.message; } finally { bd.busy = false; }
+    }
+    async function unbind() {
+      bd.busy = true; bd.error = '';
+      try {
+        await api('POST', '/api/account/unbind', { channel: bd.channel, password: bd.password });
+        bd.open = false;
+        notify('已解绑');
+        load();
+      } catch (e) { bd.error = e.message; } finally { bd.busy = false; }
+    }
+
+    // Where codes are sent from.
+    const ml = reactive({ open: false, preset: '', host: '', port: 465, security: 'ssl', username: '', smtpPassword: '', from: '', fromName: 'Miao Panel', to: '', current: '', busy: '', error: '', ok: '' });
+    function openMail() {
+      const m = acct.value.mail;
+      Object.assign(ml, { open: true, preset: '', host: m.host || '', port: m.port || 465, security: m.security || 'ssl', username: m.username || '', smtpPassword: '',
+        from: m.from || '', fromName: m.fromName || 'Miao Panel', to: acct.value.email || m.username || '', current: '', busy: '', error: '', ok: '' });
+      const p = acct.value.presets.find(x => x.host === ml.host);
+      ml.preset = p ? p.id : '';
+    }
+    const mailPreset = computed(() => acct.value ? acct.value.presets.find(x => x.id === ml.preset) : null);
+    watch(() => ml.preset, id => {
+      const p = acct.value && acct.value.presets.find(x => x.id === id);
+      if (p) Object.assign(ml, { host: p.host, port: p.port, security: p.security });
+    });
+    const mailBody = () => ({ host: ml.host, port: Number(ml.port), security: ml.security, username: ml.username.trim(), smtpPassword: ml.smtpPassword,
+      from: ml.from.trim(), fromName: ml.fromName.trim() });
+    async function mailRun(kind) {
+      ml.busy = kind; ml.error = ''; ml.ok = '';
+      try {
+        if (kind === 'test') {
+          await api('POST', '/api/account/mail/test', { ...mailBody(), to: ml.to });
+          ml.ok = '测试邮件已发出，去 ' + ml.to + ' 看看（可能在垃圾邮件里）';
+        } else if (kind === 'save') {
+          acct.value.mail = await api('PUT', '/api/account/mail', { ...mailBody(), current: ml.current });
+          ml.open = false; notify('发信设置已保存'); load();
+        } else {
+          if (!confirm('清除发信设置？邮箱验证码登录会停用。')) { ml.busy = ''; return; }
+          await api('POST', '/api/account/mail/clear', { current: ml.current });
+          ml.open = false; notify('已清除'); load();
+        }
+      } catch (e) { ml.error = e.message; } finally { ml.busy = ''; }
+    }
+    const sm = reactive({ open: false, appId: '', sign: '', template: '', params: 2, region: 'ap-guangzhou', dailyLimit: 30, phone: '', current: '', busy: '', error: '', ok: '' });
+    function openSMS() {
+      const v = acct.value.sms;
+      Object.assign(sm, { open: true, appId: v.appId || '', sign: v.sign || '', template: v.template || '', params: v.params || 2, region: v.region || 'ap-guangzhou',
+        dailyLimit: v.dailyLimit || 30, phone: acct.value.phone || '', current: '', busy: '', error: '', ok: '' });
+    }
+    const smsBody = () => ({ appId: sm.appId.trim(), sign: sm.sign.trim(), template: sm.template.trim(), params: Number(sm.params), region: sm.region, dailyLimit: Number(sm.dailyLimit) });
+    async function smsRun(kind) {
+      sm.busy = kind; sm.error = ''; sm.ok = '';
+      try {
+        if (kind === 'test') {
+          await api('POST', '/api/account/sms/test', { ...smsBody(), phone: sm.phone });
+          sm.ok = '测试短信已发出（验证码 123456），看看手机收到没有';
+        } else if (kind === 'save') {
+          await api('PUT', '/api/account/sms', { ...smsBody(), current: sm.current });
+          sm.open = false; notify('短信设置已保存'); load();
+        } else {
+          if (!confirm('清除短信设置？短信验证码登录会停用。')) { sm.busy = ''; return; }
+          await api('POST', '/api/account/sms/clear', { current: sm.current });
+          sm.open = false; notify('已清除'); load();
+        }
+      } catch (e) { sm.error = e.message; } finally { sm.busy = ''; }
+    }
+    const mailText = computed(() => {
+      const m = acct.value && acct.value.mail;
+      return m && m.configured ? `${m.from || m.username}（${m.host}:${m.port}）` : '还没有设置';
+    });
+    const smsText = computed(() => {
+      const v = acct.value && acct.value.sms;
+      if (!v) return '';
+      if (!v.keys) return '要先在上面填写腾讯云密钥';
+      return v.configured ? `签名【${v.sign}】，模板 ${v.template}，今天已发 ${v.sentToday} / ${v.dailyLimit} 条` : '还没有设置';
+    });
+    const SMS_REGIONS = [['ap-guangzhou', '广州'], ['ap-beijing', '北京'], ['ap-nanjing', '南京']];
+
+    return { acct, pw, tf, savePassword, beginTOTP, enableTOTP, disableTOTP, endSession, logout, when, uaText,
+      methodBusy, setMethod, methodNote, canOn, bd, openBind, bindSend, bindConfirm, unbind,
+      ml, openMail, mailPreset, mailRun, sm, openSMS, smsRun, mailText, smsText, SMS_REGIONS };
   },
   template: `
   <div class="group" v-if="acct">
@@ -4275,6 +4443,120 @@ const AccountPanel = {
       <button class="plain small" @click="tf.off = false; tf.error = ''">取消</button></div>
     <div class="row small st-crit" v-if="tf.off && tf.error">{{ tf.error }}</div>
   </div>
+  <template v-if="acct">
+  <div class="group-title">登录方式</div>
+  <div class="group login-methods">
+    <div class="row"><div class="grow"><div>密码</div><div class="small tertiary">{{ acct.methods.password ? '账号（用户名或绑定的邮箱、手机号）加密码' : '已关闭：只能用验证码登录' }}</div></div>
+      <span class="segmented" role="radiogroup" aria-label="密码登录"><button role="radio" :aria-checked="!acct.methods.password" :class="{ on: !acct.methods.password }" @click="setMethod('password', false)" :disabled="methodBusy">关闭</button>
+        <button role="radio" :aria-checked="acct.methods.password" :class="{ on: acct.methods.password }" @click="setMethod('password', true)" :disabled="methodBusy">开启</button></span></div>
+    <div class="row" v-for="k in ['email', 'sms']" :key="k"><div class="grow"><div>{{ k === 'email' ? '邮箱验证码' : '短信验证码' }}</div>
+        <div class="small" :class="acct.methods[k] && !acct.active[k] ? 'st-warn' : 'tertiary'">{{ methodNote(k) }}</div></div>
+      <span class="segmented" role="radiogroup" :aria-label="k === 'email' ? '邮箱验证码登录' : '短信验证码登录'"><button role="radio" :aria-checked="!acct.methods[k]" :class="{ on: !acct.methods[k] }" @click="setMethod(k, false)" :disabled="methodBusy">关闭</button>
+        <button role="radio" :aria-checked="acct.methods[k]" :class="{ on: acct.methods[k] }" @click="setMethod(k, true)" :disabled="methodBusy || (!acct.methods[k] && !canOn(k))">开启</button></span></div>
+    <div class="row small tertiary">验证码 10 分钟内有效、只能用一次；开了两步验证的账号，用验证码登录后还要输入 App 里的验证码。</div>
+  </div>
+  <div class="group-title">邮箱和手机号</div>
+  <div class="group">
+    <div class="row"><span class="k">邮箱</span><span class="grow" :class="{ tertiary: !acct.email }">{{ acct.email || '未绑定' }}</span>
+      <button class="small" @click="openBind('email', 'bind')" :disabled="!acct.mail.configured" :title="acct.mail.configured ? '' : '先设置发信邮箱'">{{ acct.email ? '更换' : '绑定' }}</button>
+      <button class="small plain" v-if="acct.email" @click="openBind('email', 'unbind')">解绑</button></div>
+    <div class="row"><span class="k">手机号</span><span class="grow" :class="{ tertiary: !acct.phone }">{{ acct.phone || '未绑定' }}</span>
+      <button class="small" @click="openBind('sms', 'bind')" :disabled="!acct.sms.configured" :title="acct.sms.configured ? '' : '先设置腾讯云短信'">{{ acct.phone ? '更换' : '绑定' }}</button>
+      <button class="small plain" v-if="acct.phone" @click="openBind('sms', 'unbind')">解绑</button></div>
+  </div>
+  <div class="group-title">验证码从哪里发出</div>
+  <div class="group">
+    <div class="row"><div class="grow"><div>发信邮箱（SMTP）</div><div class="small tertiary">{{ mailText }}</div></div><button class="small" @click="openMail">设置</button></div>
+    <div class="row"><div class="grow"><div>腾讯云短信</div><div class="small tertiary">{{ smsText }}</div></div><button class="small" @click="openSMS" :disabled="!acct.sms.keys">设置</button></div>
+  </div>
+  </template>
+
+  <!-- Bind or unbind -->
+  <div class="sheet-mask" v-if="bd.open" @click.self="!bd.busy && (bd.open = false)">
+    <div class="sheet" role="dialog" :aria-label="(bd.mode === 'bind' ? '绑定' : '解绑') + (bd.channel === 'email' ? '邮箱' : '手机号')">
+      <h2>{{ bd.mode === 'bind' ? (bd.channel === 'email' ? (acct.email ? '更换邮箱' : '绑定邮箱') : (acct.phone ? '更换手机号' : '绑定手机号')) : (bd.channel === 'email' ? '解绑邮箱' : '解绑手机号') }}</h2>
+      <template v-if="bd.mode === 'unbind'">
+        <p>解绑后不能再用它收验证码登录{{ bd.channel === 'email' ? '，邮箱验证码登录会关闭' : '，短信验证码登录会关闭' }}。</p>
+        <div class="group"><div class="row form"><span class="k">账号密码</span><span class="v"><input type="password" v-model="bd.password" autocomplete="current-password" aria-label="账号密码" @keydown.enter="unbind"></span></div></div>
+      </template>
+      <template v-else-if="bd.step === 1">
+        <p>先输入账号密码，再往新的{{ bd.channel === 'email' ? '邮箱' : '手机号' }}发一个验证码，确认是你的。</p>
+        <div class="group">
+          <div class="row form"><span class="k">{{ bd.channel === 'email' ? '邮箱' : '手机号' }}</span><span class="v"><input v-model="bd.target" :type="bd.channel === 'email' ? 'email' : 'tel'" autocapitalize="off" spellcheck="false"
+            :placeholder="bd.channel === 'email' ? 'name@example.com' : '中国大陆号码直接填 11 位'" :aria-label="bd.channel === 'email' ? '邮箱' : '手机号'"></span></div>
+          <div class="row form"><span class="k">账号密码</span><span class="v"><input type="password" v-model="bd.password" autocomplete="current-password" aria-label="账号密码" @keydown.enter="bindSend"></span></div>
+        </div>
+      </template>
+      <template v-else>
+        <p>验证码已发到 {{ bd.target }}，10 分钟内有效。</p>
+        <div class="group"><div class="row form"><span class="k">验证码</span><span class="v"><input v-model="bd.code" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="6 位数字" aria-label="验证码" @keydown.enter="bindConfirm"></span></div></div>
+      </template>
+      <div class="notice" v-if="bd.error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ bd.error }}</div>
+      <div class="sheet-actions"><button @click="bd.open = false" :disabled="bd.busy">取消</button>
+        <button v-if="bd.mode === 'unbind'" class="primary danger" @click="unbind" :disabled="bd.busy || !bd.password">解绑</button>
+        <button v-else-if="bd.step === 1" class="primary" @click="bindSend" :disabled="bd.busy || !bd.target.trim() || !bd.password">{{ bd.busy ? '正在发送……' : '发送验证码' }}</button>
+        <button v-else class="primary" @click="bindConfirm" :disabled="bd.busy || bd.code.length !== 6">确认绑定</button></div>
+    </div>
+  </div>
+
+  <!-- SMTP -->
+  <div class="sheet-mask" v-if="ml.open" @click.self="!ml.busy && (ml.open = false)">
+    <div class="sheet" role="dialog" aria-label="发信邮箱">
+      <h2>发信邮箱（SMTP）</h2>
+      <p>登录验证码从这个邮箱发出。建议用一个单独的邮箱，不要用收验证码的那个。</p>
+      <div class="group">
+        <div class="row form"><span class="k">邮箱服务商</span><span class="v"><select v-model="ml.preset" aria-label="邮箱服务商"><option value="">其他（自己填写）</option>
+          <option v-for="p in acct.presets" :key="p.id" :value="p.id">{{ p.name }}</option></select>
+          <span class="small secondary block" v-if="mailPreset">{{ mailPreset.note }}</span></span></div>
+        <div class="row form"><span class="k">SMTP 服务器</span><span class="v"><input v-model="ml.host" placeholder="smtp.qq.com" aria-label="SMTP 服务器" autocapitalize="off" spellcheck="false"></span></div>
+        <div class="row form"><span class="k">端口和加密</span><span class="v mail-port"><input type="number" v-model.number="ml.port" min="1" max="65535" aria-label="端口">
+          <span class="segmented"><button :class="{ on: ml.security === 'ssl' }" @click="ml.security = 'ssl'">SSL</button><button :class="{ on: ml.security === 'starttls' }" @click="ml.security = 'starttls'">STARTTLS</button><button :class="{ on: ml.security === 'none' }" @click="ml.security = 'none'">不加密</button></span></span></div>
+        <div class="row form"><span class="k">邮箱账号</span><span class="v"><input v-model="ml.username" placeholder="you@qq.com" autocomplete="off" aria-label="邮箱账号" autocapitalize="off" spellcheck="false"></span></div>
+        <div class="row form"><span class="k">密码或授权码</span><span class="v"><input type="password" v-model="ml.smtpPassword" autocomplete="new-password" :placeholder="acct.mail.hasPassword ? '已保存，不修改就留空' : 'QQ、163 邮箱填授权码'" aria-label="密码或授权码"></span></div>
+        <div class="row form"><span class="k">发件人名称</span><span class="v"><input v-model="ml.fromName" placeholder="Miao Panel" aria-label="发件人名称"></span></div>
+        <div class="row form"><span class="k">发件地址</span><span class="v"><input v-model="ml.from" :placeholder="ml.username || '不填就用邮箱账号'" aria-label="发件地址" autocapitalize="off" spellcheck="false"></span></div>
+      </div>
+      <div class="group">
+        <div class="row form"><span class="k">发一封测试邮件</span><span class="v login-send"><input v-model="ml.to" type="email" placeholder="收件邮箱" aria-label="测试收件邮箱" autocapitalize="off" spellcheck="false">
+          <button @click="mailRun('test')" :disabled="!!ml.busy || !ml.host || !ml.username || !ml.to">{{ ml.busy === 'test' ? '正在发送……' : '发送' }}</button></span></div>
+      </div>
+      <div class="group"><div class="row form"><span class="k">账号密码</span><span class="v"><input type="password" v-model="ml.current" autocomplete="current-password" placeholder="保存或清除要输入 Miao Panel 的登录密码" aria-label="账号密码"></span></div></div>
+      <div class="notice" v-if="ml.error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ ml.error }}</div>
+      <div class="notice" v-if="ml.ok"><ui-icon name="check" class="st-ok"></ui-icon>{{ ml.ok }}</div>
+      <div class="sheet-actions"><button class="plain destructive" v-if="acct.mail.configured" @click="mailRun('clear')" :disabled="!!ml.busy || !ml.current">清除设置</button><span class="grow"></span>
+        <button @click="ml.open = false" :disabled="!!ml.busy">取消</button>
+        <button class="primary" @click="mailRun('save')" :disabled="!!ml.busy || !ml.current || !ml.host || !ml.username">{{ ml.busy === 'save' ? '正在保存……' : '保存' }}</button></div>
+    </div>
+  </div>
+
+  <!-- Tencent Cloud SMS -->
+  <div class="sheet-mask" v-if="sm.open" @click.self="!sm.busy && (sm.open = false)">
+    <div class="sheet" role="dialog" aria-label="腾讯云短信">
+      <h2>腾讯云短信</h2>
+      <p>用上面填的腾讯云密钥发送（子账号要有 QcloudSMSFullAccess 权限）。先在腾讯云「短信」控制台创建应用、申请签名和「验证码」类正文模板，审核通过后填到这里。</p>
+      <div class="group">
+        <div class="row form"><span class="k">SDK AppID</span><span class="v"><input v-model="sm.appId" placeholder="1400000000" inputmode="numeric" aria-label="SDK AppID"><span class="small secondary block">「应用管理 → 应用列表」里</span></span></div>
+        <div class="row form"><span class="k">签名</span><span class="v"><input v-model="sm.sign" placeholder="喵面板" aria-label="签名"><span class="small secondary block">审核通过的签名内容，不带【】</span></span></div>
+        <div class="row form"><span class="k">模板 ID</span><span class="v"><input v-model="sm.template" placeholder="1234567" inputmode="numeric" aria-label="模板 ID"></span></div>
+        <div class="row form"><span class="k">模板里的变量</span><span class="v"><span class="segmented"><button :class="{ on: sm.params === 1 }" @click="sm.params = 1">1 个：验证码</button><button :class="{ on: sm.params === 2 }" @click="sm.params = 2">2 个：验证码、分钟数</button></span>
+          <span class="small secondary block">例如「您的验证码为：{1}，{2}分钟内有效，请勿泄露。」是 2 个</span></span></div>
+        <div class="row form"><span class="k">地域</span><span class="v"><select v-model="sm.region" aria-label="地域"><option v-for="r in SMS_REGIONS" :key="r[0]" :value="r[0]">{{ r[1] }}（{{ r[0] }}）</option></select></span></div>
+        <div class="row form"><span class="k">每天最多发</span><span class="v"><input type="number" v-model.number="sm.dailyLimit" min="1" max="500" aria-label="每天最多发多少条">
+          <span class="small secondary block">条。短信按条收费，防止被人刷</span></span></div>
+      </div>
+      <div class="group">
+        <div class="row form"><span class="k">发一条测试短信</span><span class="v login-send"><input v-model="sm.phone" type="tel" placeholder="手机号" aria-label="测试手机号">
+          <button @click="smsRun('test')" :disabled="!!sm.busy || !sm.appId || !sm.sign || !sm.template || !sm.phone">{{ sm.busy === 'test' ? '正在发送……' : '发送' }}</button></span></div>
+      </div>
+      <div class="group"><div class="row form"><span class="k">账号密码</span><span class="v"><input type="password" v-model="sm.current" autocomplete="current-password" placeholder="保存或清除要输入 Miao Panel 的登录密码" aria-label="账号密码"></span></div></div>
+      <div class="notice" v-if="sm.error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ sm.error }}</div>
+      <div class="notice" v-if="sm.ok"><ui-icon name="check" class="st-ok"></ui-icon>{{ sm.ok }}</div>
+      <div class="sheet-actions"><button class="plain destructive" v-if="acct.sms.configured" @click="smsRun('clear')" :disabled="!!sm.busy || !sm.current">清除设置</button><span class="grow"></span>
+        <button @click="sm.open = false" :disabled="!!sm.busy">取消</button>
+        <button class="primary" @click="smsRun('save')" :disabled="!!sm.busy || !sm.current || !sm.appId || !sm.sign || !sm.template">{{ sm.busy === 'save' ? '正在保存……' : '保存' }}</button></div>
+    </div>
+  </div>
+
   <div class="group-title" v-if="acct">登录的设备</div>
   <div class="group" v-if="acct">
     <div class="row" v-for="s in acct.sessions" :key="s.key">
@@ -4774,6 +5056,8 @@ const app = createApp({
       'plan.execute': '执行清单', 'plan.step': '执行步骤', 'plan.undo': '撤销步骤', 'exec.rollback': '回滚', 'onepanel.settings': '修改 1Panel 接口设置', 'settings.tencent': '修改腾讯云密钥',
       'terminal.open': '打开终端', 'terminal.close': '关闭终端', 'settings.autoblock': '修改自动封禁', 'settings.notices': '修改通知设置',
       'settings.webhook': '修改推送地址', 'visits.judge': 'AI 研判 IP',
+      'auth.setup': '创建管理员账号', 'auth.login': '登录', 'auth.fail': '登录失败', 'auth.password': '修改密码', 'auth.reset': '命令行重设密码', 'auth.totp': '两步验证',
+      'auth.methods': '修改登录方式', 'auth.bind': '绑定邮箱或手机号', 'auth.code': '发送登录验证码', 'settings.mail': '修改发信邮箱', 'settings.sms': '修改短信设置',
       'cos.upload': '上传到存储桶', 'cos.mkdir': '存储桶新建文件夹', 'cos.delete': '删除存储桶文件', 'cos.rename': '存储桶文件改名', 'cos.link': '生成存储桶文件链接' }[a] || a);
     // Unread notices, for the sidebar; checked every minute.
     const unread = ref(0);

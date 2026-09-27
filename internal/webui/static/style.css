@@ -965,3 +965,17 @@ textarea.cos-policy { width: 100%; font-size: 12.5px; margin-bottom: 14px; min-h
   .cos-days .v { grid-template-columns: minmax(0, 1fr); }
   .cos-uploads { left: 12px; right: 12px; width: auto; bottom: 12px; }
 }
+.login-ways { display: flex; }
+.login-ways button { flex: 1; height: 30px; }
+.login-send { display: flex; gap: 8px; }
+.login-send input { flex: 1; min-width: 0; }
+.login-send button { flex: none; height: 38px; }
+.login-methods .row > .segmented { flex: none; }
+.mail-port { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.mail-port input { width: 90px; }
+.sheet-actions .grow { flex: 1; }
+.login-ways button { justify-content: center; }
+/* Status colours win over a notice's default accent icon. */
+.notice .icon.st-crit { color: var(--crit); }
+.notice .icon.st-ok { color: var(--good); }
+.notice .icon.st-warn { color: var(--warn); }

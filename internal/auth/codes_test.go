@@ -105,7 +105,6 @@ func TestBindAndLoginByEmail(t *testing.T) {
 	if err := s.SetMethods(u.ID, Methods{Password: true, Email: true}); err != nil {
 		t.Fatal(err)
 	}
-	c.add(sendGap) // the binding code went to the same address
 	if err := s.SendLoginCode(ctx, "2.2.2.2", "email", "owner@example.com"); err != nil {
 		t.Fatal(err)
 	}

@@ -206,7 +206,9 @@ func newCode() string {
 }
 
 // allowSend applies the sending limits; it counts the send when allowed.
-func (s *Service) allowSend(ip, target string) error {
+// The minute between codes is per purpose (a binding code does not hold
+// up the first login); the day's count is per email or phone.
+func (s *Service) allowSend(ip, purpose, target string) error {
 	now := s.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -223,6 +225,7 @@ func (s *Service) allowSend(ip, target string) error {
 		return out
 	}
 	byTarget := keep(s.sends["t|"+target], 24*time.Hour)
+	gap := keep(s.sends["gap|"+purpose+"|"+target], sendGap)
 	byIP := keep(s.sends["ip|"+ip], time.Hour)
 	if len(s.sends) > 4096 { // forget the old ones now and then
 		for k, v := range s.sends {
@@ -232,8 +235,8 @@ func (s *Service) allowSend(ip, target string) error {
 		}
 	}
 	switch {
-	case len(byTarget) > 0 && now.Sub(byTarget[len(byTarget)-1]) < sendGap:
-		wait := sendGap - now.Sub(byTarget[len(byTarget)-1])
+	case len(gap) > 0:
+		wait := sendGap - now.Sub(gap[len(gap)-1])
 		return refuse("too_soon", "验证码刚发过，%d 秒后可以再发", int(wait.Seconds())+1)
 	case len(byTarget) >= sendPerTarget:
 		return refuse("too_many", "今天给它发的验证码太多了，明天再试，或者用其他方式登录")
@@ -241,6 +244,7 @@ func (s *Service) allowSend(ip, target string) error {
 		return refuse("too_many", "请求验证码太频繁了，请稍后再试")
 	}
 	s.sends["t|"+target] = append(byTarget, now)
+	s.sends["gap|"+purpose+"|"+target] = []time.Time{now}
 	if ip != "" {
 		s.sends["ip|"+ip] = append(byIP, now)
 	}
@@ -311,7 +315,7 @@ func (s *Service) SendLoginCode(ctx context.Context, ip, channel, raw string) er
 	if err != nil {
 		return err
 	}
-	if err := s.allowSend(ip, target); err != nil {
+	if err := s.allowSend(ip, "login", target); err != nil {
 		return err
 	}
 	u, err := s.userByTarget(channel, target)
@@ -412,7 +416,7 @@ func (s *Service) BeginBind(ctx context.Context, uid int64, ip, channel, raw, pa
 		}
 		return refuse("taken", "这个%s已经绑定了别的账号", channelName[channel])
 	}
-	if err := s.allowSend(ip, target); err != nil {
+	if err := s.allowSend(ip, "bind", target); err != nil {
 		return err
 	}
 	code := newCode()
