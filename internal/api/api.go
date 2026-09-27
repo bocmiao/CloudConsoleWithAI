@@ -129,6 +129,7 @@ func (s *Server) routes() {
 	api("GET /api/visits/blocked", s.blockedIPs)
 	api("POST /api/visits/block", s.blockIPs)
 	api("POST /api/servers/{id}/realip", s.proposeRealIP)
+	api("GET /api/overview", s.overview)
 	api("GET /api/websites", s.websites)
 	api("GET /api/servers/{id}/websites/{sid}", s.website)
 	api("GET /api/servers/{id}/websites/{sid}/log", s.websiteLog)
@@ -297,6 +298,10 @@ func siteID(r *http.Request) (uint, error) {
 		return 0, &app.UserError{Msg: "网站编号不对"}
 	}
 	return uint(n), nil
+}
+
+func (s *Server) overview(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.Overview(r.Context())
 }
 
 func (s *Server) websites(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -869,6 +874,7 @@ func (s *Server) chatStream(w http.ResponseWriter, r *http.Request) (any, error)
 	var req struct {
 		ConversationID string `json:"conversationId"`
 		Message        string `json:"message"`
+		Page           string `json:"page"`
 	}
 	if err := decode(r, &req); err != nil {
 		return nil, err
@@ -892,7 +898,7 @@ func (s *Server) chatStream(w http.ResponseWriter, r *http.Request) (any, error)
 		_, _ = w.Write(append(data, '\n'))
 		_ = rc.Flush()
 	}
-	reply, err := s.app.ChatStream(ctx, req.ConversationID, req.Message, func(e app.ChatEvent) { send(e) })
+	reply, err := s.app.ChatStream(ctx, req.ConversationID, req.Message, req.Page, func(e app.ChatEvent) { send(e) })
 	if err != nil && !started {
 		return nil, err // nothing sent yet: an ordinary error response
 	}

@@ -221,7 +221,7 @@ type ChatEvent struct {
 // Chat sends a user message in a conversation, creating it if needed.
 // Questions and answers are saved, so conversations survive restarts.
 func (a *App) Chat(ctx context.Context, convID, text string) (ChatReply, error) {
-	return a.ChatStream(ctx, convID, text, nil)
+	return a.ChatStream(ctx, convID, text, "", nil)
 }
 
 // checkBudget refuses a model call once this month's spending reached
@@ -242,7 +242,9 @@ func (a *App) checkBudget(settings AISettings) error {
 
 // ChatStream is Chat with the answer streamed to on as it is generated.
 // StopChat ends it early; what was said by then is kept.
-func (a *App) ChatStream(ctx context.Context, convID, text string, on func(ChatEvent)) (ChatReply, error) {
+// page names what the user is looking at when asking from the AI side
+// panel; the model is told, the saved message stays as typed.
+func (a *App) ChatStream(ctx context.Context, convID, text, page string, on func(ChatEvent)) (ChatReply, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return ChatReply{}, userErr("请输入问题")
@@ -273,8 +275,11 @@ func (a *App) ChatStream(ctx context.Context, convID, text string, on func(ChatE
 	}()
 	_, _ = a.Store.AddChatMessage(convID, "user", text, "")
 	ask := text
+	if page = pageNote(page); page != "" {
+		ask = "（我现在在 Miao Panel 的「" + page + "」页面）\n" + text
+	}
 	if restored {
-		ask = restoredNote + text
+		ask = restoredNote + ask
 	}
 	var onEvent func(ai.Event)
 	if on != nil {
@@ -388,4 +393,13 @@ func (a *App) DeleteConversation(id string) error {
 	delete(a.convs, id)
 	a.mu.Unlock()
 	return a.Store.DeleteConversation(id)
+}
+
+// pageNote tidies the page name sent with a question: one short line.
+func pageNote(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > 120 {
+		s = string(r[:120])
+	}
+	return s
 }

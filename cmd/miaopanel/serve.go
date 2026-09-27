@@ -72,7 +72,7 @@ func serveMain(args []string) error {
 	if *cert != "" {
 		scheme = "https"
 	}
-	log.Printf("Miao Panel（喵面板）Web 版 %s 已启动：%s://%s ，数据目录 %s", version, scheme, ln.Addr(), dir)
+	log.Printf("Miao Panel Web 版 %s 已启动：%s://%s ，数据目录 %s", version, scheme, ln.Addr(), dir)
 	if host, _, _ := net.SplitHostPort(*listen); scheme == "http" && !isLoopback(host) {
 		log.Printf("注意：正在用 HTTP 接受其他机器的连接，密码会明文传输。请在前面加一个 HTTPS 反向代理（1Panel、宝塔、Nginx、Caddy），或者用 --tls-cert/--tls-key")
 	}

@@ -1,4 +1,4 @@
-# Miao Panel（喵面板）Web 版
+# Miao Panel Web 版
 #
 #   docker compose up -d            （见 docker-compose.yml）
 #   docker logs miaopanel           （第一次启动时，这里有创建管理员账号用的初始化码）

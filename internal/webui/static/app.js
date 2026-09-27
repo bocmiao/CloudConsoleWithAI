@@ -104,6 +104,22 @@ const ICONS = {
   bucket: 'M4 7h16l-1.6 12.2a2 2 0 0 1-2 1.8H7.6a2 2 0 0 1-2-1.8zM4 7c0-1.7 3.6-3 8-3s8 1.3 8 3',
   bell: 'M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15zM10 20.5a2 2 0 0 0 4 0',
   window: 'M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM3 9h18M6 7h.01M9 7h.01',
+  home: 'M4 10.5 12 4l8 6.5V19a1 1 0 0 1-1 1h-4.5v-5.5h-5V20H5a1 1 0 0 1-1-1z',
+  inbox: 'M4 13.5 6.5 5h11L20 13.5V19a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1zM4 13.5h4.5l1.5 2.5h4l1.5-2.5H20',
+  shield: 'M12 3.5l7 2.7v5.3c0 4.2-2.9 7.6-7 9-4.1-1.4-7-4.8-7-9V6.2z',
+  history: 'M4 12a8 8 0 1 0 2.4-5.7L4 8.5M4 4v4.5h4.5M12 8v4.2l2.8 1.8',
+  expand: 'M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7',
+  gear: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.5a7.6 7.6 0 0 0-2.6 1.5l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 0 0 0 3l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.6 7.6 0 0 0 2.6-1.5l2.4 1 2-3.4z',
+};
+
+// Miao Panel's mark: the cat-ear M on a rounded tile, light or dark with
+// the system.
+const MIAO_MARK = 'M 103 438 C 79 438 64 422 66 398 L 79 174 C 81 136 88 99 103 73 C 107 66 114 65 120 72 L 246 221 Q 256 234 266 221 L 392 72 C 398 65 405 66 409 73 C 424 99 431 136 433 174 L 446 398 C 448 422 433 438 409 438 H 365 C 343 438 332 426 332 406 V 280 L 282 338 Q 256 365 230 338 L 180 280 V 406 C 180 426 169 438 147 438 Z';
+const MiaoLogo = {
+  template: `<svg viewBox="0 0 512 512" role="img" aria-label="Miao Panel"><rect class="logo-tile" width="512" height="512" rx="115"></rect>
+    <rect class="logo-edge" x="4" y="4" width="504" height="504" rx="111" fill="none" stroke-width="8"></rect>
+    <path class="logo-mark" transform="translate(96 99) scale(0.625)" :d="d"></path></svg>`,
+  setup() { return { d: MIAO_MARK }; },
 };
 
 // In Miao Panel's own window, links that would open a new window go to
@@ -647,8 +663,8 @@ const RankList = {
 // 访问分析: visits counted from access logs (EdgeOne's or a server's),
 // in four sections, with the IPs worth a look and blocking.
 const VisitStats = {
-  props: { servers: { type: Array, default: () => [] }, active: Boolean, tencent: Boolean },
-  emits: ['ask'],
+  props: { servers: { type: Array, default: () => [] }, active: Boolean, tencent: Boolean, request: Object },
+  emits: ['ask', 'section'],
   setup(props, { emit }) {
     const sources = ref([]);
     const source = ref(pref('miao.visitSource', ''));
@@ -670,7 +686,8 @@ const VisitStats = {
     let seq = 0;
     // Today is counted per hour for PV and requests only.
     watch(days, v => { setPref('miao.visitDays', String(v)); if (v === 1 && !['pv', 'requests'].includes(series.value)) series.value = 'pv'; }, { immediate: true });
-    watch(section, v => setPref('miao.visitSection', v));
+    watch(section, v => { setPref('miao.visitSection', v); emit('section', v); });
+    watch(() => props.request, r => { if (r && r.section) section.value = r.section; });
 
     async function loadSources() {
       try {
@@ -2194,6 +2211,202 @@ const DnsPage = {
   </div>`,
 };
 
+// 总览: servers, sites, certificates and security at a glance, what needs
+// the user, and what changed lately. Built from what Miao Panel already
+// knows, so it opens at once.
+const HOME_ASKS = ['今天的访问量怎么样？', '有没有人在扫描我的网站？', '哪台服务器最需要处理？'];
+const TODO_ICON = { crit: 'alert', warn: 'warn', plan: 'sparkles', info: 'info' };
+const levelDot = l => ({ ok: 'good', warn: 'warn', crit: 'crit' }[l] || 'off');
+const HomePage = {
+  props: { overview: Object, servers: { type: Array, default: () => [] }, aiReady: Boolean, active: Boolean },
+  emits: ['refresh', 'ask', 'go', 'server', 'stats', 'plan', 'add', 'log'],
+  setup(props, { emit }) {
+    const draft = ref('');
+    const ov = computed(() => props.overview);
+    const today = computed(() => new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'short' }));
+    const ask = text => { const t = (text || draft.value).trim(); if (t) { emit('ask', t); draft.value = ''; } };
+    const patrol = () => emit('ask', '帮我把所有服务器、网站、证书和安全情况巡检一遍：先查数据，再按轻重缓急告诉我哪些需要处理，能修的给我清单。');
+
+    const cards = computed(() => {
+      const o = ov.value;
+      if (!o) return [];
+      const bad = o.servers.filter(s => s.level === 'warn' || s.level === 'crit');
+      const worst = o.servers.some(s => s.level === 'crit') ? 'crit' : bad.length ? 'warn' : 'ok';
+      const out = [{ id: 'servers', icon: 'server', label: '服务器', value: o.servers.length, unit: '台', level: worst,
+        pill: bad.length ? `${bad.length} 台注意` : '正常', sub: bad.length ? bad.map(s => `${s.name} ${s.note}`).join(' · ') : o.servers.map(s => s.name).join('、') }];
+      const v = o.visits;
+      const change = v && v.pvBefore > 0 ? Math.round((v.pv - v.pvBefore) * 100 / v.pvBefore) : null;
+      out.push({ id: 'sites', icon: 'chart', label: '网站', value: v ? v.sites : '—', unit: v ? '个' : '', level: v ? 'ok' : 'off', pill: v ? '今天' : '没有数据',
+        sub: v ? `今天 PV ${fmtCount(v.pv)}${change == null ? '' : ` · 比昨天同期 ${change >= 0 ? '↑' : '↓'}${Math.abs(change)}%`}` : '在「访问统计」里选择数据来源' });
+      const c = o.certs;
+      out.push({ id: 'certs', icon: 'lock', label: '证书', value: c ? c.total : '—', unit: c ? '张' : '', level: c ? (c.attention ? c.level : 'ok') : 'off',
+        pill: c ? (c.attention ? `${c.attention} 张要处理` : '正常') : '没有数据', sub: c && c.attention ? `${c.soonest}${c.days != null ? (c.days < 0 ? ' 已过期' : ` ${c.days} 天后到期`) : ''}` : (c ? '都在自动续签或有效期充足' : '腾讯云或 1Panel 的证书会显示在这里') });
+      const sct = o.security;
+      out.push({ id: 'security', icon: 'shield', label: '安全', value: sct ? sct.high : '—', unit: sct ? '个高风险 IP' : '', level: sct ? (sct.known && sct.unblocked ? 'crit' : 'ok') : 'off',
+        pill: sct ? (sct.known ? (sct.unblocked ? `${sct.unblocked} 个未封禁` : '都已处理') : '最近 24 小时') : '没有数据', sub: sct ? '扫描后台、猜密码或攻击 · 最近 24 小时' : '经过 EdgeOne 或服务器日志统计后显示' });
+      return out;
+    });
+    function openCard(id) {
+      if (id === 'servers') { const s = ov.value.servers.find(x => x.level === 'warn' || x.level === 'crit') || ov.value.servers[0]; if (s) emit('server', s.id); }
+      if (id === 'sites') emit('stats', 'logs', 'overview');
+      if (id === 'certs') emit('go', 'certs');
+      if (id === 'security') emit('stats', 'logs', 'security');
+    }
+    function doTodo(t) {
+      if (t.kind === 'plan') emit('plan', t.id);
+      else if (t.kind === 'cert') emit('go', 'certs');
+      else if (t.kind === 'security') emit('stats', 'logs', 'security');
+      else if (t.kind === 'notice') emit('go', 'inbox');
+      else if (t.kind === 'server') {
+        const s = ov.value.servers.find(x => x.id === t.id);
+        emit('ask', `服务器 ${s ? s.name : ''} 提示「${s ? s.note : ''}」，帮我看看是怎么回事，要不要处理，怎么处理？`);
+      }
+    }
+
+    // Today's views by hour, as a small line.
+    const spark = computed(() => {
+      const v = ov.value && ov.value.visits;
+      if (!v || !v.hours || !v.hours.length) return null;
+      const W = 300, H = 72, max = Math.max(...v.hours, 1);
+      const X = i => (i * W / 23).toFixed(1), Y = n => (H - 4 - n / max * (H - 14)).toFixed(1);
+      const line = v.hours.map((n, i) => (i ? 'L' : 'M') + X(i) + ' ' + Y(n)).join(' ');
+      const last = v.hours.length - 1;
+      return { line, area: line + ` L${X(last)} ${H} L0 ${H} Z`, x: X(last), y: Y(v.hours[last]), now: `0:00 → ${last}:59` };
+    });
+    const bar = v => v == null ? null : { w: Math.min(v, 100) + '%', cls: v >= 85 ? 'warn' : '' };
+    return { draft, ov, today, ask, patrol, cards, openCard, doTodo, spark, bar, HOME_ASKS, TODO_ICON, levelDot, fmtCount, whenText };
+  },
+  template: `
+  <div class="home">
+    <div class="home-head">
+      <div class="grow secondary">{{ today }}</div>
+      <button class="plain" @click="$emit('refresh')"><ui-icon name="refresh"></ui-icon>刷新</button>
+      <button class="primary" @click="patrol" :disabled="!aiReady || !servers.length"><ui-icon name="sparkles"></ui-icon>让 AI 巡检一遍</button>
+    </div>
+
+    <!-- First time -->
+    <div class="group home-start" v-if="!servers.length">
+      <div class="row stack"><b>三步开始</b><div class="small secondary">看状态、找问题、问 AI，任何修改都要你确认后才执行。</div></div>
+      <div class="row"><span class="step-num" :class="{done: aiReady}">1</span><div class="grow"><b>设置 AI 模型</b><div class="small secondary">推荐 DeepSeek V4.1 Flash，便宜好用</div></div>
+        <button @click="$emit('go', 'settings')">去设置</button></div>
+      <div class="row"><span class="step-num">2</span><div class="grow"><b>添加服务器</b><div class="small secondary">填 IP、用户名和密码，或者选腾讯云上的服务器</div></div>
+        <button class="primary" @click="$emit('add')">添加服务器</button></div>
+      <div class="row"><span class="step-num">3</span><div class="grow"><b>识别环境</b><div class="small secondary">自动看出装了什么：1Panel、宝塔、网站、数据库……只读，不会改动任何东西</div></div></div>
+    </div>
+
+    <template v-if="ov && servers.length">
+      <div class="home-cards">
+        <button class="home-card" v-for="c in cards" :key="c.id" @click="openCard(c.id)">
+          <span class="home-card-top"><ui-icon :name="c.icon"></ui-icon><span class="grow">{{ c.label }}</span>
+            <span class="pill"><span class="sdot" :class="levelDot(c.level)"></span>{{ c.pill }}</span></span>
+          <span class="home-card-value">{{ c.value }}<small>{{ c.unit }}</small></span>
+          <span class="home-card-sub"><span class="sdot phone-only" :class="levelDot(c.level)"></span>{{ c.sub }}</span>
+        </button>
+      </div>
+
+      <div class="home-row">
+        <section class="card home-todo">
+          <header class="card-head"><h3>需要你处理</h3><span class="side-count" v-if="ov.todo.length">{{ ov.todo.length }}</span><span class="grow"></span>
+            <button class="link small" @click="$emit('go', 'inbox')">全部 ›</button></header>
+          <div class="home-empty" v-if="!ov.todo.length"><span class="sdot good"></span>现在没有要处理的事</div>
+          <div class="todo-row" v-for="(t, i) in ov.todo" :key="i">
+            <span class="todo-icon" :class="'lv-' + t.level"><ui-icon :name="TODO_ICON[t.level] || 'info'"></ui-icon></span>
+            <div class="grow"><div class="todo-title">{{ t.title }}</div><div class="small secondary" v-if="t.meta">{{ t.meta }}</div></div>
+            <button :class="t.kind === 'plan' ? 'primary' : ''" @click="doTodo(t)">{{ t.action }}</button>
+          </div>
+        </section>
+        <section class="card home-ask">
+          <header class="card-head"><ui-icon name="sparkles" class="home-ask-icon"></ui-icon><h3>问 AI</h3></header>
+          <p class="small secondary">用大白话说想做的事，它先查清楚再回答；要改东西会先给你清单。</p>
+          <textarea v-model="draft" rows="3" placeholder="比如：今天下午流量为什么涨了？" aria-label="问 AI" @keydown.enter.exact.prevent="ask()"></textarea>
+          <div class="home-asks"><button v-for="q in HOME_ASKS" :key="q" class="chip" @click="ask(q)">{{ q }}</button></div>
+          <div class="home-ask-foot"><span class="grow"></span>
+            <button class="primary icon-only round" @click="ask()" :disabled="!draft.trim()" title="发送" aria-label="发送"><ui-icon name="arrow-up"></ui-icon></button></div>
+        </section>
+      </div>
+
+      <div class="home-row three">
+        <section class="card">
+          <header class="card-head"><h3>服务器</h3></header>
+          <div class="srv-grid srv-head small tertiary"><span>名称</span><span>CPU</span><span>内存</span><span>磁盘</span></div>
+          <button class="srv-grid srv-row" v-for="s in ov.servers" :key="s.id" @click="$emit('server', s.id)">
+            <span class="srv-name"><span class="sdot" :class="levelDot(s.level)"></span><span><b>{{ s.name }}</b><span class="small tertiary block">{{ s.level === 'unknown' ? s.note : ({ '1panel': '1Panel', bt: '宝塔', linux: 'Linux' }[s.adapter] || '') }}</span></span></span>
+            <span v-for="(m, k) in [s.cpuPct, s.memPct, s.diskPct]" :key="k" class="srv-metric">
+              <template v-if="m != null"><span class="mini-bar"><span :class="bar(m).cls" :style="{ width: bar(m).w }"></span></span><span :class="{ 'warn-text': m >= 85 }">{{ m }}%</span></template>
+              <span class="tertiary" v-else>—</span>
+            </span>
+          </button>
+        </section>
+        <section class="card">
+          <header class="card-head"><h3>今天的访问</h3><span class="grow"></span><button class="link small" @click="$emit('stats', 'logs', 'overview')">统计 ›</button></header>
+          <template v-if="ov.visits">
+            <div class="home-pv"><b>{{ fmtCount(ov.visits.pv) }}</b><span class="secondary">PV</span>
+              <span class="small secondary" v-if="ov.visits.pvBefore">比昨天同期 {{ ov.visits.pv >= ov.visits.pvBefore ? '↑' : '↓' }}{{ Math.abs(Math.round((ov.visits.pv - ov.visits.pvBefore) * 100 / ov.visits.pvBefore)) }}%</span></div>
+            <svg v-if="spark" class="home-spark" viewBox="0 0 300 72" preserveAspectRatio="none" role="img" aria-label="今天每小时的访问量">
+              <path :d="spark.area" class="spark-area"></path><path :d="spark.line" class="spark-line"></path>
+              <circle :cx="spark.x" :cy="spark.y" r="3.5" class="spark-dot"></circle></svg>
+            <div class="small tertiary" v-if="spark">{{ ov.visits.title }} · {{ spark.now }}</div>
+          </template>
+          <div class="home-empty" v-else>还没有访问数据，打开「访问统计」选择数据来源。</div>
+        </section>
+        <section class="card">
+          <header class="card-head"><h3>最近的变更</h3><span class="grow"></span><button class="link small" @click="$emit('go', 'logs')">记录 ›</button></header>
+          <div class="home-empty" v-if="!ov.changes.length">还没有执行过修改</div>
+          <button class="change-row" v-for="c in ov.changes" :key="c.id" @click="$emit('log', c.id)">
+            <span class="small tertiary change-when">{{ whenText(c.startedAt) }}</span>
+            <span class="grow"><span class="ellipsis block">{{ c.title }}</span><span class="small secondary">{{ c.serverName }}{{ c.status === 'undone' || c.undoneBy ? ' · 已撤销' : c.status !== 'done' ? ' · 没有成功' : '' }}</span></span>
+          </button>
+        </section>
+      </div>
+    </template>
+    <div class="notice" v-else-if="servers.length"><span class="spinner"></span>正在汇总……</div>
+  </div>`,
+};
+
+// 待处理: checklists waiting for the user, alerts and daily reports, and
+// every checklist so far.
+const INBOX_VIEWS = [{ id: 'todo', text: '等你确认' }, { id: 'notices', text: '提醒和日报' }, { id: 'plans', text: '全部清单' }];
+const InboxPage = {
+  props: { active: Boolean, servers: { type: Array, default: () => [] }, focus: Object },
+  emits: ['unread', 'changed'],
+  setup(props, { emit }) {
+    const view = ref(pref('miao.inboxView', 'todo'));
+    watch(view, v => setPref('miao.inboxView', v));
+    const plans = ref(null), error = ref('');
+    async function load() {
+      try { plans.value = await api('GET', '/api/plans'); error.value = ''; }
+      catch (e) { error.value = e.message; }
+    }
+    watch(() => props.active, v => { if (v) load(); }, { immediate: true });
+    watch(() => props.focus, f => { if (f && f.view) view.value = f.view; });
+    const waiting = computed(() => (plans.value || []).filter(p => p.status === 'proposed'));
+    const serverName = id => id ? ((props.servers.find(s => s.id === id) || {}).name || '已删除的服务器') : '腾讯云';
+    const fmt = t => t ? new Date(t).toLocaleString('zh-CN', { hour12: false, month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+    const done = () => { load(); emit('changed'); };
+    return { INBOX_VIEWS, view, plans, error, waiting, serverName, fmt, done, load };
+  },
+  template: `
+  <div class="inbox">
+    <div class="inbox-bar">
+      <span class="segmented" role="tablist" aria-label="待处理">
+        <button v-for="v in INBOX_VIEWS" :key="v.id" role="tab" :aria-selected="view === v.id" :class="{ on: view === v.id }" @click="view = v.id">{{ v.text }}<span class="side-count" v-if="v.id === 'todo' && waiting.length"> {{ waiting.length }}</span></button>
+      </span>
+    </div>
+    <div class="notice" v-if="error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ error }}</div>
+    <template v-if="view === 'todo'">
+      <p class="small secondary inbox-lead">AI 和各个页面生成、还没有执行的清单。勾选后执行，执行后可以撤销；不需要的可以不管它。</p>
+      <plan-card v-for="pl in waiting" :key="pl.id" :plan="pl" :server-name="serverName(pl.serverId) + ' · ' + fmt(pl.createdAt)" @done="done"></plan-card>
+      <div class="group" v-if="plans && !waiting.length"><div class="row secondary"><span class="sdot good"></span>没有等你确认的清单。</div></div>
+    </template>
+    <notice-page v-if="view === 'notices'" :active="active && view === 'notices'" @unread="n => $emit('unread', n)"></notice-page>
+    <template v-if="view === 'plans'">
+      <p class="small secondary inbox-lead">所有清单都在这里，可以随时回来执行或撤销。</p>
+      <plan-card v-for="pl in plans || []" :key="pl.id" :plan="pl" :server-name="serverName(pl.serverId) + ' · ' + fmt(pl.createdAt)" @done="done"></plan-card>
+      <div class="group" v-if="plans && !plans.length"><div class="row secondary">还没有清单。在「AI 助手」里说出你想做什么，AI 会把修改方案整理成清单。</div></div>
+    </template>
+  </div>`,
+};
+
 // 网站: the sites on each 1Panel server, and one site's domains, HTTPS,
 // reverse proxies, rewrite rules, config file and logs. Every change is
 // a checklist, confirmed first and undoable.
@@ -2274,7 +2487,7 @@ const EoCacheForm = {
 
 const SitePage = {
   props: { servers: { type: Array, default: () => [] }, active: Boolean, request: Object },
-  emits: ['ask', 'server'],
+  emits: ['ask', 'server', 'context'],
   setup(props, { emit }) {
     const list = ref(null), loading = ref(false), error = ref('');
     const serverFilter = ref(pref('miao.siteServer', ''));
@@ -2516,6 +2729,12 @@ const SitePage = {
     watch(() => JSON.stringify([proxyEd, certForm, createForm]), () => { if (!planning.value) formError.value = ''; });
 
     const visitURL = computed(() => site.value ? (site.value.https ? 'https://' : 'http://') + site.value.domain : '');
+    // What is open, for the AI side panel.
+    watch(() => [open.value, site.value && site.value.domain, section.value], () => {
+      if (!open.value || !site.value) { emit('context', ''); return; }
+      const sec = (SITE_SECTIONS.find(x => x.id === section.value) || {}).text;
+      emit('context', `网站 ${site.value.domain}（服务器 ${detail.value.serverName}）· ${sec}`);
+    });
     const eoDomains = computed(() => detail.value && detail.value.edgeone ? detail.value.edgeone.domains.map(d => d.name) : []);
     const onCachePlan = p => { plan.value = p; };
     const modeText = m => (HTTP_MODES.find(x => x.id === m) || { text: '已开启' }).text;
@@ -4922,8 +5141,8 @@ const LoginApp = {
   template: `
   <div class="login-page">
     <form class="login-card" @submit.prevent="submit">
-      <div class="login-brand"><span class="app-mark"><ui-icon name="layers"></ui-icon></span>
-        <div><div class="login-name">Miao Panel</div><div class="small tertiary">喵面板 · Web 版</div></div></div>
+      <div class="login-brand"><span class="app-mark"><miao-logo></miao-logo></span>
+        <div><div class="login-name">Miao Panel</div><div class="small tertiary">Web 版</div></div></div>
       <h1>{{ setup ? '创建管理员账号' : '登录' }}</h1>
       <p class="small secondary" v-if="setup">第一次使用，需要服务器上的初始化码：运行 <code>docker logs miaopanel</code> 或 <code>journalctl -u miaopanel</code> 就能看到，也保存在数据目录的 <code>setup-code</code> 文件里。</p>
       <div class="login-warn" v-if="insecure" role="alert"><ui-icon name="warn"></ui-icon><span>现在是 HTTP 连接，密码会明文传输。请改用 HTTPS 访问（部署说明里有设置方法）。</span></div>
@@ -5348,7 +5567,7 @@ const AccountPanel = {
 
 const app = createApp({
   setup() {
-    const tab = ref('servers');
+    const tab = ref('home');
     // On a phone the sidebar is a drawer behind the menu button.
     const navOpen = ref(false);
     const navEl = ref(null), navBtn = ref(null);
@@ -5490,10 +5709,38 @@ const app = createApp({
     const statsView = ref((() => { try { return localStorage.getItem('miao.statsView') || 'logs'; } catch { return 'logs'; } })());
     const statsSeen = reactive({ [statsView.value]: true });
     watch(statsView, v => { statsSeen[v] = true; try { localStorage.setItem('miao.statsView', v); } catch { /* not kept */ } });
+    // The AI side panel: the same conversation, opened over any page with
+    // ⌘J / Ctrl+J; a question asked there says which page it came from.
+    const aiPanel = ref(false);
+    const siteContext = ref('');
+    const PAGE_NAMES = { home: '总览', chat: 'AI 助手', inbox: '待处理', certs: '证书', dns: '解析', storage: '存储', terminal: '终端', files: '文件', logs: '记录', settings: '设置', sites: '网站管理' };
+    const pageContext = computed(() => {
+      const t = tab.value;
+      if (t === 'servers') return current.value ? '服务器 ' + current.value.server.name : '服务器';
+      if (t === 'sites') return siteContext.value || '网站管理';
+      if (t === 'stats') return statsView.value === 'eo' ? 'EdgeOne 实时统计' : (visitSection.value === 'security' ? '访问统计 · 安全' : '访问统计');
+      return PAGE_NAMES[t] || '';
+    });
+    function toggleAI(open) {
+      if (tab.value === 'chat') return;
+      aiPanel.value = open == null ? !aiPanel.value : open;
+      if (aiPanel.value) nextTick(() => { const el = document.querySelector('.ai-host.panel textarea'); if (el) el.focus(); });
+    }
+    window.addEventListener('keydown', e => {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === 'j' || e.key === 'J')) { e.preventDefault(); toggleAI(); }
+      if (e.key === 'Escape' && aiPanel.value && !document.querySelector('.sheet-mask')) aiPanel.value = false;
+    });
+    watch(tab, t => { if (t === 'chat') aiPanel.value = false; });
+
+    // 建议 and 通知 are parts of 待处理 now.
+    const inboxFocus = ref(null);
+    function openInbox(view) { inboxFocus.value = { view, at: Date.now() }; go('inbox'); }
     function go(id) {
+      if (id === 'plans' || id === 'notices') { inboxFocus.value = { view: id, at: Date.now() }; id = 'inbox'; }
       navOpen.value = false;
       tab.value = id;
       seen[id] = true;
+      if (id === 'home') loadOverview();
       if (id === 'plans') api('GET', '/api/plans').then(v => { plans.value = v; }).catch(e => notify(e.message, 'error'));
       if (id === 'logs') loadAudit();
     }
@@ -5668,7 +5915,7 @@ const app = createApp({
         const res = await fetch('/api/chat/stream', {
           method: 'POST', credentials: 'same-origin', signal: controller.signal,
           headers: { 'X-Miao': '1', 'Content-Type': 'application/json' },
-          body: JSON.stringify({ conversationId: conversationId.value, message: text }),
+          body: JSON.stringify({ conversationId: conversationId.value, message: text, page: aiPanel.value && tab.value !== 'chat' ? pageContext.value : '' }),
         });
         if (!res.ok) {
           const d = await res.json().catch(() => ({}));
@@ -5841,13 +6088,36 @@ const app = createApp({
     // Unread notices, for the sidebar; checked every minute.
     const unread = ref(0);
     const loadUnread = () => api('GET', '/api/notices/unread').then(v => { unread.value = v.unread; }).catch(() => {});
-    setInterval(() => { if (document.visibilityState === 'visible' && tab.value !== 'notices') loadUnread(); }, 60000);
+    setInterval(() => { if (document.visibilityState === 'visible' && tab.value !== 'notices' && tab.value !== 'inbox') loadUnread(); }, 60000);
+    // The overview: how each server is doing, and the counts in the sidebar.
+    const overview = ref(null);
+    const loadOverview = () => api('GET', '/api/overview').then(v => { overview.value = v; unread.value = v.unread; }).catch(() => {});
+    setInterval(() => { if (document.visibilityState === 'visible') loadOverview(); }, 120000);
+    const inboxCount = computed(() => (overview.value ? overview.value.pending : 0) + unread.value);
+    const serverState = id => overview.value && overview.value.servers.find(x => x.id === id);
+    const serverDot = id => ({ ok: 'good', warn: 'warn', crit: 'crit' }[(serverState(id) || {}).level] || 'off');
+    function serverMeta(s) {
+      const o = serverState(s.id);
+      const kind = adapterName(s.adapter);
+      if (!o) return kind + ' · ' + s.host;
+      if (o.level === 'warn' || o.level === 'crit') return kind + ' · ' + o.note;
+      if (o.memPct != null) return kind + ' · 内存 ' + o.memPct + '%';
+      return kind + ' · ' + (o.note || s.host);
+    }
+    // 网站 › 访问统计 and 安全, 腾讯云 › EdgeOne: parts of the statistics page.
+    const visitSection = ref(pref('miao.visitSection', 'overview'));
+    const statsRequest = ref(null);
+    function openStats(view, section) {
+      statsView.value = view;
+      if (section) { visitSection.value = section; statsRequest.value = { section, at: Date.now() }; }
+      go('stats');
+    }
 
     onMounted(async () => {
       try {
         info.value = await api('GET', '/api/info');
         presets.value = await api('GET', '/api/ai/presets');
-        await Promise.all([loadServers(), loadAI(), loadSpend(), loadConvs(), loadTencent(), loadFree(), loadUnread()]);
+        await Promise.all([loadServers(), loadAI(), loadSpend(), loadConvs(), loadTencent(), loadFree(), loadUnread(), loadOverview()]);
         if (convs.value.length) await openConv(convs.value[0].id);
         if (servers.value.length) await select(servers.value[0].id, tab.value !== 'servers');
       } catch (e) { notify(e.message, 'error'); }
@@ -5859,6 +6129,7 @@ const app = createApp({
       select, openAdd, addServer, testConn, discover, removeServer, askAbout, send, onEnter, newChat, applyPreset, saveAI, testAI,
       convs, showConvs, conversationId, openConv, deleteConv, relTime,
       op, saveOnePanel, testOnePanel, tc, saveTencent, testTencent, clearTencent, freeCmd, setFree, seen, statsView, statsSeen, termRequest, openTerminal, filesRequest, openFiles, sitesRequest, openSite, unread, me, logout,
+      overview, loadOverview, inboxCount, inboxFocus, openInbox, aiPanel, toggleAI, pageContext, siteContext, serverDot, serverMeta, visitSection, statsRequest, openStats,
       cloud, cloudList, cloudPick, pickCloud, askAI, daysTo, fmtBytes,
       memPct, rootDisk, envSub, dockerText, money, mb, meterClass, levelClass, levelIcon, levelName, riskName, adapterName,
       fmtTime, serverName, parseSteps, toolName, toolDetail, actorName, actionName, md, live, liveStatus, thinkTail, stopAnswer,
@@ -5877,6 +6148,8 @@ app.component('terminal-page', TerminalPage);
 app.component('cert-page', CertPage);
 app.component('dns-page', DnsPage);
 app.component('site-page', SitePage);
+app.component('home-page', HomePage);
+app.component('inbox-page', InboxPage);
 app.component('eo-cache-form', EoCacheForm);
 app.component('storage-page', StoragePage);
 app.component('file-page', FilePage);
@@ -5886,6 +6159,7 @@ const UiIcon = {
   template: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path :d="d"></path></svg>',
 };
 app.component('ui-icon', UiIcon);
+app.component('miao-logo', MiaoLogo);
 app.component('account-panel', AccountPanel);
 
 // The web edition shows the login page until someone is logged in; the
@@ -5900,6 +6174,7 @@ app.component('account-panel', AccountPanel);
     el.className = '';
     const login = createApp(LoginApp, { state });
     login.component('ui-icon', UiIcon);
+    login.component('miao-logo', MiaoLogo);
     login.mount(el);
     return;
   }

@@ -106,7 +106,7 @@ func (a *App) TestMail(ctx context.Context, s sender.SMTP, to string) error {
 		s.Password, _ = a.Secrets.Get(mailSecret)
 	}
 	err := sender.Send(ctx, s, strings.TrimSpace(to), "Miao Panel 测试邮件",
-		"这是 Miao Panel（喵面板）发出的测试邮件。收到它说明发信设置是对的，可以用邮箱验证码登录了。")
+		"这是 Miao Panel 发出的测试邮件。收到它说明发信设置是对的，可以用邮箱验证码登录了。")
 	if err != nil {
 		return userErr("%v", err)
 	}

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Miao Panel</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23007aff'/%3E%3Cpath d='M16 7l9 5-9 5-9-5zM7 17l9 5 9-5' fill='none' stroke='white' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='115' fill='%23ffffff'/%3E%3Crect x='4' y='4' width='504' height='504' rx='111' fill='none' stroke='rgba(0,0,0,0.12)' stroke-width='8'/%3E%3Cpath transform='translate(96 99) scale(0.625)' fill='%23242428' d='M 103 438 C 79 438 64 422 66 398 L 79 174 C 81 136 88 99 103 73 C 107 66 114 65 120 72 L 246 221 Q 256 234 266 221 L 392 72 C 398 65 405 66 409 73 C 424 99 431 136 433 174 L 446 398 C 448 422 433 438 409 438 H 365 C 343 438 332 426 332 406 V 280 L 282 338 Q 256 365 230 338 L 180 280 V 406 C 180 426 169 438 147 438 Z'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
 <script src="vue.global.prod.js"></script>
 <script src="app.js" defer></script>
@@ -14,40 +14,53 @@
 
   <!-- On a phone the sidebar opens from this button -->
   <button class="phone-menu" ref="navBtn" @click="navOpen = !navOpen" :aria-expanded="navOpen ? 'true' : 'false'" aria-controls="side-nav"
-    :aria-label="unread ? `菜单（${unread} 条未读通知）` : '菜单'"><ui-icon name="menu"></ui-icon><span class="phone-dot" v-if="unread" aria-hidden="true">{{ unread > 99 ? '99+' : unread }}</span></button>
+    :aria-label="inboxCount ? `菜单（${inboxCount} 件待处理）` : '菜单'"><ui-icon name="menu"></ui-icon><span class="phone-dot" v-if="inboxCount" aria-hidden="true">{{ inboxCount > 99 ? '99+' : inboxCount }}</span></button>
   <div class="nav-scrim" v-if="navOpen" @click="closeNav"></div>
 
   <!-- Sidebar -->
   <aside class="sidebar" id="side-nav" ref="navEl" tabindex="-1" :class="{open: navOpen}" aria-label="导航">
-    <div class="app-title"><span class="app-mark"><ui-icon name="layers"></ui-icon></span>Miao Panel</div>
+    <div class="app-title"><span class="app-mark"><miao-logo></miao-logo></span>Miao Panel</div>
 
     <div class="side-section">
-      <div class="side-item" :class="{active: tab === 'chat'}" @click="go('chat')"><ui-icon name="sparkles"></ui-icon>AI 助手</div>
-      <div class="side-item" :class="{active: tab === 'sites'}" @click="go('sites')"><ui-icon name="window"></ui-icon>网站</div>
-      <div class="side-item" :class="{active: tab === 'stats'}" @click="go('stats')"><ui-icon name="chart"></ui-icon>网站统计</div>
-      <div class="side-item" :class="{active: tab === 'certs'}" @click="go('certs')"><ui-icon name="lock"></ui-icon>证书</div>
-      <div class="side-item" :class="{active: tab === 'dns'}" @click="go('dns')"><ui-icon name="globe"></ui-icon>解析</div>
-      <div class="side-item" :class="{active: tab === 'storage'}" @click="go('storage')"><ui-icon name="bucket"></ui-icon>存储</div>
-      <div class="side-item" :class="{active: tab === 'terminal'}" @click="go('terminal')"><ui-icon name="prompt"></ui-icon>终端</div>
-      <div class="side-item" :class="{active: tab === 'files'}" @click="go('files')"><ui-icon name="folder"></ui-icon>文件</div>
-      <div class="side-item" :class="{active: tab === 'plans'}" @click="go('plans')"><ui-icon name="bulb"></ui-icon>建议</div>
-      <div class="side-item" :class="{active: tab === 'logs'}" @click="go('logs')"><ui-icon name="terminal"></ui-icon>日志</div>
-      <div class="side-item" :class="{active: tab === 'notices'}" @click="go('notices')"><ui-icon name="bell"></ui-icon>通知<span class="badge crit side-badge" v-if="unread">{{ unread > 99 ? '99+' : unread }}</span></div>
+      <div class="side-item" :class="{active: tab === 'home'}" @click="go('home')"><ui-icon name="home"></ui-icon><span class="grow">总览</span></div>
+      <div class="side-item" :class="{active: tab === 'chat'}" @click="go('chat')"><ui-icon name="sparkles"></ui-icon><span class="grow">AI 助手</span></div>
+      <div class="side-item" :class="{active: tab === 'inbox'}" @click="go('inbox')"><ui-icon name="inbox"></ui-icon><span class="grow">待处理</span>
+        <span class="side-count" v-if="inboxCount">{{ inboxCount > 99 ? '99+' : inboxCount }}</span></div>
     </div>
 
     <div class="side-section">
       <div class="side-label">服务器
         <button class="plain icon-only" title="添加服务器" aria-label="添加服务器" @click="openAdd"><ui-icon name="plus"></ui-icon></button>
       </div>
-      <div class="side-item" v-for="s in servers" :key="s.id" :class="{active: tab === 'servers' && s.id === selectedId}" @click="select(s.id)">
-        <ui-icon name="server"></ui-icon>
-        <div class="meta"><span>{{ s.name }}</span><span class="small tertiary">{{ adapterName(s.adapter) }} · {{ s.host }}</span></div>
+      <div class="side-item side-server" v-for="s in servers" :key="s.id" :class="{active: tab === 'servers' && s.id === selectedId}" @click="select(s.id)">
+        <span class="sdot" :class="serverDot(s.id)"></span>
+        <div class="meta grow"><span>{{ s.name }}</span><span :class="{warn: serverDot(s.id) === 'warn' || serverDot(s.id) === 'crit'}">{{ serverMeta(s) }}</span></div>
       </div>
       <div class="side-empty" v-if="!servers.length">还没有服务器</div>
+      <div class="side-item" v-if="servers.length" :class="{active: tab === 'terminal'}" @click="go('terminal')"><ui-icon name="prompt"></ui-icon><span class="grow">终端</span></div>
+      <div class="side-item" v-if="servers.length" :class="{active: tab === 'files'}" @click="go('files')"><ui-icon name="folder"></ui-icon><span class="grow">文件</span></div>
+    </div>
+
+    <div class="side-section">
+      <div class="side-label">网站</div>
+      <div class="side-item" :class="{active: tab === 'sites'}" @click="go('sites')"><ui-icon name="window"></ui-icon><span class="grow">网站管理</span></div>
+      <div class="side-item" :class="{active: tab === 'stats' && statsView === 'logs' && visitSection !== 'security'}" @click="openStats('logs', 'overview')"><ui-icon name="chart"></ui-icon><span class="grow">访问统计</span></div>
+      <div class="side-item" :class="{active: tab === 'stats' && statsView === 'logs' && visitSection === 'security'}" @click="openStats('logs', 'security')"><ui-icon name="shield"></ui-icon><span class="grow">安全</span>
+        <span class="side-count crit" v-if="overview && overview.security && overview.security.known && overview.security.unblocked">{{ overview.security.unblocked }}</span></div>
+      <div class="side-item" :class="{active: tab === 'certs'}" @click="go('certs')"><ui-icon name="lock"></ui-icon><span class="grow">证书</span>
+        <span class="side-count" :class="{crit: overview.certs.level === 'crit'}" v-if="overview && overview.certs && overview.certs.attention">{{ overview.certs.attention }}</span></div>
+    </div>
+
+    <div class="side-section">
+      <div class="side-label">腾讯云</div>
+      <div class="side-item" :class="{active: tab === 'stats' && statsView === 'eo'}" @click="openStats('eo')"><ui-icon name="bolt"></ui-icon><span class="grow">EdgeOne</span></div>
+      <div class="side-item" :class="{active: tab === 'dns'}" @click="go('dns')"><ui-icon name="globe"></ui-icon><span class="grow">解析</span></div>
+      <div class="side-item" :class="{active: tab === 'storage'}" @click="go('storage')"><ui-icon name="bucket"></ui-icon><span class="grow">存储</span></div>
     </div>
 
     <div class="sidebar-foot">
-      <div class="side-item" :class="{active: tab === 'settings'}" @click="go('settings')"><ui-icon name="sliders"></ui-icon>设置</div>
+      <div class="side-item" :class="{active: tab === 'logs'}" @click="go('logs')"><ui-icon name="history"></ui-icon><span class="grow">记录</span></div>
+      <div class="side-item" :class="{active: tab === 'settings'}" @click="go('settings')"><ui-icon name="gear"></ui-icon><span class="grow">设置</span></div>
       <div class="side-user" v-if="me"><ui-icon name="lock"></ui-icon><span class="grow">{{ me.name }}</span>
         <button class="plain small" @click="logout" title="退出登录">退出</button></div>
       <div class="spend" title="本月 AI 花费（估算）">本月 AI 花费 {{ spendText }}</div>
@@ -56,6 +69,15 @@
 
   <!-- Main -->
   <div class="main">
+
+    <!-- 总览 -->
+    <template v-if="tab === 'home'">
+      <header class="toolbar"><h1>总览</h1></header>
+      <div class="page wide">
+        <home-page :overview="overview" :servers="servers" :ai-ready="ai.hasKey" :active="tab === 'home'" @refresh="loadOverview" @ask="askAI"
+          @go="go" @server="select" @stats="openStats" @plan="openInbox('todo')" @add="openAdd" @log="openLog"></home-page>
+      </div>
+    </template>
 
     <!-- Server -->
     <template v-if="tab === 'servers'">
@@ -75,7 +97,7 @@
       <div class="page">
         <!-- Welcome -->
         <div class="welcome" v-if="!servers.length">
-          <div class="app-mark"><ui-icon name="layers"></ui-icon></div>
+          <div class="app-mark"><miao-logo></miao-logo></div>
           <h2>用大白话管理你的服务器</h2>
           <p>看状态、找问题、问 AI。三步开始：</p>
           <div class="group">
@@ -224,14 +246,21 @@
       </div>
     </template>
 
-    <!-- AI assistant -->
-    <template v-if="tab === 'chat'">
-      <header class="toolbar">
+    <!-- AI assistant: a page of its own, or a side panel over any page -->
+    <div class="ai-host" v-if="tab === 'chat' || aiPanel" :class="{ panel: aiPanel && tab !== 'chat' }" role="complementary" :aria-label="aiPanel && tab !== 'chat' ? 'AI 侧栏' : null">
+      <header class="toolbar" v-if="tab === 'chat'">
         <h1>AI 助手</h1>
         <div class="spacer"></div>
         <button class="plain narrow-only" @click="showConvs = !showConvs"><ui-icon name="bubble"></ui-icon>对话记录</button>
         <button class="plain" @click="newChat" :disabled="chatBusy || !messages.length"><ui-icon name="plus"></ui-icon>新对话</button>
       </header>
+      <header class="ai-panel-head" v-else>
+        <ui-icon name="sparkles"></ui-icon><b class="grow">AI 助手</b>
+        <button class="plain icon-only" @click="newChat" :disabled="chatBusy || !messages.length" title="新对话" aria-label="新对话"><ui-icon name="plus"></ui-icon></button>
+        <button class="plain icon-only" @click="go('chat')" title="打开整页" aria-label="打开整页"><ui-icon name="expand"></ui-icon></button>
+        <button class="plain icon-only" @click="aiPanel = false" title="关闭（Esc）" aria-label="关闭 AI 侧栏"><ui-icon name="close"></ui-icon></button>
+      </header>
+      <div class="ai-context small" v-if="tab !== 'chat' && pageContext"><span class="sdot" style="background: var(--accent)"></span>知道你正在看：{{ pageContext }}</div>
       <div class="chat-layout">
       <aside class="conv-list" :class="{open: showConvs}" aria-label="对话记录">
         <div class="side-label">对话记录</div>
@@ -307,20 +336,21 @@
         </div>
       </div>
       </div>
-    </template>
+    </div>
+    <button class="ai-fab" v-if="tab !== 'chat' && !aiPanel" @click="toggleAI(true)" title="问 AI（Ctrl+J / ⌘J）"><ui-icon name="sparkles"></ui-icon>问 AI</button>
 
     <!-- Websites on 1Panel -->
     <div class="tab-pane" v-if="seen.sites" v-show="tab === 'sites'">
       <header class="toolbar"><h1>网站</h1></header>
       <div class="page wide">
-        <site-page :servers="servers" :active="tab === 'sites'" :request="sitesRequest" @ask="askAI" @server="select"></site-page>
+        <site-page :servers="servers" :active="tab === 'sites'" :request="sitesRequest" @ask="askAI" @server="select" @context="v => siteContext = v"></site-page>
       </div>
     </div>
 
     <!-- Website statistics -->
     <!-- Kept alive once opened, so switching back shows it at once. -->
     <div class="tab-pane" v-if="seen.stats" v-show="tab === 'stats'">
-      <header class="toolbar"><h1>网站统计</h1>
+      <header class="toolbar"><h1>{{ statsView === 'eo' ? 'EdgeOne' : '访问统计' }}</h1>
         <span class="segmented" role="tablist" aria-label="统计类型">
           <button role="tab" :aria-selected="statsView === 'logs'" :class="{on: statsView === 'logs'}" @click="statsView = 'logs'">访问分析</button>
           <button role="tab" :aria-selected="statsView === 'eo'" :class="{on: statsView === 'eo'}" @click="statsView = 'eo'">EdgeOne 实时</button>
@@ -328,7 +358,7 @@
       </header>
       <div class="page wide">
         <div v-if="statsSeen.logs" v-show="statsView === 'logs'">
-          <visit-stats :servers="servers" :tencent="tc.configured" :active="tab === 'stats' && statsView === 'logs'" @ask="askAI"></visit-stats>
+          <visit-stats :servers="servers" :tencent="tc.configured" :active="tab === 'stats' && statsView === 'logs'" :request="statsRequest" @section="v => visitSection = v" @ask="askAI"></visit-stats>
         </div>
         <div v-if="statsSeen.eo" v-show="statsView === 'eo'">
           <eo-stats :configured="tc.configured" :active="tab === 'stats' && statsView === 'eo'" @ask="askAI" @settings="go('settings')"></eo-stats>
@@ -336,11 +366,11 @@
       </div>
     </div>
 
-    <!-- Notices: daily reports and alerts -->
-    <div class="tab-pane" v-if="seen.notices" v-show="tab === 'notices'">
-      <header class="toolbar"><h1>通知</h1></header>
+    <!-- 待处理: checklists waiting, alerts and daily reports, every checklist -->
+    <div class="tab-pane" v-if="seen.inbox" v-show="tab === 'inbox'">
+      <header class="toolbar"><h1>待处理</h1></header>
       <div class="page">
-        <notice-page :active="tab === 'notices'" @unread="n => unread = n"></notice-page>
+        <inbox-page :active="tab === 'inbox'" :servers="servers" :focus="inboxFocus" @unread="n => unread = n" @changed="loadOverview"></inbox-page>
       </div>
     </div>
 
@@ -380,21 +410,9 @@
       <file-page :servers="servers" :active="tab === 'files'" :request="filesRequest"></file-page>
     </div>
 
-    <!-- Plans -->
-    <template v-if="tab === 'plans'">
-      <header class="toolbar"><h1>建议</h1></header>
-      <div class="page">
-        <div class="page-head">
-          <p>AI 给出的所有清单都在这里，可以随时回来执行或撤销。</p>
-        </div>
-        <plan-card v-for="pl in plans" :key="pl.id" :plan="pl" :server-name="serverName(pl.serverId) + ' · ' + fmtTime(pl.createdAt)"></plan-card>
-        <div class="group" v-if="!plans.length"><div class="row secondary">还没有清单。在「AI 助手」里说出你想做什么，AI 会把修改方案整理成清单。</div></div>
-      </div>
-    </template>
-
     <!-- Logs -->
     <template v-if="tab === 'logs'">
-      <header class="toolbar"><h1>日志</h1><span class="spacer"></span>
+      <header class="toolbar"><h1>记录</h1><span class="spacer"></span>
         <span class="segmented">
           <button :class="{on: logView === 'exec'}" @click="logView = 'exec'">执行日志</button>
           <button :class="{on: logView === 'audit'}" @click="logView = 'audit'; loadAudit()">操作记录</button>

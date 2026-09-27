@@ -1,4 +1,4 @@
-// Command miaopanel runs Miao Panel (喵面板) on the local machine: it
+// Command miaopanel runs Miao Panel on the local machine: it
 // serves the UI on 127.0.0.1 and shows it in its own window (Windows, via
 // WebView2) or in the default browser. "miaopanel serve" runs the web
 // edition on a server instead (see serve.go).
@@ -156,7 +156,7 @@ func run(port int, dataDir string, openBrowser, window bool) error {
 		return nil
 	}
 
-	fmt.Printf("Miao Panel（喵面板）%s 已启动\n\n", version)
+	fmt.Printf("Miao Panel %s 已启动\n\n", version)
 	fmt.Printf("  浏览器地址：%s\n", url)
 	fmt.Printf("  数据目录：  %s\n", dir)
 	if sec.Kind() == "keychain" {
