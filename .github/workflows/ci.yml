@@ -5,9 +5,21 @@ on:
     branches: ["**"]
     tags: ["v*"]
   pull_request:
+  # Run by hand from the Actions tab to publish a release: the tag is made
+  # on the commit that was built.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "要发布的版本号，比如 v0.1.0；留空只构建不发布"
+        required: false
+        default: ""
 
 permissions:
   contents: read
+
+env:
+  # The version being released: the tag pushed, or the one asked for by hand.
+  RELEASE: ${{ github.ref_type == 'tag' && github.ref_name || inputs.version }}
 
 jobs:
   test:
@@ -51,7 +63,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "0"
         run: |
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then VERSION="${GITHUB_REF_NAME}"; else VERSION="dev-${GITHUB_SHA::7}"; fi
+          VERSION="${RELEASE:-dev-${GITHUB_SHA::7}}"
           LDFLAGS="-s -w -X main.version=${VERSION}"
           # A GUI program on Windows: its own window, no console.
           if [ "${GOOS}" = "windows" ]; then LDFLAGS="${LDFLAGS} -H=windowsgui"; fi
@@ -69,7 +81,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build the image
-        run: docker build --build-arg VERSION="dev-${GITHUB_SHA::7}" -t miaopanel:ci .
+        run: docker build --build-arg VERSION="${RELEASE:-dev-${GITHUB_SHA::7}}" -t miaopanel:ci .
       - name: Start it and check the login page answers
         run: |
           docker run -d --name miaopanel -p 127.0.0.1:18765:18765 miaopanel:ci
@@ -78,7 +90,7 @@ jobs:
           curl -fsS -H 'X-Miao: 1' http://127.0.0.1:18765/api/auth/state | grep -q '"setup":true'
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: (github.ref_type == 'tag' && startsWith(github.ref_name, 'v')) || (github.event_name == 'workflow_dispatch' && startsWith(inputs.version, 'v'))
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -90,16 +102,19 @@ jobs:
           path: dist
           merge-multiple: true
       # Checksums for every file, and the notes written for this version
-      # (docs/releases/<tag>.md) when there are some.
+      # (docs/releases/<version>.md) when there are some.
       - name: Checksums and notes
         id: notes
         run: |
+          if ! [[ "${RELEASE}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then echo "版本号要像 v0.1.0：${RELEASE}"; exit 1; fi
           (cd dist && sha256sum * > SHA256SUMS.txt)
-          f="docs/releases/${GITHUB_REF_NAME}.md"
+          f="docs/releases/${RELEASE}.md"
           if [ -f "$f" ]; then echo "path=$f" >> "$GITHUB_OUTPUT"; fi
       - uses: softprops/action-gh-release@v2
         with:
-          name: Miao Panel ${{ github.ref_name }}
+          tag_name: ${{ env.RELEASE }}
+          target_commitish: ${{ github.sha }}
+          name: Miao Panel ${{ env.RELEASE }}
           files: dist/*
           body_path: ${{ steps.notes.outputs.path }}
           generate_release_notes: true
