@@ -159,7 +159,9 @@ func TestRunScriptDetachedApplyAndUndo(t *testing.T) {
 	if undone.Status != StatusUndone || !strings.Contains(strings.Join(undone.Log, "\n"), "undo token=["+tricky+"]") {
 		t.Fatalf("undo: %+v", undone)
 	}
-	RetireRollbackFile(ctx, env, out.RollbackFile)
+	if _, err := RetireRollbackFile(ctx, env, out.RollbackFile); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := os.Stat(out.RollbackFile + ".done"); err != nil {
 		t.Fatalf("rollback file not retired: %v", err)
 	}

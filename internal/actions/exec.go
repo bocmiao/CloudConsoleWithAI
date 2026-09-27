@@ -367,17 +367,27 @@ func writeRollbackFile(ctx context.Context, env *Env, sudo string, r Resolved, d
 
 // RetireRollbackFile renames a rollback file after Miao Panel has rolled
 // the change back, so nobody runs it a second time by mistake.
-func RetireRollbackFile(ctx context.Context, env *Env, path string) string {
+func RetireRollbackFile(ctx context.Context, env *Env, path string) (string, error) {
 	if path == "" {
-		return ""
+		return "", nil
 	}
 	sudo := ""
 	if env.User != "root" {
 		sudo = "sudo -n "
 	}
 	cmd := sudo + "mv -f " + shq(path) + " " + shq(path+".done")
-	_, _ = env.SSH.Run(ctx, cmd, "", 1024)
-	return cmd
+	res, err := env.SSH.Run(ctx, cmd, "", 1024)
+	if err != nil || res.ExitCode != 0 {
+		detail := strings.TrimSpace(res.Stderr)
+		if err != nil {
+			detail = strings.TrimSpace(err.Error() + " " + detail)
+		}
+		if detail == "" {
+			detail = fmt.Sprintf("exit code %d", res.ExitCode)
+		}
+		return cmd, fmt.Errorf("回滚已完成，但旧回滚文件未能改名：%s", detail)
+	}
+	return cmd, nil
 }
 
 func statusForExit(raw string) (string, error) {
