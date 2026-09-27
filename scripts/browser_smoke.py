@@ -60,6 +60,18 @@ def totp(secret):
     return f"{(struct.unpack('>I', digest[offset:offset + 4])[0] & 0x7fffffff) % 1000000:06d}"
 
 
+def fresh_totp(secret):
+    """Wait for a new TOTP so replay protection cannot reject this login."""
+    previous = totp(secret)
+    deadline = time.monotonic() + 31
+    while time.monotonic() < deadline:
+        code = totp(secret)
+        if code != previous:
+            return code
+        time.sleep(0.25)
+    raise TimeoutError("A fresh TOTP did not appear in time")
+
+
 def main():
     driver = shutil.which("chromedriver")
     if not driver:
@@ -108,7 +120,7 @@ def main():
             click(".login-card .login-btn")
             if secret:
                 wait_for(lambda: find(".login-card input[autocomplete='one-time-code']"))
-                fill(".login-card input[autocomplete='one-time-code']", totp(secret))
+                fill(".login-card input[autocomplete='one-time-code']", fresh_totp(secret))
                 click(".login-card .login-btn")
             wait_for(lambda: find(".side-user button[title='退出登录']"))
 
