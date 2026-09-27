@@ -24,6 +24,41 @@ docker logs miaopanel          # 找到「初始化码」
 
 升级：`git pull && docker compose up -d --build`。
 
+### 备份与恢复 Web 版数据
+
+数据目录同时保存 SQLite 数据库和服务器、云服务的密钥。升级前先做一次备份，备份文件也要按密钥保管。SQLite 使用 WAL 模式，**不要在服务运行时只复制 `miaopanel.db`**。
+
+Docker 版在项目目录执行（短暂停机，生成仅所有者可读的压缩包）：
+
+```bash
+umask 077
+mkdir -p backups
+docker compose stop miaopanel
+docker compose run --rm --no-deps --user 0 \
+  -v "$PWD/backups:/backup" --entrypoint sh miaopanel \
+  -c 'umask 077; tar -C /data -czf /backup/miaopanel-backup.tar.gz .'
+docker compose start miaopanel
+```
+
+在新机器或**新的、空的数据卷**里恢复。把备份放在新项目目录的 `backups/` 下，先不要运行 `docker compose up`：
+
+```bash
+docker compose run --rm --no-deps --user 0 \
+  -v "$PWD/backups:/backup:ro" --entrypoint sh miaopanel \
+  -c 'test -z "$(ls -A /data)" || { echo "数据卷必须为空"; exit 1; }; tar -C /data -xzf /backup/miaopanel-backup.tar.gz'
+docker compose up -d
+```
+
+systemd 版同样先停服务，再将整个数据目录打包：
+
+```bash
+sudo systemctl stop miaopanel
+sudo sh -c 'umask 077; tar -C /var/lib/miaopanel -czf /root/miaopanel-backup.tar.gz .'
+sudo systemctl start miaopanel
+```
+
+在新机器的空数据目录恢复时，先安装好服务但不要启动，解包后运行 `sudo chown -R miaopanel:miaopanel /var/lib/miaopanel`，然后启动服务。恢复演练要检查原账号能登录、服务器列表和密钥可用、执行日志仍在。不要把含密钥的备份提交到 GitHub。
+
 ## 方式二：直接运行程序（systemd）
 
 从 [Releases](https://github.com/bocmiao/CloudConsoleWithAI/releases/latest) 下载 Linux 版程序（ARM 服务器把下面的 `amd64` 换成 `arm64`），然后：
@@ -63,6 +98,8 @@ client_max_body_size 0;
 
 这几行的作用：`X-Real-IP` 让登录失败按访客 IP 限制；`X-Forwarded-Proto` 让 Miao Panel 知道是 HTTPS；
 关闭缓冲让 AI 的回答和终端输出实时显示；超时时间让终端能长时间开着；`client_max_body_size 0` 让「文件」和「存储」页能上传大文件。
+
+默认只信任来自本机回环地址的反向代理。如果反向代理从另一台机器或 Docker 私有网络连接 Miao Panel，设置 `MIAO_TRUSTED_PROXIES` 为该代理的 IP（或尽量小的 CIDR），多个地址用逗号分隔；例如 `MIAO_TRUSTED_PROXIES=172.20.0.5`。不要把整个局域网填进去，也不要让代理原样转发客户端提供的 `X-Real-IP` 和 `X-Forwarded-Proto`。
 
 不想用反向代理，也可以让 Miao Panel 自己提供 HTTPS：`miaopanel serve --listen 0.0.0.0:443 --tls-cert 证书.pem --tls-key 私钥.pem`。
 
@@ -117,6 +154,7 @@ sudo -u miaopanel miaopanel reset-password --data /var/lib/miaopanel            
 | 参数 | 环境变量 | 默认 | 说明 |
 |---|---|---|---|
 | `--listen` | `MIAO_LISTEN` | `127.0.0.1:18765`（Docker 里是 `0.0.0.0:18765`） | 监听地址 |
+| `--trusted-proxies` | `MIAO_TRUSTED_PROXIES` | 空（仍信任本机回环地址） | 额外可信反向代理的 IP 或 CIDR，逗号分隔 |
 | `--data` | `MIAO_DATA` | 当前用户的配置目录（Docker 里是 `/data`） | 数据库和密钥的位置 |
 | `--tls-cert` / `--tls-key` | `MIAO_TLS_CERT` / `MIAO_TLS_KEY` | 无 | 由 Miao Panel 自己提供 HTTPS |
 | | `TZ` | `Asia/Shanghai`（Docker） | 日报按这个时区生成 |

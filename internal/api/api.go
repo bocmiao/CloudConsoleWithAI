@@ -23,6 +23,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -39,12 +40,13 @@ const cookieName = "miao_session"
 
 // Server is the HTTP handler.
 type Server struct {
-	app     *app.App
-	token   string        // desktop: the one login, made at start
-	port    int           // desktop: the loopback port
-	auth    *auth.Service // web edition: accounts and sessions
-	version string
-	mux     *http.ServeMux
+	app            *app.App
+	token          string         // desktop: the one login, made at start
+	port           int            // desktop: the loopback port
+	auth           *auth.Service  // web edition: accounts and sessions
+	trustedProxies []netip.Prefix // additional reverse proxies; loopback is always trusted
+	version        string
+	mux            *http.ServeMux
 
 	dlMu sync.Mutex
 	dl   map[string]download // one-time download links

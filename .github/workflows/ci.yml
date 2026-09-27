@@ -17,6 +17,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' && github.event_name != 'workflow_dispatch' }}
+
 env:
   # The version being released: the tag pushed, or the one asked for by hand.
   RELEASE: ${{ github.ref_type == 'tag' && github.ref_name || inputs.version }}
@@ -41,6 +45,8 @@ jobs:
         run: bash -n scripts/discover.sh && sh -n scripts/discover.sh
 
   build:
+    # Cross-platform artifacts are needed for releases, not every push.
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
     needs: test
     runs-on: ubuntu-latest
     strategy:
@@ -84,10 +90,43 @@ jobs:
         run: docker build --build-arg VERSION="${RELEASE:-dev-${GITHUB_SHA::7}}" -t miaopanel:ci .
       - name: Start it and check the login page answers
         run: |
-          docker run -d --name miaopanel -p 127.0.0.1:18765:18765 miaopanel:ci
+          docker run -d --name miaopanel -p 127.0.0.1:18765:18765 -v miaopanel-ci-data:/data miaopanel:ci
           for i in $(seq 1 20); do curl -fsS -H 'X-Miao: 1' http://127.0.0.1:18765/api/auth/state && break; sleep 1; done
           docker logs miaopanel 2>&1 | grep -q '初始化码'
           curl -fsS -H 'X-Miao: 1' http://127.0.0.1:18765/api/auth/state | grep -q '"setup":true'
+      - name: Check the browser mounts the login page
+        run: |
+          timeout 30s google-chrome --headless --no-sandbox --disable-dev-shm-usage \
+            --virtual-time-budget=5000 --dump-dom http://127.0.0.1:18765/ \
+            > /tmp/miaopanel-login.html 2>/tmp/chrome.log
+          if grep -q 'v-cloak' /tmp/miaopanel-login.html; then
+            cat /tmp/chrome.log
+            echo 'Vue did not mount the login page'
+            exit 1
+          fi
+          grep -q '初始化码' /tmp/miaopanel-login.html
+      - name: Restore a stopped data volume
+        run: |
+          code=$(docker exec miaopanel cat /data/setup-code)
+          curl -fsS -X POST -H 'X-Miao: 1' -H 'Content-Type: application/json' \
+            -d "{\"code\":\"${code}\",\"name\":\"admin\",\"password\":\"correct horse battery\"}" \
+            http://127.0.0.1:18765/api/auth/setup > /dev/null
+          docker stop miaopanel
+          mkdir -p /tmp/miaopanel-backup
+          docker run --rm --user 0 --volumes-from miaopanel -v /tmp/miaopanel-backup:/backup \
+            --entrypoint sh miaopanel:ci -c 'umask 077; tar -C /data -czf /backup/miaopanel.tar.gz .'
+          docker volume create miaopanel-ci-restored
+          docker run --rm --user 0 -v miaopanel-ci-restored:/data -v /tmp/miaopanel-backup:/backup:ro \
+            --entrypoint sh miaopanel:ci -c 'tar -C /data -xzf /backup/miaopanel.tar.gz'
+          docker rm miaopanel
+          docker run -d --name miaopanel-restored -p 127.0.0.1:18765:18765 \
+            -v miaopanel-ci-restored:/data miaopanel:ci
+          for i in $(seq 1 20); do
+            if curl -fsS -H 'X-Miao: 1' http://127.0.0.1:18765/api/auth/state | grep -q '"setup":false'; then exit 0; fi
+            sleep 1
+          done
+          docker logs miaopanel-restored
+          exit 1
 
   release:
     if: (github.ref_type == 'tag' && startsWith(github.ref_name, 'v')) || (github.event_name == 'workflow_dispatch' && startsWith(inputs.version, 'v'))
