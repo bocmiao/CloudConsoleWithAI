@@ -129,16 +129,17 @@ def main():
         """)
         fill(".chat textarea", "Test scrolling while the answer streams")
         click(".chat button.send.primary")
-        height = wait_for(lambda: execute("""
+        wait_for(lambda: execute("""
           const box = document.querySelector('.messages');
           return box.scrollHeight > box.clientHeight + 200 ? box.scrollHeight : 0;
         """))
+        text_length = execute("document.querySelector('.live-text')?.textContent.length || 0")
         execute("""
           const box = document.querySelector('.messages');
           box.scrollTop = 0;
           box.dispatchEvent(new Event('scroll'));
         """)
-        wait_for(lambda: execute(f"document.querySelector('.messages').scrollHeight > {height + 300}"))
+        wait_for(lambda: execute(f"(document.querySelector('.live-text')?.textContent.length || 0) > {text_length + 300}"))
         assert execute("document.querySelector('.messages').scrollTop") <= 4, "Streaming pulled the reader away from earlier text"
         wait_for(lambda: execute("!document.querySelector('.chat button.send.stop')"), seconds=15)
         assert execute("document.querySelector('.messages').scrollTop") <= 4, "Answer completion jumped to the bottom"
