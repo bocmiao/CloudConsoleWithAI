@@ -244,7 +244,7 @@
         <div class="side-empty" v-if="!convs.length">还没有对话记录。问过的问题会自动保存在这里，关掉程序也不会丢。</div>
       </aside>
       <div class="chat">
-        <div class="messages" ref="msgBox">
+        <div class="messages" ref="msgBox" @scroll.passive="onChatScroll">
           <div class="messages-inner">
             <div class="group" v-if="!ai.hasKey">
               <div class="row"><ui-icon name="info" class="lg" style="color: var(--accent)"></ui-icon><div class="grow">还没有设置 AI 模型的 API Key。</div><button @click="go('settings')">去设置</button></div>

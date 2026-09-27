@@ -92,7 +92,57 @@ def main():
         fill(".login-card input[autocomplete='current-password']", password)
         click(".login-card .login-btn")
         wait_for(lambda: find(".side-user button[title='退出登录']"))
-        print("Browser setup, logout, and password login passed")
+
+        def execute(script):
+            return request("POST", root + "/execute/sync", {"script": script, "args": []})
+
+        execute("""
+          document.querySelectorAll('.side-item').forEach(el => {
+            if (el.textContent.trim() === 'AI 助手') el.click();
+          });
+          const realFetch = window.fetch;
+          window.fetch = (url, options) => {
+            if (url !== '/api/chat/stream') return realFetch(url, options);
+            let count = 0;
+            let fullText = '';
+            const encoder = new TextEncoder();
+            const stream = new ReadableStream({
+              start(controller) {
+                const timer = setInterval(() => {
+                  if (count < 80) {
+                    const text = `Paragraph ${count}: ${'x'.repeat(200)}\\n\\n`;
+                    fullText += text;
+                    controller.enqueue(encoder.encode(JSON.stringify({type: 'text', text}) + '\\n'));
+                    count++;
+                  } else {
+                    controller.enqueue(encoder.encode(JSON.stringify({type: 'done', reply: {
+                      conversationId: 'browser-smoke', reply: {text: fullText}, plans: []
+                    }}) + '\\n'));
+                    clearInterval(timer);
+                    controller.close();
+                  }
+                }, 80);
+              }
+            });
+            return Promise.resolve(new Response(stream, {status: 200}));
+          };
+        """)
+        fill(".chat textarea", "Test scrolling while the answer streams")
+        click(".chat button.send.primary")
+        height = wait_for(lambda: execute("""
+          const box = document.querySelector('.messages');
+          return box.scrollHeight > box.clientHeight + 200 ? box.scrollHeight : 0;
+        """))
+        execute("""
+          const box = document.querySelector('.messages');
+          box.scrollTop = 0;
+          box.dispatchEvent(new Event('scroll'));
+        """)
+        wait_for(lambda: execute(f"document.querySelector('.messages').scrollHeight > {height + 300}"))
+        assert execute("document.querySelector('.messages').scrollTop") <= 4, "Streaming pulled the reader away from earlier text"
+        wait_for(lambda: execute("!document.querySelector('.chat button.send.stop')"), seconds=15)
+        assert execute("document.querySelector('.messages').scrollTop") <= 4, "Answer completion jumped to the bottom"
+        print("Browser setup, login, and chat scrolling passed")
     finally:
         if session:
             try:

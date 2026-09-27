@@ -4665,6 +4665,7 @@ const app = createApp({
     const draft = ref('');
     const chatBusy = ref(false);
     const msgBox = ref(null);
+    let followChat = true;
     const op = reactive({ port: 0, host: '', apiKey: '', hasKey: false, info: '' });
     const tc = reactive({ configured: false, hint: '', secretId: '', secretKey: '', info: '' });
     const freeCmd = reactive({ enabled: false });
@@ -4865,6 +4866,7 @@ const app = createApp({
         messages.value = c.messages.map(viewMessage);
         conversationId.value = c.id;
         showConvs.value = false;
+        followChat = true;
         scrollChat();
       } catch (e) { notify(e.message, 'error'); }
     }
@@ -4920,9 +4922,9 @@ const app = createApp({
       return lv.steps.length ? '正在整理查到的数据……' : '正在思考……';
     });
     const thinkTail = t => { const s = (t || '').replace(/\s+/g, ' ').trim(); return s.length > 140 ? '…' + s.slice(-140) : s; };
-    function nearBottom() {
+    function onChatScroll() {
       const b = msgBox.value;
-      return !b || b.scrollHeight - b.scrollTop - b.clientHeight < 120;
+      if (b) followChat = b.scrollHeight - b.scrollTop - b.clientHeight <= 4;
     }
     // A stream that ended without "done" (stopped, or the connection
     // dropped) still keeps what was shown.
@@ -4940,6 +4942,7 @@ const app = createApp({
       const lv = reactive({ text: '', thinking: '', steps: [], phase: 'wait', stopping: false });
       live.value = lv;
       controller = new AbortController();
+      followChat = true;
       scrollChat();
       let final = null;
       try {
@@ -4958,7 +4961,6 @@ const app = createApp({
         for (;;) {
           const { value, done } = await reader.read();
           if (done) break;
-          const follow = nearBottom();
           buf += dec.decode(value, { stream: true });
           let i;
           while ((i = buf.indexOf('\n')) >= 0) {
@@ -4970,7 +4972,7 @@ const app = createApp({
             if (e.type === 'done') final = e.reply;
             else onChatEvent(lv, e);
           }
-          if (follow) scrollChat();
+          scrollChat();
         }
         if (!final) throw new Error('连接中断了，回答没有完整收到');
         const r = final;
@@ -5021,7 +5023,7 @@ const app = createApp({
       if (d.toDateString() === y.toDateString()) return '昨天 ' + hm;
       return d.getFullYear() === now.getFullYear() ? `${d.getMonth() + 1}月${d.getDate()}日` : `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
     }
-    function scrollChat() { nextTick(() => { if (msgBox.value) msgBox.value.scrollTop = msgBox.value.scrollHeight; }); }
+    function scrollChat() { nextTick(() => { if (followChat && msgBox.value) msgBox.value.scrollTop = msgBox.value.scrollHeight; }); }
 
     function applyPreset() {
       const pr = presets.value.find(p => p.id === aiForm.presetId);
@@ -5134,7 +5136,7 @@ const app = createApp({
     return {
       tab, go, navOpen, navEl, navBtn, closeNav, servers, selectedId, current, p, busy, busyText, toast, info, ai, presets, aiForm, presetNote,
       spendText, plans, audit, logView, logFocus, loadAudit, openLog, showAdd, addForm, messages, draft, chatBusy, msgBox, suggestions,
-      select, openAdd, addServer, testConn, discover, removeServer, askAbout, send, onEnter, newChat, applyPreset, saveAI, testAI,
+      select, openAdd, addServer, testConn, discover, removeServer, askAbout, send, onEnter, onChatScroll, newChat, applyPreset, saveAI, testAI,
       convs, showConvs, conversationId, openConv, deleteConv, relTime,
       op, saveOnePanel, testOnePanel, tc, saveTencent, testTencent, clearTencent, freeCmd, setFree, seen, statsView, statsSeen, termRequest, openTerminal, filesRequest, openFiles, unread, me, logout,
       cloud, cloudList, cloudPick, pickCloud, askAI, daysTo, fmtBytes,
