@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bocmiao/CloudConsoleWithAI/internal/aliyun/aliyuntest"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/sender"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/tencent"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/tencent/tencenttest"
@@ -76,5 +77,53 @@ func TestSMSSettingsAndCap(t *testing.T) {
 	}
 	if len(f.SMS) != 2 || a.GetSMSSettings().SentToday != 2 {
 		t.Fatalf("sent %d", len(f.SMS))
+	}
+}
+
+func TestAliyunSMS(t *testing.T) {
+	a := newApp(t)
+	f := aliyuntest.Start(t)
+	f.Vars = []string{"code", "min"}
+	a.AliyunEndpoint = f.URL
+	s := SMSSettings{Provider: "aliyun", SMS: tencent.SMS{Sign: "喵面板", Template: "SMS_123456789"}, AccessKeyID: aliyuntest.ID,
+		CodeVar: "${code}", MinutesVar: "min", DailyLimit: 5}
+	// The secret is needed the first time.
+	if _, err := a.SaveSMSSettings(s); err == nil || !strings.Contains(err.Error(), "Secret") {
+		t.Fatalf("no secret: %v", err)
+	}
+	// Tested before saving, with the secret typed in.
+	s.AccessKeySecret = aliyuntest.Secret
+	if err := a.TestSMS(context.Background(), s, "+8613800138000"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Sent) != 1 || f.Sent[0].Phone != "13800138000" || f.Sent[0].Params["code"] != "123456" || f.Sent[0].Params["min"] != "10" {
+		t.Fatalf("test sent %+v", f.Sent)
+	}
+	v, err := a.SaveSMSSettings(s)
+	if err != nil || !v.Configured || !v.HasSecret || v.AccessKeySecret != "" || v.CodeVar != "code" || v.Keys {
+		t.Fatalf("saved = %+v %v", v, err)
+	}
+	// Saved again without the secret: the saved one stays.
+	s.AccessKeySecret = ""
+	if _, err := a.SaveSMSSettings(s); err != nil || !a.SMSReady() {
+		t.Fatalf("resave: %v", err)
+	}
+	if err := a.SendCode(context.Background(), "sms", "+85291234567", "654321", "login", "1.1.1.1"); err != nil {
+		t.Fatal(err)
+	}
+	if f.Sent[1].Phone != "85291234567" || f.Sent[1].Params["code"] != "654321" {
+		t.Fatalf("sent %+v", f.Sent[1])
+	}
+	for _, bad := range []SMSSettings{
+		{Provider: "aliyun", SMS: tencent.SMS{Sign: "喵面板", Template: "123456"}, AccessKeyID: aliyuntest.ID, DailyLimit: 5},
+		{Provider: "aliyun", SMS: tencent.SMS{Sign: "喵面板", Template: "SMS_123456789"}, AccessKeyID: "bad id!", DailyLimit: 5},
+		{Provider: "aliyun", SMS: tencent.SMS{Sign: "喵面板", Template: "SMS_123456789"}, AccessKeyID: aliyuntest.ID, CodeVar: "a-b", DailyLimit: 5},
+	} {
+		if _, err := a.SaveSMSSettings(bad); err == nil {
+			t.Errorf("accepted %+v", bad)
+		}
+	}
+	if err := a.ClearSMSSettings(); err != nil || a.SMSReady() || a.GetSMSSettings().HasSecret {
+		t.Fatalf("clear: %v", err)
 	}
 }

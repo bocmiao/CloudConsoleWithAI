@@ -979,3 +979,5 @@ textarea.cos-policy { width: 100%; font-size: 12.5px; margin-bottom: 14px; min-h
 .notice .icon.st-crit { color: var(--crit); }
 .notice .icon.st-ok { color: var(--good); }
 .notice .icon.st-warn { color: var(--warn); }
+.sms-provider { display: flex; margin: 4px 0 12px; }
+.sms-provider button { flex: 1; justify-content: center; }

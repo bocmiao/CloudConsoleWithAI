@@ -92,7 +92,7 @@ func (s *Service) SetMethods(uid int64, m Methods) error {
 		return refuse("not_bound", "先绑定邮箱，才能开启邮箱验证码登录")
 	}
 	if m.SMS && !s.ready("sms") {
-		return refuse("not_ready", "先设置腾讯云短信，才能开启短信验证码登录")
+		return refuse("not_ready", "先设置短信（腾讯云或阿里云），才能开启短信验证码登录")
 	}
 	if m.SMS && u.Phone == "" {
 		return refuse("not_bound", "先绑定手机号，才能开启短信验证码登录")
@@ -404,7 +404,7 @@ func (s *Service) BeginBind(ctx context.Context, uid int64, ip, channel, raw, pa
 		return err
 	}
 	if !s.ready(channel) {
-		return refuse("not_ready", "先设置%s", map[string]string{"email": "发信邮箱（SMTP）", "sms": "腾讯云短信"}[channel])
+		return refuse("not_ready", "先设置%s", map[string]string{"email": "发信邮箱（SMTP）", "sms": "短信（腾讯云或阿里云）"}[channel])
 	}
 	target, err := normTarget(channel, raw)
 	if err != nil {

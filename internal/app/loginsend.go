@@ -9,12 +9,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bocmiao/CloudConsoleWithAI/internal/aliyun"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/sender"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/tencent"
 )
 
 // Where login codes go out: mail over the owner's SMTP server, and text
-// messages through Tencent Cloud SMS with the saved Tencent Cloud keys.
+// messages through Tencent Cloud SMS (with the saved Tencent Cloud keys)
+// or Alibaba Cloud SMS.
 const (
 	mailSetting   = "mail.smtp"
 	mailSecret    = "mail/smtp_password"
@@ -111,27 +113,55 @@ func (a *App) TestMail(ctx context.Context, s sender.SMTP, to string) error {
 	return nil
 }
 
-// SMSSettings is the text-message setup.
+// SMSSettings is the text-message setup: Tencent Cloud SMS (with the
+// saved Tencent Cloud keys) or Alibaba Cloud SMS (with its own AccessKey).
 type SMSSettings struct {
+	Provider string `json:"provider"` // tencent (the default) or aliyun
+	// Tencent Cloud: appId, sign, template (an ID), params, region.
+	// Alibaba Cloud: sign and template (SMS_...) too.
 	tencent.SMS
-	DailyLimit int  `json:"dailyLimit"` // texts a day at most, a guard against someone running up the bill
-	Configured bool `json:"configured"`
-	Keys       bool `json:"keys"` // Tencent Cloud keys are saved
-	SentToday  int  `json:"sentToday"`
+	AccessKeyID     string `json:"accessKeyId,omitempty"`     // Alibaba Cloud
+	AccessKeySecret string `json:"accessKeySecret,omitempty"` // only when saving; never shown
+	CodeVar         string `json:"codeVar,omitempty"`         // Alibaba Cloud template variable for the code, e.g. code
+	MinutesVar      string `json:"minutesVar,omitempty"`      // and one for the minutes, when the template has it
+	DailyLimit      int    `json:"dailyLimit"`                // texts a day at most, a guard against someone running up the bill
+	Configured      bool   `json:"configured"`
+	Keys            bool   `json:"keys"`      // Tencent Cloud keys saved
+	HasSecret       bool   `json:"hasSecret"` // Alibaba Cloud secret saved
+	SentToday       int    `json:"sentToday"`
 }
+
+const aliyunSecret = "sms/aliyun_secret"
 
 var (
 	smsAppRe  = regexp.MustCompile(`^14[0-9]{8}$`)
 	smsTplRe  = regexp.MustCompile(`^[0-9]{1,10}$`)
 	smsSignRe = regexp.MustCompile(`^[\p{Han}A-Za-z0-9 ._-]{2,20}$`)
+	aliKeyRe  = regexp.MustCompile(`^[A-Za-z0-9]{12,64}$`)
+	aliTplRe  = regexp.MustCompile(`^SMS_[0-9]{3,20}$`)
+	smsVarRe  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,31}$`)
 )
 
-func checkSMS(s tencent.SMS) error {
+func checkSMS(s SMSSettings) error {
+	if !smsSignRe.MatchString(s.Sign) {
+		return fmt.Errorf("签名要填审核通过的签名内容（不带【】），例如 喵面板")
+	}
+	if s.Provider == "aliyun" {
+		switch {
+		case !aliKeyRe.MatchString(s.AccessKeyID):
+			return fmt.Errorf("AccessKey ID 不对，一般是 LTAI 开头的一串字母和数字")
+		case !aliTplRe.MatchString(s.Template):
+			return fmt.Errorf("模板 CODE 要像 SMS_123456789，在阿里云「短信服务 → 国内消息 → 模板管理」里")
+		case !smsVarRe.MatchString(s.CodeVar):
+			return fmt.Errorf("验证码的变量名只能用字母、数字和下划线，模板里是 ${code} 就填 code")
+		case s.MinutesVar != "" && !smsVarRe.MatchString(s.MinutesVar):
+			return fmt.Errorf("分钟数的变量名只能用字母、数字和下划线")
+		}
+		return nil
+	}
 	switch {
 	case !smsAppRe.MatchString(s.AppID):
 		return fmt.Errorf("SDK AppID 是 14 开头的 10 位数字，在腾讯云「短信 → 应用管理」里")
-	case !smsSignRe.MatchString(s.Sign):
-		return fmt.Errorf("签名要填审核通过的签名内容（不带【】），例如 喵面板")
 	case !smsTplRe.MatchString(s.Template):
 		return fmt.Errorf("模板 ID 是数字，在腾讯云「短信 → 正文模板管理」里")
 	case s.Params != 1 && s.Params != 2:
@@ -148,11 +178,21 @@ func (a *App) smsConfig() (SMSSettings, bool) {
 	if raw != "" {
 		_ = json.Unmarshal([]byte(raw), &s)
 	}
+	if s.Provider == "" {
+		s.Provider = "tencent"
+	}
 	if s.DailyLimit <= 0 {
 		s.DailyLimit = smsDailyCap
 	}
 	s.Keys = a.tencentClient() != nil
-	s.Configured = raw != "" && checkSMS(s.SMS) == nil && s.Keys
+	secret, _ := a.Secrets.Get(aliyunSecret)
+	s.HasSecret = secret != ""
+	ready := s.Keys
+	if s.Provider == "aliyun" {
+		ready = s.HasSecret
+	}
+	s.AccessKeySecret = ""
+	s.Configured = raw != "" && checkSMS(s) == nil && ready
 	return s, s.Configured
 }
 
@@ -163,35 +203,66 @@ func (a *App) GetSMSSettings() SMSSettings {
 	return s
 }
 
-// SaveSMSSettings saves the text-message setup.
-func (a *App) SaveSMSSettings(s SMSSettings) (SMSSettings, error) {
+func cleanSMS(s SMSSettings) SMSSettings {
+	if s.Provider != "aliyun" {
+		s.Provider = "tencent"
+	}
 	s.AppID, s.Sign, s.Template = strings.TrimSpace(s.AppID), strings.Trim(strings.TrimSpace(s.Sign), "【】[]"), strings.TrimSpace(s.Template)
-	if err := checkSMS(s.SMS); err != nil {
+	s.AccessKeyID, s.AccessKeySecret = strings.TrimSpace(s.AccessKeyID), strings.TrimSpace(s.AccessKeySecret)
+	s.CodeVar, s.MinutesVar = strings.Trim(strings.TrimSpace(s.CodeVar), "${}"), strings.Trim(strings.TrimSpace(s.MinutesVar), "${}")
+	if s.CodeVar == "" {
+		s.CodeVar = "code"
+	}
+	return s
+}
+
+// SaveSMSSettings saves the text-message setup; an empty Alibaba Cloud
+// secret keeps the saved one.
+func (a *App) SaveSMSSettings(s SMSSettings) (SMSSettings, error) {
+	s = cleanSMS(s)
+	if err := checkSMS(s); err != nil {
 		return SMSSettings{}, userErr("%v", err)
 	}
 	if s.DailyLimit <= 0 || s.DailyLimit > smsDailyLimit {
 		return SMSSettings{}, userErr("每天最多发送的条数要在 1 到 %d 之间", smsDailyLimit)
 	}
-	raw, _ := json.Marshal(struct {
+	if s.Provider == "aliyun" {
+		if s.AccessKeySecret != "" {
+			if err := a.Secrets.Set(aliyunSecret, s.AccessKeySecret); err != nil {
+				return SMSSettings{}, err
+			}
+		} else if v, _ := a.Secrets.Get(aliyunSecret); v == "" {
+			return SMSSettings{}, userErr("请填写 AccessKey Secret")
+		}
+	}
+	stored := struct {
+		Provider string `json:"provider"`
 		tencent.SMS
-		DailyLimit int `json:"dailyLimit"`
-	}{s.SMS, s.DailyLimit})
+		AccessKeyID string `json:"accessKeyId,omitempty"`
+		CodeVar     string `json:"codeVar,omitempty"`
+		MinutesVar  string `json:"minutesVar,omitempty"`
+		DailyLimit  int    `json:"dailyLimit"`
+	}{s.Provider, s.SMS, s.AccessKeyID, s.CodeVar, s.MinutesVar, s.DailyLimit}
+	raw, _ := json.Marshal(stored)
 	if err := a.Store.SetSetting(smsSetting, string(raw)); err != nil {
 		return SMSSettings{}, err
 	}
-	_ = a.Store.Audit("user", "settings.sms", s.AppID, s.Sign)
+	_ = a.Store.Audit("user", "settings.sms", map[string]string{"tencent": "腾讯云短信", "aliyun": "阿里云短信"}[s.Provider], s.Sign)
 	return a.GetSMSSettings(), nil
 }
 
 // ClearSMSSettings forgets the text-message setup.
 func (a *App) ClearSMSSettings() error {
+	_ = a.Secrets.Delete(aliyunSecret)
 	_ = a.Store.Audit("user", "settings.sms", "-", "清除了短信设置")
 	return a.Store.DeleteSetting(smsSetting)
 }
 
-// TestSMS sends a test code with the settings given.
+// TestSMS sends a test code with the settings given (the saved Alibaba
+// Cloud secret when none is given), before they are saved.
 func (a *App) TestSMS(ctx context.Context, s SMSSettings, phone string) error {
-	if err := checkSMS(s.SMS); err != nil {
+	s = cleanSMS(s)
+	if err := checkSMS(s); err != nil {
 		return userErr("%v", err)
 	}
 	s.DailyLimit = a.GetSMSSettings().DailyLimit
@@ -229,14 +300,36 @@ func (c *smsCounter) take(limit int) bool {
 }
 
 func (a *App) sendSMS(ctx context.Context, s SMSSettings, phone, code string) error {
-	c := a.tencentClient()
-	if c == nil {
-		return userErr("还没有填写腾讯云密钥，短信通过腾讯云发送")
+	var send func() error
+	switch s.Provider {
+	case "aliyun":
+		secret := s.AccessKeySecret
+		if secret == "" {
+			secret, _ = a.Secrets.Get(aliyunSecret)
+		}
+		if secret == "" {
+			return userErr("还没有填写阿里云 AccessKey Secret")
+		}
+		c := aliyun.New(s.AccessKeyID, secret)
+		if a.AliyunEndpoint != "" {
+			c.Endpoint = a.AliyunEndpoint
+		}
+		params := map[string]string{s.CodeVar: code}
+		if s.MinutesVar != "" {
+			params[s.MinutesVar] = fmt.Sprint(codeMinutes)
+		}
+		send = func() error { return c.SendSMS(ctx, s.Sign, s.Template, phone, params) }
+	default:
+		c := a.tencentClient()
+		if c == nil {
+			return userErr("还没有填写腾讯云密钥，腾讯云短信要用它发送")
+		}
+		send = func() error { return c.SendSMS(ctx, s.SMS, phone, code, codeMinutes) }
 	}
 	if !a.smsCount.take(s.DailyLimit) {
 		return userErr("今天的短信已经发了 %d 条，达到了设置的上限", s.DailyLimit)
 	}
-	if err := c.SendSMS(ctx, s.SMS, phone, code, codeMinutes); err != nil {
+	if err := send(); err != nil {
 		return userErr("%v", err)
 	}
 	return nil

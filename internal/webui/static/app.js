@@ -4303,8 +4303,8 @@ const AccountPanel = {
       const bound = { email: a.email, sms: a.phone }[k];
       if (a.methods[k] && !a.active[k]) return `已开启，但${k === 'email' ? '发信邮箱' : '短信'}设置不完整，暂时不能用`;
       if (a.methods[k]) return `已开启：用绑定的${name}收验证码登录`;
-      if (!sender && !bound) return `先在下面设置${k === 'email' ? '发信邮箱' : '腾讯云短信'}，再绑定${name}`;
-      if (!sender) return `先在下面设置${k === 'email' ? '发信邮箱' : '腾讯云短信'}`;
+      if (!sender && !bound) return `先在下面设置${k === 'email' ? '发信邮箱' : '短信'}，再绑定${name}`;
+      if (!sender) return `先在下面设置${k === 'email' ? '发信邮箱' : '短信'}`;
       if (!bound) return `先在下面绑定${name}`;
       return '未开启';
     };
@@ -4371,13 +4371,29 @@ const AccountPanel = {
         }
       } catch (e) { ml.error = e.message; } finally { ml.busy = ''; }
     }
-    const sm = reactive({ open: false, appId: '', sign: '', template: '', params: 2, region: 'ap-guangzhou', dailyLimit: 30, phone: '', current: '', busy: '', error: '', ok: '' });
+    const sm = reactive({ open: false, provider: 'tencent', appId: '', sign: '', template: '', params: 2, region: 'ap-guangzhou', accessKeyId: '', accessKeySecret: '',
+      codeVar: 'code', minutesVar: '', dailyLimit: 30, phone: '', current: '', busy: '', error: '', ok: '' });
+    // Each provider keeps what was typed for it while switching back and forth.
     function openSMS() {
       const v = acct.value.sms;
-      Object.assign(sm, { open: true, appId: v.appId || '', sign: v.sign || '', template: v.template || '', params: v.params || 2, region: v.region || 'ap-guangzhou',
+      Object.assign(sm, { open: true, provider: v.provider || 'tencent', appId: v.appId || '', sign: v.sign || '', template: v.template || '', params: v.params || 2,
+        region: v.region || 'ap-guangzhou', accessKeyId: v.accessKeyId || '', accessKeySecret: '', codeVar: v.codeVar || 'code', minutesVar: v.minutesVar || '',
         dailyLimit: v.dailyLimit || 30, phone: acct.value.phone || '', current: '', busy: '', error: '', ok: '' });
     }
-    const smsBody = () => ({ appId: sm.appId.trim(), sign: sm.sign.trim(), template: sm.template.trim(), params: Number(sm.params), region: sm.region, dailyLimit: Number(sm.dailyLimit) });
+    // Template IDs differ between the two: switching shows the saved one
+    // for that provider, or none.
+    watch(() => sm.provider, (p, old) => {
+      if (!sm.open || !old || p === old) return;
+      const v = acct.value.sms;
+      Object.assign(sm, { template: v.provider === p ? v.template || '' : '', error: '', ok: '' });
+    });
+    const smsBody = () => sm.provider === 'aliyun'
+      ? { provider: 'aliyun', sign: sm.sign.trim(), template: sm.template.trim(), accessKeyId: sm.accessKeyId.trim(), accessKeySecret: sm.accessKeySecret,
+        codeVar: sm.codeVar.trim(), minutesVar: sm.minutesVar.trim(), dailyLimit: Number(sm.dailyLimit) }
+      : { provider: 'tencent', appId: sm.appId.trim(), sign: sm.sign.trim(), template: sm.template.trim(), params: Number(sm.params), region: sm.region, dailyLimit: Number(sm.dailyLimit) };
+    const smsFilled = computed(() => sm.sign.trim() && sm.template.trim() && (sm.provider === 'aliyun'
+      ? sm.accessKeyId.trim() && (sm.accessKeySecret || (acct.value && acct.value.sms.hasSecret && acct.value.sms.provider === 'aliyun'))
+      : sm.appId.trim() && acct.value && acct.value.sms.keys));
     async function smsRun(kind) {
       sm.busy = kind; sm.error = ''; sm.ok = '';
       try {
@@ -4400,15 +4416,14 @@ const AccountPanel = {
     });
     const smsText = computed(() => {
       const v = acct.value && acct.value.sms;
-      if (!v) return '';
-      if (!v.keys) return '要先在上面填写腾讯云密钥';
-      return v.configured ? `签名【${v.sign}】，模板 ${v.template}，今天已发 ${v.sentToday} / ${v.dailyLimit} 条` : '还没有设置';
+      if (!v || !v.configured) return '还没有设置';
+      return `${v.provider === 'aliyun' ? '阿里云' : '腾讯云'}短信，签名【${v.sign}】，模板 ${v.template}，今天已发 ${v.sentToday} / ${v.dailyLimit} 条`;
     });
     const SMS_REGIONS = [['ap-guangzhou', '广州'], ['ap-beijing', '北京'], ['ap-nanjing', '南京']];
 
     return { acct, pw, tf, savePassword, beginTOTP, enableTOTP, disableTOTP, endSession, logout, when, uaText,
       methodBusy, setMethod, methodNote, canOn, bd, openBind, bindSend, bindConfirm, unbind,
-      ml, openMail, mailPreset, mailRun, sm, openSMS, smsRun, mailText, smsText, SMS_REGIONS };
+      ml, openMail, mailPreset, mailRun, sm, openSMS, smsRun, smsFilled, mailText, smsText, SMS_REGIONS };
   },
   template: `
   <div class="group" v-if="acct">
@@ -4461,13 +4476,13 @@ const AccountPanel = {
       <button class="small" @click="openBind('email', 'bind')" :disabled="!acct.mail.configured" :title="acct.mail.configured ? '' : '先设置发信邮箱'">{{ acct.email ? '更换' : '绑定' }}</button>
       <button class="small plain" v-if="acct.email" @click="openBind('email', 'unbind')">解绑</button></div>
     <div class="row"><span class="k">手机号</span><span class="grow" :class="{ tertiary: !acct.phone }">{{ acct.phone || '未绑定' }}</span>
-      <button class="small" @click="openBind('sms', 'bind')" :disabled="!acct.sms.configured" :title="acct.sms.configured ? '' : '先设置腾讯云短信'">{{ acct.phone ? '更换' : '绑定' }}</button>
+      <button class="small" @click="openBind('sms', 'bind')" :disabled="!acct.sms.configured" :title="acct.sms.configured ? '' : '先设置短信'">{{ acct.phone ? '更换' : '绑定' }}</button>
       <button class="small plain" v-if="acct.phone" @click="openBind('sms', 'unbind')">解绑</button></div>
   </div>
   <div class="group-title">验证码从哪里发出</div>
   <div class="group">
     <div class="row"><div class="grow"><div>发信邮箱（SMTP）</div><div class="small tertiary">{{ mailText }}</div></div><button class="small" @click="openMail">设置</button></div>
-    <div class="row"><div class="grow"><div>腾讯云短信</div><div class="small tertiary">{{ smsText }}</div></div><button class="small" @click="openSMS" :disabled="!acct.sms.keys">设置</button></div>
+    <div class="row"><div class="grow"><div>短信（腾讯云或阿里云）</div><div class="small tertiary">{{ smsText }}</div></div><button class="small" @click="openSMS">设置</button></div>
   </div>
   </template>
 
@@ -4529,31 +4544,47 @@ const AccountPanel = {
     </div>
   </div>
 
-  <!-- Tencent Cloud SMS -->
+  <!-- SMS: Tencent Cloud or Alibaba Cloud -->
   <div class="sheet-mask" v-if="sm.open" @click.self="!sm.busy && (sm.open = false)">
-    <div class="sheet" role="dialog" aria-label="腾讯云短信">
-      <h2>腾讯云短信</h2>
-      <p>用上面填的腾讯云密钥发送（子账号要有 QcloudSMSFullAccess 权限）。先在腾讯云「短信」控制台创建应用、申请签名和「验证码」类正文模板，审核通过后填到这里。</p>
-      <div class="group">
+    <div class="sheet" role="dialog" aria-label="短信">
+      <h2>短信</h2>
+      <div class="segmented sms-provider" role="radiogroup" aria-label="短信服务商">
+        <button role="radio" :aria-checked="sm.provider === 'tencent'" :class="{ on: sm.provider === 'tencent' }" @click="sm.provider = 'tencent'">腾讯云短信</button>
+        <button role="radio" :aria-checked="sm.provider === 'aliyun'" :class="{ on: sm.provider === 'aliyun' }" @click="sm.provider = 'aliyun'">阿里云短信</button></div>
+      <p v-if="sm.provider === 'tencent'">用「设置 → 腾讯云」里的密钥发送（子账号要有 QcloudSMSFullAccess 权限）。先在腾讯云「短信」控制台创建应用、申请签名和「验证码」类正文模板，审核通过后填到这里。</p>
+      <p v-else>用一个阿里云 RAM 用户的 AccessKey 发送（只给它 AliyunDysmsFullAccess 权限，不要用主账号的）。先在阿里云「短信服务」控制台申请签名和「验证码」类模板，审核通过后填到这里。</p>
+      <div class="notice" v-if="sm.provider === 'tencent' && !acct.sms.keys"><ui-icon name="warn" class="st-warn"></ui-icon>还没有填写腾讯云密钥：先在上面的「腾讯云」里填好，或者改用阿里云短信。</div>
+      <div class="group" v-if="sm.provider === 'tencent'">
         <div class="row form"><span class="k">SDK AppID</span><span class="v"><input v-model="sm.appId" placeholder="1400000000" inputmode="numeric" aria-label="SDK AppID"><span class="small secondary block">「应用管理 → 应用列表」里</span></span></div>
         <div class="row form"><span class="k">签名</span><span class="v"><input v-model="sm.sign" placeholder="喵面板" aria-label="签名"><span class="small secondary block">审核通过的签名内容，不带【】</span></span></div>
         <div class="row form"><span class="k">模板 ID</span><span class="v"><input v-model="sm.template" placeholder="1234567" inputmode="numeric" aria-label="模板 ID"></span></div>
         <div class="row form"><span class="k">模板里的变量</span><span class="v"><span class="segmented"><button :class="{ on: sm.params === 1 }" @click="sm.params = 1">1 个：验证码</button><button :class="{ on: sm.params === 2 }" @click="sm.params = 2">2 个：验证码、分钟数</button></span>
           <span class="small secondary block">例如「您的验证码为：{1}，{2}分钟内有效，请勿泄露。」是 2 个</span></span></div>
         <div class="row form"><span class="k">地域</span><span class="v"><select v-model="sm.region" aria-label="地域"><option v-for="r in SMS_REGIONS" :key="r[0]" :value="r[0]">{{ r[1] }}（{{ r[0] }}）</option></select></span></div>
-        <div class="row form"><span class="k">每天最多发</span><span class="v"><input type="number" v-model.number="sm.dailyLimit" min="1" max="500" aria-label="每天最多发多少条">
-          <span class="small secondary block">条。短信按条收费，防止被人刷</span></span></div>
+      </div>
+      <div class="group" v-else>
+        <div class="row form"><span class="k">AccessKey ID</span><span class="v"><input v-model="sm.accessKeyId" placeholder="LTAI…" autocomplete="off" aria-label="AccessKey ID" autocapitalize="off" spellcheck="false"></span></div>
+        <div class="row form"><span class="k">AccessKey Secret</span><span class="v"><input type="password" v-model="sm.accessKeySecret" autocomplete="new-password"
+          :placeholder="acct.sms.hasSecret && acct.sms.provider === 'aliyun' ? '已保存，不修改就留空' : '创建 AccessKey 时只显示一次'" aria-label="AccessKey Secret"></span></div>
+        <div class="row form"><span class="k">签名</span><span class="v"><input v-model="sm.sign" placeholder="喵面板" aria-label="签名"><span class="small secondary block">审核通过的签名名称</span></span></div>
+        <div class="row form"><span class="k">模板 CODE</span><span class="v"><input v-model="sm.template" placeholder="SMS_123456789" aria-label="模板 CODE" autocapitalize="off" spellcheck="false"></span></div>
+        <div class="row form"><span class="k">验证码变量</span><span class="v"><input v-model="sm.codeVar" placeholder="code" aria-label="验证码变量名" autocapitalize="off" spellcheck="false">
+          <span class="small secondary block">模板「您的验证码为：\${code}，请勿泄露」里是 code</span></span></div>
+        <div class="row form"><span class="k">分钟数变量</span><span class="v"><input v-model="sm.minutesVar" placeholder="模板里没有就不填" aria-label="分钟数变量名" autocapitalize="off" spellcheck="false">
+          <span class="small secondary block">模板里有「\${min} 分钟内有效」这样的变量才填（这里就填 min）。验证码 10 分钟内有效，模板里直接写了分钟数的，请写 10 分钟</span></span></div>
       </div>
       <div class="group">
+        <div class="row form"><span class="k">每天最多发</span><span class="v"><input type="number" v-model.number="sm.dailyLimit" min="1" max="500" aria-label="每天最多发多少条">
+          <span class="small secondary block">条。短信按条收费，防止被人刷</span></span></div>
         <div class="row form"><span class="k">发一条测试短信</span><span class="v login-send"><input v-model="sm.phone" type="tel" placeholder="手机号" aria-label="测试手机号">
-          <button @click="smsRun('test')" :disabled="!!sm.busy || !sm.appId || !sm.sign || !sm.template || !sm.phone">{{ sm.busy === 'test' ? '正在发送……' : '发送' }}</button></span></div>
+          <button @click="smsRun('test')" :disabled="!!sm.busy || !smsFilled || !sm.phone">{{ sm.busy === 'test' ? '正在发送……' : '发送' }}</button></span></div>
       </div>
       <div class="group"><div class="row form"><span class="k">账号密码</span><span class="v"><input type="password" v-model="sm.current" autocomplete="current-password" placeholder="保存或清除要输入 Miao Panel 的登录密码" aria-label="账号密码"></span></div></div>
       <div class="notice" v-if="sm.error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ sm.error }}</div>
       <div class="notice" v-if="sm.ok"><ui-icon name="check" class="st-ok"></ui-icon>{{ sm.ok }}</div>
       <div class="sheet-actions"><button class="plain destructive" v-if="acct.sms.configured" @click="smsRun('clear')" :disabled="!!sm.busy || !sm.current">清除设置</button><span class="grow"></span>
         <button @click="sm.open = false" :disabled="!!sm.busy">取消</button>
-        <button class="primary" @click="smsRun('save')" :disabled="!!sm.busy || !sm.current || !sm.appId || !sm.sign || !sm.template">{{ sm.busy === 'save' ? '正在保存……' : '保存' }}</button></div>
+        <button class="primary" @click="smsRun('save')" :disabled="!!sm.busy || !sm.current || !smsFilled">{{ sm.busy === 'save' ? '正在保存……' : '保存' }}</button></div>
     </div>
   </div>
 
