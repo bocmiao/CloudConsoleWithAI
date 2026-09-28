@@ -24,7 +24,7 @@ type MySQL struct {
 	Port     int    `json:"port"`
 	Database string `json:"database"`
 	User     string `json:"user"`
-	Password string `json:"password"`
+	Password string `json:"password,omitempty"`
 }
 
 func (m MySQL) config() *mysql.Config {

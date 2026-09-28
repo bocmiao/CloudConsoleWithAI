@@ -159,7 +159,14 @@ func (s *Service) SetupCode() (string, error) {
 	if err != nil || !need {
 		return "", err
 	}
-	path := filepath.Join(s.Dir, setupFile)
+	return InstallCode(s.Dir)
+}
+
+// InstallCode returns the setup code of a data directory, writing a new
+// one when there is none: before the web edition has a database, the
+// install wizard asks for it too.
+func InstallCode(dir string) (string, error) {
+	path := filepath.Join(dir, setupFile)
 	if b, err := os.ReadFile(path); err == nil {
 		if c := strings.TrimSpace(string(b)); len(c) >= 16 {
 			return c, nil
@@ -194,14 +201,8 @@ func (s *Service) Setup(ip, ua, code, name, password string) (string, store.User
 	if !need {
 		return "", store.User{}, refuse("setup_done", "管理员账号已经设置过了，请直接登录")
 	}
-	// Only the code already written out counts: making a new one here
-	// would accept a code nobody has seen.
-	want := ""
-	if b, err := os.ReadFile(filepath.Join(s.Dir, setupFile)); err == nil {
-		want = strings.TrimSpace(string(b))
-	}
-	if len(want) < 16 || subtle.ConstantTimeCompare([]byte(normCode(code)), []byte(normCode(want))) != 1 {
-		return "", store.User{}, refuse("bad_setup", "初始化码不对。它在服务器上 Miao Panel 的日志里，也在数据目录的 setup-code 文件里")
+	if err := s.codeMatches(code); err != nil {
+		return "", store.User{}, err
 	}
 	done() // the code was right; a weak password is not a guess
 	name = strings.TrimSpace(name)
@@ -223,6 +224,33 @@ func (s *Service) Setup(ip, ua, code, name, password string) (string, store.User
 	_ = s.Store.Audit(name, "auth.setup", name, ip)
 	tok, err := s.newSession(u.ID, ip, ua)
 	return tok, u, err
+}
+
+// codeMatches checks a setup code. Only the code already written out
+// counts: making a new one here would accept a code nobody has seen.
+func (s *Service) codeMatches(code string) error {
+	want := ""
+	if b, err := os.ReadFile(filepath.Join(s.Dir, setupFile)); err == nil {
+		want = strings.TrimSpace(string(b))
+	}
+	if len(want) < 16 || subtle.ConstantTimeCompare([]byte(normCode(code)), []byte(normCode(want))) != 1 {
+		return refuse("bad_setup", "初始化码不对。它在服务器上 Miao Panel 的日志里，也在数据目录的 setup-code 文件里")
+	}
+	return nil
+}
+
+// CheckSetupCode checks the setup code during installation, before there
+// is a database; wrong codes count against the address like logins.
+func (s *Service) CheckSetupCode(ip, code string) error {
+	done, err := s.attempt(ip, "")
+	if err != nil {
+		return err
+	}
+	if err := s.codeMatches(code); err != nil {
+		return err
+	}
+	done()
+	return nil
 }
 
 // ---- Logging in ----

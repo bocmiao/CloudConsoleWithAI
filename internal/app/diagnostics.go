@@ -113,6 +113,7 @@ func (a *App) Diagnostics(w io.Writer) error {
 	ms := a.MonitorSettings()
 	set["monitor"] = map[string]any{"enabled": ms.Enabled, "auto": ms.Auto, "servers": ms.Servers, "extra": len(ms.Extra), "mail": ms.Email != ""}
 	set["updateCheck"] = a.updateEnabled()
+	set["database"] = map[bool]string{true: "mysql", false: "sqlite"}[a.Store.IsMySQL()]
 	info["settings"] = set
 
 	servers := []diagServer{}

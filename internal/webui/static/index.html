@@ -567,6 +567,7 @@
 
         <div class="group-title">安全</div>
         <div class="group">
+          <div class="row" v-if="info.database"><span class="k">数据保存在</span><span class="v ellipsis" :title="info.database">{{ info.database }}</span></div>
           <div class="row"><span class="k">密码和 API Key</span><span class="v">{{ info.secretsKind === 'keychain' ? '保存在系统钥匙串（Windows 凭据管理器）' : info.mode === 'server' ? '保存在服务器上数据目录的 secrets.json（只有运行 Miao Panel 的用户可读），不会发给 AI' : '保存在数据目录的 secrets.json（仅当前用户可读）' }}</span></div>
           <div class="row"><span class="k">访问范围</span><span class="v">{{ info.mode === 'server' ? 'Web 版：登录后才能访问，可以开启两步验证' : '只在本机打开（127.0.0.1），不会发给 AI' }}</span></div>
         </div>

@@ -6223,6 +6223,97 @@ function uaText(ua) {
 // LoginApp is the whole page until someone logs in to the web edition
 // (or, the first time, makes the account with the setup code).
 const LOGIN_WAYS = [{ id: 'password', text: '密码' }, { id: 'email', text: '邮箱验证码' }, { id: 'sms', text: '短信验证码' }];
+// The web edition's install wizard, before a database is chosen: the
+// setup code, where the data goes, then the first account.
+const InstallApp = {
+  props: { state: Object },
+  setup(props) {
+    const step = ref(1);
+    const f = reactive({ code: '', kind: 'sqlite', host: '127.0.0.1', port: 3306, database: 'miaopanel', user: 'miaopanel', password: '',
+      name: 'admin', pw: '', pw2: '' });
+    const busy = ref(false), error = ref(''), checked = ref(''), existing = ref(''), where = ref('');
+    const local = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+    const insecure = !props.state.https && !local && location.protocol !== 'https:';
+    const body = () => ({ code: f.code, kind: f.kind, mysql: { host: f.host.trim(), port: Number(f.port) || 3306, database: f.database.trim(), user: f.user.trim(), password: f.password } });
+    watch(() => [f.kind, f.host, f.port, f.database, f.user, f.password], () => { checked.value = ''; });
+    async function run(fn) {
+      error.value = ''; busy.value = true;
+      try { await fn(); } catch (e) { error.value = e.message; } finally { busy.value = false; }
+    }
+    const checkCode = () => run(async () => { await api('POST', '/api/install/code', { code: f.code }); step.value = 2; });
+    const testDB = () => run(async () => { const r = await api('POST', '/api/install/check', body()); checked.value = r.version; });
+    const saveDB = () => run(async () => {
+      const r = await api('POST', '/api/install/database', body());
+      where.value = r.where;
+      if (r.users > 0) existing.value = r.where; else step.value = 3;
+    });
+    const createAdmin = () => run(async () => {
+      if (f.pw !== f.pw2) throw new Error('两次输入的密码不一样');
+      await api('POST', '/api/auth/setup', { code: f.code, name: f.name, password: f.pw });
+      location.reload();
+    });
+    const submit = () => (step.value === 1 ? checkCode() : step.value === 2 ? saveDB() : createAdmin());
+    const STEPS = ['初始化码', '数据库', '管理员账号'];
+    return { step, f, busy, error, checked, existing, where, insecure, STEPS, submit, testDB, reload: () => location.reload() };
+  },
+  template: `
+  <div class="login-page">
+    <form class="login-card install-card" @submit.prevent="submit">
+      <div class="login-brand"><span class="app-mark"><miao-logo></miao-logo></span>
+        <div><div class="login-name">Miao Panel</div><div class="small tertiary">安装向导</div></div></div>
+      <ol class="install-steps" aria-label="安装步骤">
+        <li v-for="(t, i) in STEPS" :key="t" :class="{ on: step === i + 1, done: step > i + 1 }"><span class="n">{{ i + 1 }}</span>{{ t }}</li>
+      </ol>
+      <div class="login-warn" v-if="insecure" role="alert"><ui-icon name="warn"></ui-icon><span>现在是 HTTP 连接，填写的内容会明文传输。安装好后建议配置 HTTPS（部署说明里有设置方法）。</span></div>
+
+      <template v-if="step === 1">
+        <h1>输入初始化码</h1>
+        <p class="small secondary">初始化码在启动 Miao Panel 的终端里（用安装脚本的话，脚本最后会显示），也保存在数据目录的 <code>setup-code</code> 文件里。只有能登录这台服务器的人才看得到，别人抢不走安装。</p>
+        <label class="field"><span>初始化码</span><input v-model="f.code" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX" required autofocus></label>
+      </template>
+
+      <template v-else-if="step === 2 && existing">
+        <h1>已连接到原有数据</h1>
+        <p class="small secondary">{{ existing }} 里已经有 Miao Panel 的账号和数据，直接用原来的账号登录就行。</p>
+      </template>
+      <template v-else-if="step === 2">
+        <h1>数据保存在哪里</h1>
+        <div class="segmented install-kind" role="radiogroup" aria-label="数据库">
+          <button type="button" role="radio" :aria-checked="f.kind === 'sqlite'" :class="{ on: f.kind === 'sqlite' }" @click="f.kind = 'sqlite'">内置数据库（推荐）</button>
+          <button type="button" role="radio" :aria-checked="f.kind === 'mysql'" :class="{ on: f.kind === 'mysql' }" @click="f.kind = 'mysql'">MySQL</button>
+        </div>
+        <p class="small secondary" v-if="f.kind === 'sqlite'">不用另外建库：数据保存在 <code>{{ state.sqlite }}</code>，自动创建。备份时复制整个数据目录即可。</p>
+        <template v-else>
+          <p class="small secondary">先在 MySQL 5.7+ 或 MariaDB 10.3+（也可以在 1Panel、宝塔的「数据库」页面）建好一个空数据库和能使用它的账号，字符集选 utf8mb4。服务器的密码和密钥仍然只保存在数据目录里，不会写进 MySQL。</p>
+          <div class="install-row">
+            <label class="field grow"><span>地址</span><input v-model="f.host" autocomplete="off" spellcheck="false" required placeholder="127.0.0.1"></label>
+            <label class="field install-port"><span>端口</span><input v-model.number="f.port" type="number" min="1" max="65535" required></label>
+          </div>
+          <label class="field"><span>数据库名</span><input v-model="f.database" autocomplete="off" spellcheck="false" required></label>
+          <label class="field"><span>用户名</span><input v-model="f.user" autocomplete="off" spellcheck="false" required></label>
+          <label class="field"><span>密码</span><input v-model="f.password" type="password" autocomplete="new-password"></label>
+          <div class="install-check"><button type="button" @click="testDB" :disabled="busy">测试连接</button>
+            <span class="small" v-if="checked"><span class="sdot good"></span>连接成功：{{ checked }}</span></div>
+        </template>
+      </template>
+
+      <template v-else>
+        <h1>创建管理员账号</h1>
+        <p class="small secondary">数据库已就绪：{{ where }}</p>
+        <label class="field"><span>用户名</span><input v-model="f.name" autocomplete="username" autocapitalize="off" spellcheck="false" required></label>
+        <label class="field"><span>密码</span><input type="password" v-model="f.pw" autocomplete="new-password" required autofocus></label>
+        <label class="field"><span>再输一次密码</span><input type="password" v-model="f.pw2" autocomplete="new-password" required></label>
+        <p class="small tertiary">至少 10 个字符。这个账号能管理你所有的服务器，请用一个别处没用过的密码，登录后建议开启两步验证。</p>
+      </template>
+
+      <div class="login-error" v-if="error" role="alert"><ui-icon name="alert"></ui-icon><span>{{ error }}</span></div>
+      <button class="primary login-btn" type="button" v-if="existing" @click="reload">去登录</button>
+      <button class="primary login-btn" type="submit" v-else :disabled="busy">{{ busy ? '请稍候……' : step === 1 ? '下一步' : step === 2 ? (f.kind === 'mysql' ? '连接并创建数据表' : '下一步') : '完成安装并登录' }}</button>
+    </form>
+    <p class="small tertiary login-foot">Miao Panel {{ state.version }} · 开源项目（GPL-3.0）</p>
+  </div>`,
+};
+
 const LoginApp = {
   props: { state: Object },
   setup(props) {
@@ -6291,7 +6382,7 @@ const LoginApp = {
       <div class="login-brand"><span class="app-mark"><miao-logo></miao-logo></span>
         <div><div class="login-name">Miao Panel</div><div class="small tertiary">Web 版</div></div></div>
       <h1>{{ setup ? '创建管理员账号' : '登录' }}</h1>
-      <p class="small secondary" v-if="setup">第一次使用，需要服务器上的初始化码：运行 <code>docker logs miaopanel</code> 或 <code>journalctl -u miaopanel</code> 就能看到，也保存在数据目录的 <code>setup-code</code> 文件里。</p>
+      <p class="small secondary" v-if="setup">第一次使用，需要服务器上的初始化码：在启动 Miao Panel 的终端里（Docker 用 <code>docker logs miaopanel</code>，服务用 <code>journalctl -u miaopanel</code>），也保存在数据目录的 <code>setup-code</code> 文件里。</p>
       <div class="login-warn" v-if="insecure" role="alert"><ui-icon name="warn"></ui-icon><span>现在是 HTTP 连接，密码会明文传输。请改用 HTTPS 访问（部署说明里有设置方法）。</span></div>
       <div class="segmented login-ways" v-if="!setup && ways.length > 1" role="tablist" aria-label="登录方式">
         <button type="button" v-for="w in ways" :key="w.id" role="tab" :aria-selected="way === w.id" :class="{ on: way === w.id }" @click="way = w.id">{{ w.text }}</button>
@@ -7474,6 +7565,15 @@ app.component('account-panel', AccountPanel);
   try { state = await api('GET', '/api/auth/state'); } catch { /* an older desktop build */ }
   window.MIAO_MODE = state.mode;
   window.MIAO_USER = state.user || null;
+  if (state.install) {
+    const el = document.getElementById('app');
+    el.className = '';
+    const wizard = createApp(InstallApp, { state });
+    wizard.component('ui-icon', UiIcon);
+    wizard.component('miao-logo', MiaoLogo);
+    wizard.mount(el);
+    return;
+  }
   if (state.mode === 'server' && !state.user) {
     const el = document.getElementById('app');
     el.className = '';

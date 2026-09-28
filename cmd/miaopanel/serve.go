@@ -13,6 +13,8 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -22,6 +24,7 @@ import (
 	"github.com/bocmiao/CloudConsoleWithAI/internal/app"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/auth"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/config"
+	"github.com/bocmiao/CloudConsoleWithAI/internal/dbconf"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/secrets"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/store"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/update"
@@ -54,28 +57,59 @@ func serveMain(args []string) error {
 	if err != nil {
 		return err
 	}
-	st, err := store.Open(dir)
-	if err != nil {
-		return fmt.Errorf("打开数据库: %w", err)
-	}
-	defer st.Close()
 	sec := secrets.OpenFile(dir) // a server has no desktop keychain
-	a := app.New(st, sec)
-	a.CacheDir = filepath.Join(dir, "cache")
-	a.Version, a.Restart = version, restartSelf
 	update.CleanUp()
-	au := auth.New(st, sec, dir)
-	api.ConnectSenders(a, au) // login codes go out by the app's mail and SMS settings
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
 
-	handler := api.NewServer(a, au, version)
-	if err := handler.SetTrustedProxies(*trustedProxies); err != nil {
-		return err
+	// The server answers with the install wizard until a database is
+	// chosen, then with Miao Panel itself: the handler is swapped in place.
+	var current atomic.Pointer[http.Handler]
+	set := func(h http.Handler) { current.Store(&h) }
+	var opened []*store.Store
+	var mu sync.Mutex
+	start := func(st *store.Store) error {
+		h, err := startWeb(ctx, st, sec, dir, *trustedProxies)
+		if err != nil {
+			return err
+		}
+		mu.Lock()
+		opened = append(opened, st)
+		mu.Unlock()
+		set(h)
+		log.Printf("数据保存在 %s", st.Where())
+		return nil
 	}
+	defer func() {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, st := range opened {
+			st.Close()
+		}
+	}()
+	st, err := dbconf.Open(dir, sec)
+	switch {
+	case errors.Is(err, dbconf.ErrNotInstalled):
+		inst := api.NewInstaller(dir, sec, version, start)
+		if err := inst.SetTrustedProxies(*trustedProxies); err != nil {
+			return err
+		}
+		set(inst)
+	case err != nil:
+		return fmt.Errorf("打开数据库: %w", err)
+	default:
+		if err := start(st); err != nil {
+			st.Close()
+			return err
+		}
+	}
+
 	ln, err := net.Listen("tcp", *listen)
 	if err != nil {
 		return err
 	}
-	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { (*current.Load()).ServeHTTP(w, r) }),
+		ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
 	scheme := "http"
 	if *cert != "" {
 		scheme = "https"
@@ -84,31 +118,13 @@ func serveMain(args []string) error {
 	if host, _, _ := net.SplitHostPort(*listen); scheme == "http" && !isLoopback(host) {
 		log.Printf("注意：正在用 HTTP 接受其他机器的连接，密码会明文传输。请在前面加一个 HTTPS 反向代理（1Panel、宝塔、Nginx、Caddy），或者用 --tls-cert/--tls-key")
 	}
-	code, err := au.SetupCode()
-	if err != nil {
-		return err
-	}
-	if code != "" {
-		log.Printf("\n\n  ==== 第一次使用 ====\n  在浏览器打开 Miao Panel，用下面的初始化码创建管理员账号：\n\n      %s\n\n  （初始化码也保存在 %s，创建账号后自动失效）\n", code, filepath.Join(dir, "setup-code"))
-	}
-
-	ctx, stop := context.WithCancel(context.Background())
-	defer stop()
-	go a.KeepWarm(ctx, 20*time.Minute)
-	go a.Monitor(ctx)
-	go a.UpdateLoop(ctx)
-	go func() {
-		t := time.NewTicker(time.Hour)
-		defer t.Stop()
-		for {
-			_ = au.Prune()
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-			}
+	if !dbconf.Installed(dir) || needsSetup(opened) {
+		code, err := auth.InstallCode(dir)
+		if err != nil {
+			return err
 		}
-	}()
+		log.Printf("\n\n  ==== 第一次使用 ====\n  在浏览器打开 Miao Panel，按安装向导操作，需要这个初始化码：\n\n      %s\n\n  （初始化码也保存在 %s，创建管理员账号后自动失效）\n", code, filepath.Join(dir, "setup-code"))
+	}
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -134,6 +150,46 @@ func serveMain(args []string) error {
 	return nil
 }
 
+// needsSetup says whether the opened database has no account yet.
+func needsSetup(opened []*store.Store) bool {
+	for _, st := range opened {
+		if n, err := st.CountUsers(); err == nil && n == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// startWeb makes Miao Panel's handler over a database and starts its
+// background work.
+func startWeb(ctx context.Context, st *store.Store, sec secrets.Store, dir, trustedProxies string) (http.Handler, error) {
+	a := app.New(st, sec)
+	a.CacheDir = filepath.Join(dir, "cache")
+	a.Version, a.Restart = version, restartSelf
+	au := auth.New(st, sec, dir)
+	api.ConnectSenders(a, au) // login codes go out by the app's mail and SMS settings
+	handler := api.NewServer(a, au, version)
+	if err := handler.SetTrustedProxies(trustedProxies); err != nil {
+		return nil, err
+	}
+	go a.KeepWarm(ctx, 20*time.Minute)
+	go a.Monitor(ctx)
+	go a.UpdateLoop(ctx)
+	go func() {
+		t := time.NewTicker(time.Hour)
+		defer t.Stop()
+		for {
+			_ = au.Prune()
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+		}
+	}()
+	return handler, nil
+}
+
 func isLoopback(host string) bool {
 	if host == "localhost" {
 		return true
@@ -151,7 +207,11 @@ func resetPasswordMain(args []string) error {
 	if err != nil {
 		return err
 	}
-	st, err := store.Open(dir)
+	sec := secrets.OpenFile(dir)
+	st, err := dbconf.Open(dir, sec)
+	if errors.Is(err, dbconf.ErrNotInstalled) {
+		return errors.New("Miao Panel 还没有安装：启动后在浏览器里按安装向导创建管理员账号")
+	}
 	if err != nil {
 		return fmt.Errorf("打开数据库: %w", err)
 	}
@@ -176,7 +236,7 @@ func resetPasswordMain(args []string) error {
 			return errors.New("两次输入的密码不一样")
 		}
 	}
-	if err := auth.ResetPassword(st, secrets.OpenFile(dir), name, pw); err != nil {
+	if err := auth.ResetPassword(st, sec, name, pw); err != nil {
 		return err
 	}
 	_ = os.Remove(filepath.Join(dir, "setup-code")) // the account exists now

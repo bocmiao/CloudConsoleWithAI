@@ -454,7 +454,7 @@ func (s *Server) eoCachePlan(_ http.ResponseWriter, r *http.Request) (any, error
 }
 
 func (s *Server) info(_ http.ResponseWriter, _ *http.Request) (any, error) {
-	return map[string]any{"version": s.version, "secretsKind": s.app.Secrets.Kind(), "mode": s.mode()}, nil
+	return map[string]any{"version": s.version, "secretsKind": s.app.Secrets.Kind(), "mode": s.mode(), "database": s.app.Store.Where()}, nil
 }
 
 func (s *Server) listServers(_ http.ResponseWriter, _ *http.Request) (any, error) {
