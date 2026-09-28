@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/bocmiao/CloudConsoleWithAI/internal/aliyun"
+	"github.com/bocmiao/CloudConsoleWithAI/internal/btpanel"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/onepanel"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/sshx"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/tencent"
@@ -35,6 +36,8 @@ type Env struct {
 	Cloud *tencent.Client
 	// Aliyun is set when 阿里云 credentials are configured.
 	Aliyun *aliyun.Client
+	// BT is set when the server's 宝塔 API is configured.
+	BT *btpanel.Client
 	// Reconnect replaces SSH after a dropped connection while waiting.
 	Reconnect func(ctx context.Context) (sshx.Conn, error)
 	// PollInterval defaults to one second.
@@ -86,6 +89,8 @@ func Apply(ctx context.Context, env *Env, r Resolved, progress Progress) Outcome
 		return out
 	case r.Impl.Cloud != "":
 		return applyCloud(ctx, env, r, progress)
+	case strings.HasPrefix(r.Impl.Panel, "bt_"):
+		return applyBT(ctx, env, r, progress)
 	}
 	return applyPanel(ctx, env, r, progress)
 }
@@ -154,6 +159,8 @@ func Undo(ctx context.Context, env *Env, r Resolved, undo map[string]string) Out
 		return runScript(ctx, env, r, "undo", undo, nil)
 	case r.Impl.Cloud != "":
 		return undoCloud(ctx, env, r, undo)
+	case strings.HasPrefix(r.Impl.Panel, "bt_"):
+		return undoBT(ctx, env, r, undo)
 	}
 	return undoPanel(ctx, env, r, undo)
 }

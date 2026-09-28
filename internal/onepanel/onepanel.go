@@ -58,7 +58,15 @@ type Shell func(ctx context.Context, cmd, stdin string, maxOut int) (stdout, std
 // runs curl on the server against the panel's loopback port.
 func NewOverShell(sh Shell, port int, key, host, scheme string) *Client {
 	target := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
-	return newClient(&curlTransport{sh: sh, target: target}, target, key, host, scheme)
+	return newClient(&curlTransport{sh: sh, target: target, name: "1Panel", redact: redactKeys}, target, key, host, scheme)
+}
+
+// ShellTransport sends HTTP requests to a port on the server's loopback
+// by running curl there, for other panels' clients: name is the panel's,
+// for messages, and redact a shell filter (such as a sed) that blanks
+// secrets in its answers on the server.
+func ShellTransport(sh Shell, port int, name, redact string) http.RoundTripper {
+	return &curlTransport{sh: sh, target: net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), name: name, redact: redact}
 }
 
 func newClient(rt http.RoundTripper, target, key, host, scheme string) *Client {
@@ -75,6 +83,8 @@ func newClient(rt http.RoundTripper, target, key, host, scheme string) *Client {
 type curlTransport struct {
 	sh     Shell
 	target string
+	name   string // the panel, for messages
+	redact string // appended to the command: blanks secrets in the answer
 }
 
 func shq(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
@@ -109,7 +119,7 @@ func (t *curlTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		cmd = append(cmd, "--data-binary", "@-")
 	}
 	cmd = append(cmd, shq(u))
-	line := "{ " + strings.Join(cmd, " ") + "; rc=$?; echo; echo MIAOCURL $rc; }" + redactKeys
+	line := "{ " + strings.Join(cmd, " ") + "; rc=$?; echo; echo MIAOCURL $rc; }" + t.redact
 	stdout, stderr, _, err := t.sh(req.Context(), line, string(body), 8<<20)
 	if err != nil {
 		return nil, err
@@ -121,9 +131,9 @@ func (t *curlTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	code, _ := strconv.Atoi(strings.TrimSpace(stdout[end+len("\nMIAOCURL "):]))
 	switch {
 	case code == 127:
-		return nil, errors.New("服务器上没有 curl，无法调用 1Panel 接口")
+		return nil, fmt.Errorf("服务器上没有 curl，无法调用 %s 接口", t.name)
 	case code != 0:
-		return nil, fmt.Errorf("curl 连接 1Panel 失败（退出码 %d）：%s", code, strings.TrimSpace(stderr))
+		return nil, fmt.Errorf("curl 连接 %s 失败（退出码 %d）：%s", t.name, code, strings.TrimSpace(stderr))
 	}
 	stdout = stdout[:end]
 	i := strings.LastIndex(stdout, statusMark)

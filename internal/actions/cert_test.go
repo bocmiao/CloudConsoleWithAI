@@ -215,7 +215,7 @@ func TestCertIssueRenewAndUndo(t *testing.T) {
 			t.Errorf("accepted %v", p)
 		}
 	}
-	if _, err := Resolve("cert.issue", map[string]any{"domain": "blog.example.com"}, "bt"); err == nil {
-		t.Error("cert.issue should not run on 宝塔 yet")
+	if _, err := Resolve("cert.issue", map[string]any{"domain": "blog.example.com"}, "linux"); err == nil {
+		t.Error("cert.issue should not run without a panel")
 	}
 }

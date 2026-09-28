@@ -98,6 +98,9 @@ func coversSite(j onepanel.Cronjob, id uint) bool {
 
 // SiteBackups reads a site's backups and backup schedules.
 func (a *App) SiteBackups(ctx context.Context, serverID int64, siteID uint) (SiteBackupsView, error) {
+	if a.isBT(serverID) {
+		return a.btSiteBackups(ctx, serverID, siteID)
+	}
 	var v SiteBackupsView
 	err := a.withPanel(ctx, serverID, func(_ store.Server, _ sshx.Conn, p *onepanel.Client) error {
 		d, err := p.Website(ctx, siteID)
@@ -142,6 +145,9 @@ func (a *App) SiteBackups(ctx context.Context, serverID int64, siteID uint) (Sit
 // BackupPath makes a backup's file available on the server (fetching it
 // from a remote account first) and returns where it is, for downloading.
 func (a *App) BackupPath(ctx context.Context, serverID int64, siteID, backupID uint) (string, error) {
+	if a.isBT(serverID) {
+		return a.btBackupPath(ctx, serverID, siteID, backupID)
+	}
 	var path string
 	err := a.withPanel(ctx, serverID, func(_ store.Server, _ sshx.Conn, p *onepanel.Client) error {
 		d, err := p.Website(ctx, siteID)

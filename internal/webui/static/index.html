@@ -141,11 +141,11 @@
           <server-overview v-if="serverTab === 'overview' && current.profile" :view="current" :cloud="cloud" :busy="busy" :active="tab === 'servers' && serverTab === 'overview'"
             @ask="askAI" @tab="t => serverTab = t" @site="openServerSite" @discover="discover" @log="openLog"></server-overview>
           <div v-show="serverTab === 'sites'" v-if="seenServerSites">
-            <site-page v-if="current.server.adapter === '1panel'" :key="'s' + current.server.id" :server="current.server.id" :servers="servers" :active="tab === 'servers' && serverTab === 'sites'"
+            <site-page v-if="current.server.adapter === '1panel' || current.server.adapter === 'bt'" :key="'s' + current.server.id" :server="current.server.id" :servers="servers" :active="tab === 'servers' && serverTab === 'sites'"
               :request="serverSitesRequest" @ask="askAI" @server="serverTab = 'connection'" @context="v => siteContext = v"></site-page>
             <div class="group" v-else>
               <div class="row"><ui-icon name="info" class="lg" style="color: var(--accent)"></ui-icon>
-                <div class="grow">网站管理目前支持 1Panel。{{ adapterName(current.server.adapter) }} 服务器上识别到的网站：
+                <div class="grow">网站管理支持 1Panel 和宝塔。{{ adapterName(current.server.adapter) }} 服务器上识别到的网站：
                   <span class="tags" v-if="p && p.websites && p.websites.length"><span class="tag" v-for="w in p.websites" :key="w">{{ w }}</span></span><template v-else>没有</template></div></div>
             </div>
           </div>
@@ -238,6 +238,16 @@
                 <div class="row form"><span class="k">API 密钥</span><span class="v"><input type="password" v-model="op.apiKey" :placeholder="op.hasKey ? '已保存（留空表示不修改）' : '从 1Panel 复制'" autocomplete="off" aria-label="1Panel API 密钥"></span></div>
                 <div class="row form"><span class="k">绑定域名</span><span class="v"><input v-model="op.host" placeholder="面板没有绑定域名就留空" aria-label="绑定域名"></span></div>
                 <div class="row"><span class="grow small secondary">{{ op.info || (op.hasKey ? '已配置' : '还没有配置') }}</span><button @click="testOnePanel" :disabled="busy || !op.hasKey">测试</button><button class="primary" @click="saveOnePanel" :disabled="busy">保存</button></div>
+              </div>
+            </template>
+
+            <template v-if="current.server.adapter === 'bt'">
+              <div class="group-title">宝塔接口</div>
+              <div class="group">
+                <div class="row stack small secondary">用来管理宝塔面板上的网站：域名、HTTPS、反向代理、伪静态和配置文件。在宝塔「面板设置 → API 接口」里开启接口，IP 白名单填 <b>127.0.0.1</b>，再把接口密钥粘贴到这里。请求在服务器本机发出（经 SSH，或用自动化助手在服务器上运行 curl），面板端口不需要对外开放。</div>
+                <div class="row form"><span class="k">面板端口</span><span class="v"><input type="number" v-model.number="bt.port" aria-label="宝塔面板端口"><span class="small secondary block" v-if="bt.port">识别到的端口，一般不用改</span></span></div>
+                <div class="row form"><span class="k">接口密钥</span><span class="v"><input type="password" v-model="bt.apiKey" :placeholder="bt.hasKey ? '已保存（留空表示不修改）' : '从宝塔复制'" autocomplete="off" aria-label="宝塔接口密钥"></span></div>
+                <div class="row"><span class="grow small secondary">{{ bt.info || (bt.hasKey ? '已配置' : '还没有配置') }}</span><button @click="testBT" :disabled="busy || !bt.hasKey">测试</button><button class="primary" @click="saveBT" :disabled="busy || !bt.port || (!bt.apiKey && !bt.hasKey)">保存</button></div>
               </div>
             </template>
 

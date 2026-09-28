@@ -3310,7 +3310,8 @@ const InboxPage = {
 // 网站: the sites on each 1Panel server, and one site's domains, HTTPS,
 // reverse proxies, rewrite rules, config file and logs. Every change is
 // a checklist, confirmed first and undoable.
-const SITE_TYPES = { static: '静态网站', proxy: '反向代理', deployment: '一键部署', runtime: '运行环境', subsite: '子网站', stream: 'TCP/UDP 代理' };
+const SITE_TYPES = { static: '静态网站', proxy: '反向代理', deployment: '一键部署', runtime: '运行环境', subsite: '子网站', stream: 'TCP/UDP 代理',
+  php: 'PHP 网站', node: 'Node 项目', java: 'Java 项目', go: 'Go 项目', python: 'Python 项目' };
 const HTTP_MODES = [
   { id: 'HTTPAlso', text: 'HTTP 和 HTTPS 都能访问', hint: '网站在 EdgeOne 后面、EdgeOne 用 HTTP 回源时选这个' },
   { id: 'HTTPToHTTPS', text: 'HTTP 自动跳转到 HTTPS', hint: '最常用：访客输入 http:// 也会进入 https://' },
@@ -3416,7 +3417,10 @@ const SitePage = {
       }));
     });
     const total = computed(() => panels.value.reduce((n, s) => n + s.sites.length, 0));
-    const usable = computed(() => panels.value.filter(s => !s.noPanel && !s.error));
+    // New sites can be made on 1Panel only.
+    const usable = computed(() => panels.value.filter(s => !s.noPanel && !s.error && s.panel !== 'bt'));
+    const panelName = p => p === 'bt' ? '宝塔' : '1Panel';
+    const isBT = computed(() => !!(detail.value && detail.value.panel === 'bt'));
 
     function openSite(serverId, siteId, sec) {
       open.value = { serverId, siteId };
@@ -3524,11 +3528,13 @@ const SitePage = {
       const h = detail.value && detail.value.https;
       if (!h) return false;
       if (!httpsForm.enabled) return h.enable;
+      if (isBT.value) return h.enable && httpsForm.mode !== (h.mode || 'HTTPAlso');
       return !h.enable || httpsForm.cert !== h.cert || httpsForm.mode !== (h.mode || 'HTTPAlso') || httpsForm.hsts !== h.hsts || httpsForm.http3 !== h.http3;
     });
     // Only what was changed goes in the checklist; the rest stays as it is.
     function saveHTTPS() {
       const h = detail.value.https;
+      if (isBT.value) return propose({ op: 'https', enabled: true, httpMode: httpsForm.mode });
       if (!httpsForm.enabled) return propose({ op: 'https', enabled: false });
       const body = { op: 'https', enabled: true };
       if (!h.enable || httpsForm.cert !== h.cert) body.cert = httpsForm.cert;
@@ -3700,7 +3706,7 @@ const SitePage = {
     const modeText = m => (HTTP_MODES.find(x => x.id === m) || { text: '已开启' }).text;
     const modeHint = m => (HTTP_MODES.find(x => x.id === m) || { hint: '' }).hint;
 
-    return { SITE_TYPES, HTTP_MODES, REWRITE_TEMPLATES, list, loading, error, serverFilter, q, panels, shownServers, total, usable, open, detail, dLoading, dError,
+    return { SITE_TYPES, HTTP_MODES, REWRITE_TEMPLATES, panelName, isBT, list, loading, error, serverFilter, q, panels, shownServers, total, usable, open, detail, dLoading, dError,
       section, sections, site, plan, planning, formError, loadList, openSite, back, loadDetail, planDone, closePlan, planServerName, setRunning, removeSite, ask,
       domainForm, addDomain, removeDomain, httpsForm, certOptions, httpsChanged, saveHTTPS, certForm, certNames, openCert, toggleCertName, issueCert,
       proxyEd, openProxy, saveProxy, toggleProxy, removeProxy, rw, rwDirty, useTemplate, saveRewrite, conf, confDirty, saveConf, onConfKey,
@@ -3711,7 +3717,7 @@ const SitePage = {
   <div class="site-page">
     <!-- The list -->
     <template v-if="!open">
-      <div class="page-head" v-if="!server"><p>1Panel 上的网站：域名、HTTPS 证书、反向代理、伪静态和 Nginx 配置。每次修改都会先生成一份清单，确认后才执行，执行后可以撤销。</p></div>
+      <div class="page-head" v-if="!server"><p>1Panel 和宝塔上的网站：域名、HTTPS 证书、反向代理、伪静态和 Nginx 配置。每次修改都会先生成一份清单，确认后才执行，执行后可以撤销。</p></div>
       <div class="stat-bar site-bar">
         <label class="field" v-if="panels.length > 1 && !server"><span>服务器</span>
           <select v-model="serverFilter" aria-label="服务器"><option value="">全部</option><option v-for="s in panels" :key="s.id" :value="String(s.id)">{{ s.name }}</option></select></label>
@@ -3725,7 +3731,7 @@ const SitePage = {
       <div class="notice" v-if="error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ error }}</div>
       <div class="notice" v-if="loading && !list"><span class="spinner"></span>正在读取各台服务器上的网站……</div>
       <div class="group" v-if="list && !panels.length">
-        <div class="row"><ui-icon name="info" class="lg" style="color: var(--accent)"></ui-icon><div class="grow">还没有装了 1Panel 的服务器。网站管理目前支持 1Panel：添加服务器并识别环境后，在服务器页面填写 1Panel 的 API 密钥。
+        <div class="row"><ui-icon name="info" class="lg" style="color: var(--accent)"></ui-icon><div class="grow">还没有装了 1Panel 或宝塔的服务器。添加服务器并识别环境后，在服务器的「连接设置」里填写面板的接口密钥。
           <span class="small secondary block" v-if="list.others && list.others.length">{{ list.others.join('、') }} 的网站请先在面板里管理。</span></div></div>
       </div>
 
@@ -3734,11 +3740,12 @@ const SitePage = {
           <template v-if="!server"><ui-icon name="server"></ui-icon><span>{{ s.name }}</span></template>
           <span class="tertiary small" v-if="s.openresty && s.openresty.installed">OpenResty {{ s.openresty.version }}<span class="sdot" :class="s.openresty.running ? 'good' : 'crit'"></span>{{ s.openresty.running ? '运行中' : '没有运行' }}</span>
           <span class="tertiary small" v-else-if="s.openresty">没有安装 OpenResty</span>
+          <span class="tertiary small" v-if="s.panel === 'bt'">宝塔面板</span>
           <span v-if="loading" class="spinner inline"></span>
         </div>
         <div class="group" v-if="s.noPanel">
           <div class="row"><ui-icon name="plug" class="lg" style="color: var(--accent)"></ui-icon>
-            <div class="grow">还没有配置 1Panel 接口<span class="small secondary block">在服务器的「连接设置」里填写 1Panel 的端口和 API 密钥，就能在这里管理网站。</span></div>
+            <div class="grow">还没有配置{{ panelName(s.panel) }}接口<span class="small secondary block">在服务器的「连接设置」里填写{{ panelName(s.panel) }}面板的端口和接口密钥，就能在这里管理网站。</span></div>
             <button @click="$emit('server', s.id)">去填写</button></div>
         </div>
         <div class="group" v-else-if="s.error"><div class="row"><ui-icon name="alert" class="st-crit"></ui-icon><div class="grow secondary">{{ s.error }}</div>
@@ -3777,7 +3784,7 @@ const SitePage = {
             <a class="btn plain" :href="visitURL" target="_blank" rel="noopener"><ui-icon name="link"></ui-icon>访问</a>
             <button @click="ask"><ui-icon name="sparkles"></ui-icon>让 AI 检查</button>
             <button @click="setRunning(!site.running)" :disabled="planning">{{ site.running ? '停止' : '启动' }}</button>
-            <button class="plain destructive icon-only" @click="removeSite" :disabled="planning" title="删除网站" aria-label="删除网站"><ui-icon name="trash"></ui-icon></button>
+            <button class="plain destructive icon-only" v-if="!isBT" @click="removeSite" :disabled="planning" title="删除网站" aria-label="删除网站"><ui-icon name="trash"></ui-icon></button>
           </div>
         </template>
         <span class="grow" v-else></span>
@@ -3841,9 +3848,22 @@ const SitePage = {
           <div class="group" v-if="detail.https.enable">
             <div class="row"><span class="k">证书</span><span class="v">{{ (detail.https.certNames || []).join('、') }}</span></div>
             <div class="row"><span class="k">到期</span><span class="v"><span class="sdot" :class="certLevel(detail.https.days)"></span>{{ detail.https.expires ? detail.https.expires.slice(0, 10) : '—' }}（{{ certLeft(detail.https.days) }}）</span></div>
-            <div class="row"><span class="k">自动续签</span><span class="v">{{ detail.https.autoRenew ? '开（1Panel 在到期前自动续签）' : '关' }}</span></div>
+            <div class="row"><span class="k">自动续签</span><span class="v">{{ detail.https.autoRenew ? '开（' + panelName(detail.panel) + '在到期前自动续签）' : '关' }}</span></div>
           </div>
-          <div class="group">
+          <!-- 宝塔: switch the redirect, or get a free certificate -->
+          <div class="group" v-if="isBT">
+            <template v-if="detail.https.enable">
+              <label class="row form site-check"><input type="checkbox" :checked="httpsForm.mode === 'HTTPToHTTPS'" @change="httpsForm.mode = $event.target.checked ? 'HTTPToHTTPS' : 'HTTPAlso'">
+                <span class="grow"><b>HTTP 自动跳转到 HTTPS</b><span class="small secondary block">换证书、关闭 HTTPS、HSTS 请在宝塔面板里设置。</span></span></label>
+              <div class="alert al-warn site-inline" v-if="detail.edgeone && httpsForm.mode !== 'HTTPAlso'"><ui-icon name="warn"></ui-icon>
+                <span class="grow">这个网站经过 EdgeOne。如果 EdgeOne 用 HTTP 回源，跳转到 HTTPS 会让访问陷入循环。</span></div>
+              <div class="row"><button class="link small" @click="openCert">重新申请免费证书</button><span class="grow"></span>
+                <button class="primary" @click="saveHTTPS" :disabled="planning || !httpsChanged">生成清单</button></div>
+            </template>
+            <div class="row" v-else><span class="grow">还没有开启 HTTPS<span class="small secondary block">让宝塔向 Let's Encrypt 申请免费证书并开启 HTTPS，到期前自动续签。</span></span>
+              <button class="primary" @click="openCert">申请免费证书</button></div>
+          </div>
+          <div class="group" v-else>
             <label class="row form site-check"><input type="checkbox" v-model="httpsForm.enabled"><span class="grow"><b>开启 HTTPS</b>
               <span class="small secondary block">用 1Panel 里的证书。</span></span></label>
             <template v-if="httpsForm.enabled">
@@ -3887,13 +3907,13 @@ const SitePage = {
           <div class="stat-bar site-bar">
             <label class="field"><span>模板</span><select v-model="rw.template" aria-label="伪静态模板"><option v-for="t in REWRITE_TEMPLATES" :key="t" :value="t">{{ t }}</option></select></label>
             <button @click="useTemplate">套用模板</button>
-            <span class="grow small tertiary">现在用的是 {{ rw.name }}</span>
+            <span class="grow small tertiary"><template v-if="!isBT">现在用的是 {{ rw.name }}</template></span>
             <button class="plain" @click="rw.content = rw.base" :disabled="!rwDirty">还原</button>
             <button class="primary" @click="saveRewrite" :disabled="planning || !rwDirty">生成清单</button>
           </div>
           <textarea class="site-code" v-model="rw.content" rows="14" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off" aria-label="伪静态规则"
             placeholder="还没有伪静态规则。可以选一个模板套用，或者直接写 Nginx 的 location / rewrite 规则"></textarea>
-          <p class="small secondary">WordPress、ThinkPHP 这类程序需要伪静态规则，链接才能正常打开。1Panel 会先检查规则，有错误会拒绝并保留原来的。</p>
+          <p class="small secondary">WordPress、ThinkPHP 这类程序需要伪静态规则，链接才能正常打开。{{ panelName(detail.panel) }}会先检查规则，有错误会拒绝并保留原来的。</p>
         </div>
 
         <!-- Config file -->
@@ -3926,15 +3946,15 @@ const SitePage = {
         <!-- Backups -->
         <div v-if="section === 'backups'">
           <div class="stat-bar site-bar">
-            <span class="grow small secondary">1Panel 把网站目录和 Nginx 配置打包备份；数据库不在网站备份里，要另外备份。</span>
+            <span class="grow small secondary">{{ isBT ? '宝塔把网站目录打包备份' : '1Panel 把网站目录和 Nginx 配置打包备份' }}；数据库不在网站备份里，要另外备份。</span>
             <button class="plain icon-only" @click="loadBackups" :disabled="bk.loading" title="刷新" aria-label="刷新"><ui-icon name="refresh"></ui-icon></button>
             <button class="primary" @click="backupNow" :disabled="planning">立即备份</button>
           </div>
           <div class="notice" v-if="bk.error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ bk.error }}</div>
           <div class="notice" v-if="bk.loading && !bk.data"><span class="spinner"></span>正在读取备份……</div>
           <template v-if="bk.data">
-            <div class="group-title">定时备份</div>
-            <div class="group">
+            <div class="group-title" v-if="!isBT">定时备份</div>
+            <div class="group" v-if="!isBT">
               <div class="row" v-if="bk.data.schedule">
                 <span class="grow"><b>每天 {{ bk.data.schedule.time || bk.data.schedule.spec }}</b><span class="small secondary"> · 保留最近 {{ bk.data.schedule.keep }} 份 · {{ bk.data.schedule.account }}</span>
                   <span class="small tertiary block" v-if="bk.data.schedule.lastAt">上次 {{ bk.data.schedule.lastAt }}<span v-if="bk.data.schedule.lastStatus === 'Failed'" class="st-crit-text"> 失败</span></span>
@@ -3968,7 +3988,7 @@ const SitePage = {
                   <span class="small block" v-if="b.status && b.status !== 'Success'"><span class="sdot" :class="b.status === 'Failed' ? 'crit' : 'off'"></span>{{ b.status === 'Failed' ? '失败：' + (b.message || '') : '进行中' }}</span></span>
                 <template v-if="!b.status || b.status === 'Success'">
                   <button class="plain small" @click="downloadBackup(b)" :disabled="fetching === b.id">{{ fetching === b.id ? '准备中…' : '下载' }}</button>
-                  <button class="plain small" @click="restore(b)" :disabled="planning">恢复</button>
+                  <button class="plain small" v-if="!isBT" @click="restore(b)" :disabled="planning">恢复</button>
                 </template>
               </div>
               <div class="row small secondary" v-if="!bk.data.backups.length"><ui-icon name="info"></ui-icon><span class="grow">还没有备份。改网站之前建议先点「立即备份」。</span></div>
@@ -6622,6 +6642,7 @@ const app = createApp({
     const msgBox = ref(null);
     let followChat = true;
     const op = reactive({ port: 0, host: '', apiKey: '', hasKey: false, info: '' });
+    const bt = reactive({ port: 0, apiKey: '', hasKey: false, info: '' }); // 宝塔's API
     const tc = reactive({ configured: false, hint: '', secretId: '', secretKey: '', info: '' });
     const ali = reactive({ configured: false, hint: '', id: '', secret: '', info: '' });
     const freeCmd = reactive({ enabled: false });
@@ -6686,6 +6707,10 @@ const app = createApp({
           const o = await api('GET', `/api/servers/${id}/onepanel`);
           if (selectedId.value === id) Object.assign(op, o, { apiKey: '', info: '' });
         }
+        if (prof.server.adapter === 'bt') {
+          const o = await api('GET', `/api/servers/${id}/btpanel`);
+          if (selectedId.value === id) Object.assign(bt, o, { apiKey: '', info: '' });
+        }
       } catch (e) { if (selectedId.value === id) notify(e.message, 'error'); }
     }
     async function saveOnePanel() {
@@ -6693,6 +6718,22 @@ const app = createApp({
         const saved = await api('PUT', `/api/servers/${selectedId.value}/onepanel`, { port: op.port, host: op.host, apiKey: op.apiKey });
         Object.assign(op, saved, { apiKey: '', info: '' });
         notify('已保存');
+      });
+    }
+    async function saveBT() {
+      await guarded('正在保存……', async () => {
+        const saved = await api('PUT', `/api/servers/${selectedId.value}/btpanel`, { port: bt.port, apiKey: bt.apiKey });
+        Object.assign(bt, saved, { apiKey: '', info: '' });
+        notify('已保存，正在测试……');
+        const r = await api('POST', `/api/servers/${selectedId.value}/btpanel/test`);
+        bt.info = '连接成功：' + r.info;
+      });
+    }
+    async function testBT() {
+      await guarded('正在连接宝塔……', async () => {
+        const r = await api('POST', `/api/servers/${selectedId.value}/btpanel/test`);
+        bt.info = '连接成功：' + r.info;
+        notify('宝塔接口可以正常使用');
       });
     }
     async function testOnePanel() {
@@ -7243,7 +7284,7 @@ const app = createApp({
       spendText, plans, audit, logView, logFocus, loadAudit, openLog, showAdd, addForm, messages, draft, chatBusy, msgBox, suggestions,
       select, openAdd, addServer, testConn, discover, removeServer, askAbout, send, onEnter, onChatScroll, newChat, applyPreset, saveAI, testAI,
       convs, showConvs, conversationId, openConv, deleteConv, relTime,
-      op, saveOnePanel, testOnePanel, tc, saveTencent, testTencent, clearTencent, ali, saveAliyun, testAliyun, clearAliyun, freeCmd, setFree, seen, statsView, statsSeen, termRequest, openTerminal, filesRequest, openFiles, sitesRequest, openSite, newSite, unread, me, logout,
+      op, saveOnePanel, testOnePanel, bt, saveBT, testBT, tc, saveTencent, testTencent, clearTencent, ali, saveAliyun, testAliyun, clearAliyun, freeCmd, setFree, seen, statsView, statsSeen, termRequest, openTerminal, filesRequest, openFiles, sitesRequest, openSite, newSite, unread, me, logout,
       overview, loadOverview, inboxCount, inboxFocus, openInbox, aiPanel, toggleAI, pageContext, siteContext, palette, modKey, serverDot, serverMeta, visitSection, statsRequest, openStats,
       cloud, cloudList, cloudPick, pickCloud, askAI, daysTo, fmtBytes, securityForm, securityPlan, proposeSecurity, securityDone,
       monitorDown, SERVER_TABS, serverTab, seenServerSites, serverSitesRequest, openServerSite, serverStateText, serverFacts, cloudRequest, openCloud, addFromCloud,

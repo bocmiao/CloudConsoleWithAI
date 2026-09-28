@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bocmiao/CloudConsoleWithAI/internal/actions"
+	"github.com/bocmiao/CloudConsoleWithAI/internal/btpanel"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/core"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/onepanel"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/sshx"
@@ -56,6 +57,7 @@ type OpenRestyView struct {
 // SiteServerView is one server's sites.
 type SiteServerView struct {
 	ID        int64          `json:"id"`
+	Panel     string         `json:"panel"` // 1panel or bt
 	Name      string         `json:"name"`
 	Host      string         `json:"host"`
 	NoPanel   bool           `json:"noPanel,omitempty"` // 1Panel's API is not set up
@@ -194,7 +196,10 @@ func siteViewOf(s onepanel.SiteSummary) SiteView {
 }
 
 func (a *App) serverSites(ctx context.Context, sv store.Server) SiteServerView {
-	out := SiteServerView{ID: sv.ID, Name: sv.Name, Host: sv.Host, Sites: []SiteView{}}
+	if sv.Adapter == "bt" {
+		return a.btServerSites(ctx, sv)
+	}
+	out := SiteServerView{ID: sv.ID, Name: sv.Name, Host: sv.Host, Sites: []SiteView{}, Panel: "1panel"}
 	if s, err := a.OnePanel(sv.ID); err == nil && (!s.HasKey || s.Port == 0) {
 		out.NoPanel = true
 		return out
@@ -249,11 +254,8 @@ func (a *App) Websites(ctx context.Context, serverID int64) (WebsitesView, error
 		if serverID != 0 && sv.ID != serverID {
 			continue
 		}
-		switch sv.Adapter {
-		case "1panel":
+		if sv.Adapter == "1panel" || sv.Adapter == "bt" {
 			panels = append(panels, sv)
-		case "bt":
-			v.Others = append(v.Others, sv.Name+"（宝塔）")
 		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
@@ -316,6 +318,7 @@ type ProxyView struct {
 
 // SiteDetailView is everything the page shows about one site.
 type SiteDetailView struct {
+	Panel         string                `json:"panel"` // 1panel or bt
 	ServerID      int64                 `json:"serverId"`
 	ServerName    string                `json:"serverName"`
 	Site          SiteView              `json:"site"`
@@ -353,7 +356,7 @@ func certCovers(names []string, host string) bool {
 
 // siteDetail reads one site with p, asking 1Panel for its parts at once.
 func siteDetail(ctx context.Context, p *onepanel.Client, id uint) (SiteDetailView, error) {
-	v := SiteDetailView{Domains: []onepanel.SiteDomain{}, Certs: []CertOption{}, Proxies: []ProxyView{}}
+	v := SiteDetailView{Panel: "1panel", Domains: []onepanel.SiteDomain{}, Certs: []CertOption{}, Proxies: []ProxyView{}}
 	d, err := p.Website(ctx, id)
 	if err != nil {
 		return v, err
@@ -463,14 +466,26 @@ func containsFold(list []string, s string) bool {
 // Website reads one site of a server.
 func (a *App) Website(ctx context.Context, serverID int64, siteID uint) (SiteDetailView, error) {
 	var v SiteDetailView
-	err := a.withPanel(ctx, serverID, func(sv store.Server, _ sshx.Conn, p *onepanel.Client) error {
-		var err error
-		if v, err = siteDetail(ctx, p, siteID); err != nil {
-			return userErr("读取网站失败：%v", err)
-		}
-		v.ServerID, v.ServerName = sv.ID, sv.Name
-		return nil
-	})
+	var err error
+	if a.isBT(serverID) {
+		err = a.withBT(ctx, serverID, func(sv store.Server, _ sshx.Conn, b *btpanel.Client) error {
+			var err error
+			if v, err = btSiteDetail(ctx, b, siteID); err != nil {
+				return userErr("读取网站失败：%v", err)
+			}
+			v.ServerID, v.ServerName = sv.ID, sv.Name
+			return nil
+		})
+	} else {
+		err = a.withPanel(ctx, serverID, func(sv store.Server, _ sshx.Conn, p *onepanel.Client) error {
+			var err error
+			if v, err = siteDetail(ctx, p, siteID); err != nil {
+				return userErr("读取网站失败：%v", err)
+			}
+			v.ServerID, v.ServerName = sv.ID, sv.Name
+			return nil
+		})
+	}
 	if err != nil {
 		return v, err
 	}
@@ -499,6 +514,9 @@ func (a *App) WebsiteLog(ctx context.Context, serverID int64, siteID uint, kind 
 		return SiteLog{}, userErr("日志只有 access 和 error 两种")
 	}
 	lines = min(max(lines, 20), 2000)
+	if a.isBT(serverID) {
+		return a.btWebsiteLog(ctx, serverID, siteID, kind, min(lines, 1000))
+	}
 	var out SiteLog
 	err := a.withPanel(ctx, serverID, func(sv store.Server, c sshx.Conn, p *onepanel.Client) error {
 		d, err := p.Website(ctx, siteID)
@@ -773,6 +791,15 @@ func (a *App) ProposeWebsite(ctx context.Context, req SiteRequest) (PlanView, er
 	default:
 		return PlanView{}, userErr("不支持的操作 %q", req.Op)
 	}
+	if sv.Adapter == "bt" {
+		// The same changes, said for 宝塔.
+		if req.Op == "cert" {
+			reason = "Let's Encrypt 会访问 http://" + params["domain"].(string) + "/.well-known/acme-challenge/ 来验证，所以域名要已经解析到这台服务器，80 端口要能访问。宝塔装好证书后会在到期前自动续签。网站原来没开 HTTPS 的话可以一键撤销（关掉 HTTPS）。"
+		}
+		name := strings.NewReplacer(" 1Panel ", "宝塔", " 1Panel", "宝塔", "1Panel ", "宝塔", "1Panel", "宝塔", "OpenResty", "Nginx",
+			"网站目录和配置", "网站目录", "1Panel 备份目录", "宝塔备份目录")
+		title, summary, reason = name.Replace(title), name.Replace(summary), name.Replace(reason)
+	}
 	steps := []core.Step{{Capability: capability, Summary: summary, Params: params}}
 	// A step that cannot run is reported now rather than shown blocked.
 	if _, err := actions.Resolve(capability, params, sv.Adapter); err != nil {
@@ -797,29 +824,47 @@ func (a *App) fillSiteDiffs(ctx context.Context, sv store.Server, steps []core.S
 		}
 		site, _ := s.Params["website"].(string)
 		content, _ := s.Params["content"].(string)
-		if site == "" || sv.Adapter != "1panel" {
+		if site == "" || (sv.Adapter != "1panel" && sv.Adapter != "bt") {
 			continue
 		}
 		var cur, name string
-		err := a.withPanel(ctx, sv.ID, func(_ store.Server, _ sshx.Conn, p *onepanel.Client) error {
-			w, err := findPanelSite(ctx, p, site)
-			if err != nil {
-				return err
-			}
-			if s.Capability == "site.conf.set" {
-				f, err := p.WebsiteConf(ctx, w.ID)
+		var err error
+		if sv.Adapter == "bt" {
+			err = a.withBT(ctx, sv.ID, func(_ store.Server, _ sshx.Conn, b *btpanel.Client) error {
+				w, err := b.Site(ctx, site)
+				if err != nil {
+					return err
+				}
+				var f btpanel.File
+				if s.Capability == "site.conf.set" {
+					f, err = b.NginxConf(ctx, w)
+				} else {
+					f, err = b.Rewrite(ctx, w)
+				}
 				cur, name = f.Content, f.Path
 				return err
-			}
-			name = "伪静态规则"
-			cur, err = p.Rewrite(ctx, w.ID, "current")
-			return err
-		})
+			})
+		} else {
+			err = a.withPanel(ctx, sv.ID, func(_ store.Server, _ sshx.Conn, p *onepanel.Client) error {
+				w, err := findPanelSite(ctx, p, site)
+				if err != nil {
+					return err
+				}
+				if s.Capability == "site.conf.set" {
+					f, err := p.WebsiteConf(ctx, w.ID)
+					cur, name = f.Content, f.Path
+					return err
+				}
+				name = "伪静态规则"
+				cur, err = p.Rewrite(ctx, w.ID, "current")
+				return err
+			})
+		}
 		if err != nil {
 			continue // the step still runs; it just shows no diff
 		}
 		if h, _ := s.Params["base_hash"].(string); h != "" && h != actions.ConfHash(cur) {
-			return userErr("%s在你打开之后被改过了（可能是在 1Panel 里改的），请重新打开再改", map[bool]string{true: "配置文件", false: "伪静态规则"}[s.Capability == "site.conf.set"])
+			return userErr("%s在你打开之后被改过了（可能是在面板里改的），请重新打开再改", map[bool]string{true: "配置文件", false: "伪静态规则"}[s.Capability == "site.conf.set"])
 		}
 		if s.Params["base_hash"] == nil || s.Params["base_hash"] == "" {
 			s.Params["base_hash"] = actions.ConfHash(cur)
@@ -874,6 +919,9 @@ func (a *App) toolPanelWebsite(ctx context.Context, raw json.RawMessage) (string
 	sv, err := a.Store.GetServer(arg.ServerID)
 	if err != nil {
 		return "", fmt.Errorf("找不到服务器 %d", arg.ServerID)
+	}
+	if sv.Adapter == "bt" {
+		return a.toolBTWebsite(ctx, sv, strings.TrimSpace(arg.Website), arg.LogLines)
 	}
 	e := a.startExec(store.ExecLog{ServerID: sv.ID, ServerName: sv.Name, Adapter: sv.Adapter, Origin: originOf(ctx),
 		Kind: store.ExecRead, Title: "查看 1Panel 网站 " + arg.Website, Via: "1Panel 接口"})
@@ -968,6 +1016,19 @@ func (a *App) WebsiteRewriteTemplate(ctx context.Context, serverID int64, siteID
 		return "", userErr("模板名称不对")
 	}
 	var out string
+	if a.isBT(serverID) {
+		err := a.withBT(ctx, serverID, func(_ store.Server, _ sshx.Conn, b *btpanel.Client) error {
+			site, err := btSite(ctx, b, siteID)
+			if err != nil {
+				return err
+			}
+			if out, err = b.RewriteTemplate(ctx, site, name); err != nil {
+				return userErr("宝塔里没有模板 %s：%v", name, err)
+			}
+			return nil
+		})
+		return out, err
+	}
 	err := a.withPanel(ctx, serverID, func(_ store.Server, _ sshx.Conn, p *onepanel.Client) error {
 		var err error
 		if out, err = p.Rewrite(ctx, siteID, name); err != nil {

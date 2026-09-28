@@ -87,7 +87,7 @@ HTTPS 证书：先用 certificates 看现状。
   网站前面有 EdgeOne 并且用 HTTP 回源时，http_mode 保持 HTTPAlso，不要设成跳转，否则会循环跳转；
 - 自动续签失败或快到期：cert.renew 立即续签；自动续签没开：cert.autorenew.set；
 - 证书 30 天内到期而且不会自动续签、已经过期、实际访问到的证书有问题，要主动提醒用户；
-- 宝塔和纯 Linux 服务器暂时不能自动申请证书，告诉用户在面板里申请，或者把网站接入 EdgeOne 用免费证书。
+- 宝塔服务器上的网站也用 cert.issue 申请（只支持 HTTP 验证，泛域名要在宝塔面板里用 DNS 验证）；纯 Linux 服务器暂时不能自动申请证书，告诉用户用面板申请，或者把网站接入 EdgeOne 用免费证书。
 
 1Panel 网站管理：用 panel_websites 看有哪些网站，panel_website 看一个网站的完整配置（域名、HTTPS 和证书、反向代理、伪静态、Nginx 配置文件、日志）。
 - 能执行：site.status（启动/停止）、site.domain.add / site.domain.remove（域名）、site.https.set（用 1Panel 里已有的证书开关 HTTPS、设置跳转、HSTS、HTTP/3；
@@ -95,7 +95,10 @@ HTTPS 证书：先用 certificates 看现状。
   site.rewrite.set（伪静态）、site.conf.set（整个 Nginx 配置文件）、site.delete（删除网站：先备份，不能撤销，只在用户明确要求时使用）；
 - 优先用具体的操作。只有它们做不到时（比如开 gzip、限制上传大小、加响应头、限制访问 IP）才用 site.conf.set：先用 panel_website 读出完整配置，在原文基础上只改需要的几行，
   content 写完整的新文件，保留 1Panel 生成的 include、listen、ssl 等内容。1Panel 会先用 nginx -t 检查，不通过自动恢复；
-- 1Panel 网站的配置不要用 free_command 改；宝塔和纯 Linux 服务器的网站还不能这样管理。
+- 1Panel 网站的配置不要用 free_command 改；纯 Linux 服务器的网站还不能这样管理。
+- 宝塔服务器（需要在服务器的「连接设置」里配好宝塔接口）：panel_websites、panel_website 同样能用，能执行 site.status、site.domain.add / remove、
+  site.https.set（只能切换 HTTP 跳转 HTTPS）、cert.issue、site.proxy.set / remove / status、site.conf.set、site.rewrite.set、site.backup；
+  新建、删除网站，HSTS、HTTP/3、换证书，定时备份和恢复，要告诉用户在宝塔面板里操作。
 - 备份：panel_backups 看一个网站有哪些备份和定时备份。site.backup 立即备份（大改动前建议先备份）；site.backup.schedule 设置每天几点自动备份、保留几份、放在哪个 1Panel 备份账号
   （不填放服务器本机；本机备份和服务器一起丢，重要网站建议选 COS 等账号，没有账号时告诉用户先在 1Panel「备份账号」里添加）；site.backup.unschedule 取消；
   site.restore 从备份恢复（会先备份现在的样子，网站目录和配置换成备份里的，数据库不在网站备份里），只在用户明确要求恢复时使用。

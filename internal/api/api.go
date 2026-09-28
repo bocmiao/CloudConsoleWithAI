@@ -196,6 +196,9 @@ func (s *Server) routes() {
 	api("GET /api/servers/{id}/onepanel", s.getOnePanel)
 	api("PUT /api/servers/{id}/onepanel", s.putOnePanel)
 	api("POST /api/servers/{id}/onepanel/test", s.testOnePanel)
+	api("GET /api/servers/{id}/btpanel", s.getBT)
+	api("PUT /api/servers/{id}/btpanel", s.putBT)
+	api("POST /api/servers/{id}/btpanel/test", s.testBT)
 	api("GET /api/audit", s.audit)
 	api("GET /api/usage", s.usage)
 }
@@ -1175,6 +1178,38 @@ func (s *Server) testOnePanel(_ http.ResponseWriter, r *http.Request) (any, erro
 		return nil, err
 	}
 	info, err := s.app.TestOnePanel(r.Context(), id)
+	return map[string]string{"info": info}, err
+}
+
+func (s *Server) getBT(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	return s.app.BT(id)
+}
+
+func (s *Server) putBT(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	var req struct {
+		app.BTSettings
+		APIKey string `json:"apiKey"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.SaveBT(id, req.BTSettings, req.APIKey)
+}
+
+func (s *Server) testBT(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	info, err := s.app.TestBT(r.Context(), id)
 	return map[string]string{"info": info}, err
 }
 

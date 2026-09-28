@@ -212,6 +212,12 @@ func (a *App) env(ctx context.Context, id int64) (store.Server, *actions.Env, er
 		c.Close()
 		return sv, nil, err
 	}
+	if sv.Adapter == "bt" {
+		if env.BT, err = a.btClient(id, c); err != nil {
+			c.Close()
+			return sv, nil, err
+		}
+	}
 	env.Cloud, env.Aliyun = a.tencentClient(), a.aliyunClient()
 	return sv, env, nil
 }

@@ -134,6 +134,9 @@ func (a *App) toolPanelWebsites(ctx context.Context, raw json.RawMessage) (strin
 	if err := parseArgs(raw, &arg); err != nil {
 		return "", err
 	}
+	if a.isBT(arg.ServerID) {
+		return a.toolBTWebsites(ctx, arg.ServerID)
+	}
 	sv, c, err := a.connect(ctx, arg.ServerID)
 	if err != nil {
 		return "", err

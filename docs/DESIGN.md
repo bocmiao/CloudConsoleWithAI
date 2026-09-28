@@ -1538,3 +1538,11 @@ Web 版除了「用户名 + 密码」，可以用邮箱或手机收到的验证�
 - **清单**：`aliyun.dns.record.add / modify / delete / status` 和 `aliyun.dns.record.set`（一键解析：替换这个名字默认线路的 A、AAAA、CNAME，失败时把删掉的加回去），都能撤销。
 - **CDN**：`aliyun.cdn.purge`（网址或目录）和 `aliyun.cdn.prefetch`，执行前核对每个网址都是这个账号的加速域名，提交后等任务完成或报出失败的网址。
 - **AI**：`aliyun_dns`、`aliyun_cdn`。
+
+### 宝塔的网站管理（已完成）
+
+- **客户端**（`internal/btpanel`）：宝塔 11.x 和 aaPanel 的接口（`request_token` 签名），网站、域名、HTTPS、Let's Encrypt、反向代理、配置文件、伪静态、日志、备份和数据库；`btpaneltest` 是按宝塔源码行为写的假面板（接口关闭或参数不对时像真的一样回 404 页面，改配置会跑 nginx -t 并还原）。
+- **连接**：和 1Panel 一样从服务器本机访问：SSH 隧道到 127.0.0.1:面板端口，或用自动化助手在服务器上运行 curl（1Panel 的 curl 传输改成可以给别的面板用，并在服务器上把回答里的私钥抹掉）。「连接设置」里填端口（识别时从 `port.pl` 读到）和接口密钥，测试时自动认出面板用的是 HTTP 还是 HTTPS。
+- **网站页**：宝塔服务器和 1Panel 服务器一起列出，详情用同样的页面（`panel` 字段说是哪个面板）：域名、HTTPS、反向代理、伪静态（套用宝塔自己的模板）、配置文件、日志、备份。宝塔做不到或者接口没有的（HSTS、HTTP/3、选已有证书、新建和删除网站、定时备份、恢复网站备份）不显示。
+- **清单**：用同一批操作名（`site.status`、`site.domain.*`、`site.https.set`、`cert.issue`、`site.proxy.*`、`site.conf.set`、`site.rewrite.set`、`site.backup`），宝塔服务器上走 `bt_*` 的实现。改配置文件和伪静态时宝塔自己先 nginx -t，Miao Panel 再整体测一次，不通过就写回原来的内容；申请证书只支持 HTTP 验证，原来就开着 HTTPS 的网站申请后不能一键撤销（接口读不到原证书的私钥）。清单和记录里的文字说宝塔和 Nginx，不说 1Panel。
+- **AI**：`panel_websites`、`panel_website` 对宝塔服务器同样能用，提示词说明了宝塔能做和不能做的。

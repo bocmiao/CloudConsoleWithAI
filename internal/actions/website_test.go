@@ -122,8 +122,8 @@ func TestSiteHTTPS(t *testing.T) {
 	if _, err := Resolve("site.https.set", map[string]any{"website": "blog.example.com", "enabled": "off", "hsts": "on"}, "1panel"); err == nil {
 		t.Fatal("turning HTTPS off takes no other settings")
 	}
-	if _, err := Resolve("site.https.set", map[string]any{"website": "blog.example.com", "enabled": "on"}, "bt"); err == nil {
-		t.Fatal("宝塔 is not supported")
+	if _, err := Resolve("site.delete", map[string]any{"website": "blog.example.com"}, "bt"); err == nil {
+		t.Fatal("deleting a 宝塔 site is not supported")
 	}
 }
 
