@@ -173,6 +173,7 @@ func startWeb(ctx context.Context, st *store.Store, sec secrets.Store, dir, trus
 		return nil, err
 	}
 	go a.KeepWarm(ctx, 20*time.Minute)
+	go a.PreloadLoop(ctx)
 	go a.Monitor(ctx)
 	go a.UpdateLoop(ctx)
 	go func() {

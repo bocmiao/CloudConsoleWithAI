@@ -1,5 +1,5 @@
 /* Miao Panel web UI. Plain Vue 3 (global build), no build step. */
-const { createApp, ref, reactive, computed, watch, onMounted, onUnmounted, nextTick, inject, provide } = Vue;
+const { createApp, ref, reactive, computed, watch, onMounted, onUnmounted, nextTick, inject, provide, toRaw } = Vue;
 
 async function api(method, path, body) {
   const opts = { method, headers: { 'X-Miao': '1' }, credentials: 'same-origin' };
@@ -9,7 +9,10 @@ async function api(method, path, body) {
   }
   const res = await fetch(path, opts);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
+  if (res.ok) {
+    const at = res.headers.get('X-Miao-At');
+    if (at && data && typeof data === 'object') pageMeta.set(data, { at, refreshing: res.headers.get('X-Miao-Refreshing') === '1' });
+  } else {
     // The web edition's session ran out: back to the login page.
     if (res.status === 401 && data.code === 'login' && window.MIAO_MODE === 'server' && !/^\/api\/auth\//.test(path)) location.reload();
     const err = new Error(data.error || `请求失败（${res.status}）`);
@@ -17,6 +20,21 @@ async function api(method, path, body) {
     throw err;
   }
   return data;
+}
+
+// Page data the server keeps ready (app/pages.go) comes with when it was
+// gathered and whether a newer copy is on its way.
+const pageMeta = new WeakMap();
+const metaOf = d => (d && typeof d === 'object' && pageMeta.get(toRaw(d))) || {};
+
+// pageGet asks for a page's data: what the server keeps, at once, and then
+// (through fresh) the newer copy when one is being gathered; with force,
+// the live answer, for the refresh buttons.
+async function pageGet(path, { force = false, fresh } = {}) {
+  const sep = path.includes('?') ? '&' : '?';
+  const d = await api('GET', force ? path + sep + 'refresh=1' : path);
+  if (!force && fresh && metaOf(d).refreshing) api('GET', path + sep + 'wait=1').then(fresh, () => {});
+  return d;
 }
 
 function esc(s) {
@@ -720,9 +738,9 @@ const VisitStats = {
       } catch (e) { if (n === seq) error.value = e.message; }
       finally { if (n === seq) loading.value = false; }
     }
-    async function loadBlocked() {
+    async function loadBlocked(force) {
       if (!props.tencent) { blocked.value = []; return; }
-      try { blocked.value = await api('GET', '/api/visits/blocked'); } catch { blocked.value = []; }
+      try { blocked.value = await pageGet('/api/visits/blocked', { force: force === true, fresh: d => { blocked.value = d; } }); } catch { blocked.value = []; }
       loadAuto();
     }
     // 自动封禁: the rule the user turns on, and what it did.
@@ -946,7 +964,7 @@ const VisitStats = {
       const list = top('dead').slice(0, 15).map(it => `${it.value}（${it.count} 次）`).join('\n');
       emit('ask', `我的网站有这些死链（有人点链接打开却是 404，← 后面是链接所在的页面或网站）：\n${list}\n帮我看看这些地址原来是什么、应该怎么修（改链接、做 301 跳转还是恢复页面）。`);
     }
-    return { sources, source, days, site, section, series, data, loading, error, load, siteNames, range, cur, total, top, siteRows,
+    return { sources, source, days, site, section, series, data, loading, error, load, loadBlocked, siteNames, range, cur, total, top, siteRows,
       ips, risky, ipRows, counts, judgement, verdictOf, blockable, blockedSet, picked, togglePick, pickSuggested, judge, judging, showAll, manualIPs, manualZone, blockManual,
       block, unblock, plan, planning, planDone, realIP, planServerName, fromServer, directRows, blocked, drawer, openIP, alerts, trend, dayRows, hourRows, delta, yesterday, pct, SERIES,
       askAI, askIP, deadLinks, askDead, auto, autoEdit, autoBusy, autoForm, editAuto, saveAuto, turnOffAuto, runAuto, autoRule, autoUntil, untilText, VISIT_RANGES, VISIT_SECTIONS, RISK, VERDICT, fmtCount, fmtBytes, whenText };
@@ -967,7 +985,7 @@ const VisitStats = {
         <span class="small tertiary live-note" v-if="data && data.checkedAt">
           <span class="spinner inline" v-if="loading"></span>{{ loading ? '正在更新，下面是 ' : '统计于 ' }}{{ whenText(data.checkedAt) }}{{ loading ? ' 的结果' : '' }}
         </span>
-        <button class="plain" @click="load(true)" :disabled="loading" title="重新统计"><ui-icon name="refresh"></ui-icon>刷新</button>
+        <button class="plain" @click="load(true); loadBlocked(true)" :disabled="loading" title="重新统计"><ui-icon name="refresh"></ui-icon>刷新</button>
         <button class="primary" @click="askAI" :disabled="!cur"><ui-icon name="sparkles"></ui-icon>让 AI 分析</button>
       </div>
       <p class="source-note small tertiary" v-if="sources.length">{{ (sources.find(s => s.key === source) || {}).note }}</p>
@@ -1559,6 +1577,17 @@ const whenText = t => {
   return d.toDateString() === new Date().toDateString() ? hm : `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
 };
 
+// FreshNote says how old a page's data is: 更新于 10:32, or, while a newer
+// copy is being gathered, that the one shown is from then.
+const FreshNote = {
+  props: { data: null },
+  setup(props) {
+    const m = computed(() => metaOf(props.data));
+    return { m, whenText };
+  },
+  template: `<span class="small tertiary fresh-note" v-if="m.at"><span class="spinner inline" v-if="m.refreshing"></span>{{ m.refreshing ? '正在更新，下面是 ' + whenText(m.at) + ' 的数据' : '更新于 ' + whenText(m.at) }}</span>`,
+};
+
 const LEVEL_ICON = { ok: 'check', warn: 'warn', crit: 'alert', info: 'info' };
 const LEVEL_RANK = { crit: 0, warn: 1, info: 2, ok: 3 };
 const rankOf = l => LEVEL_RANK[l] ?? 2; // unknown counts as info
@@ -1958,14 +1987,17 @@ const DnsPage = {
     const anyCloud = computed(() => props.configured || props.aliyun);
     const both = computed(() => props.configured && props.aliyun);
     const listErrors = ref([]); // a provider whose domains could not be read
-    async function loadDomains() {
+    const showDomains = r => {
+      domains.value = r.domains; eoListError.value = r.eoError || '';
+      listErrors.value = [r.dnspodError && 'DNSPod：' + r.dnspodError, r.aliError && '阿里云云解析：' + r.aliError].filter(Boolean);
+    };
+    async function loadDomains(force) {
       if (!anyCloud.value) return;
       try {
-        const r = await api('GET', '/api/dns/domains');
-        domains.value = r.domains; eoListError.value = r.eoError || '';
-        listErrors.value = [r.dnspodError && 'DNSPod：' + r.dnspodError, r.aliError && '阿里云云解析：' + r.aliError].filter(Boolean);
+        const r = await pageGet('/api/dns/domains', { force: force === true, fresh: showDomains });
+        showDomains(r);
         const want = current.value ? dkey(current.value) : r.domains.length ? dkey(r.domains[0]) : '';
-        if (want !== pick.value) pick.value = want; else load();
+        if (want !== pick.value) pick.value = want; else load(force === true);
       } catch (e) { error.value = e.message; } finally { domainsLoaded.value = true; }
     }
     async function load(fresh) {
@@ -1975,10 +2007,13 @@ const DnsPage = {
       const memo = dnsMemo.get(key);
       if (memo && !fresh) data.value = memo; else if (!memo) data.value = null;
       loading.value = true; error.value = '';
+      const show = r => { dnsMemo.set(key, r); data.value = r; };
       try {
-        const r = await api('GET', '/api/dns/records?domain=' + encodeURIComponent(d) + '&provider=' + provider.value);
+        const r = await pageGet('/api/dns/records?domain=' + encodeURIComponent(d) + '&provider=' + provider.value, {
+          force: fresh === true, fresh: r => { if (n === seq) show(r); },
+        });
         if (n !== seq) return;
-        dnsMemo.set(key, r); data.value = r;
+        show(r);
       } catch (e) { if (n === seq) error.value = e.message; }
       finally { if (n === seq) loading.value = false; }
     }
@@ -2071,7 +2106,7 @@ const DnsPage = {
     const canEO = r => r.enabled && !r.edgeone && !r.system && ['A', 'AAAA', 'CNAME'].includes(r.type) && zone.value && zone.value.type === 'partial' && eoUsable.value && !/\.eo\.dnse|\.edgeone\.app/.test(r.value);
     const planServerName = computed(() => provider.value === 'alidns' ? '阿里云' : '腾讯云');
 
-    return { RECORD_TYPES, EO_AREAS, VALUE_HINT, domains, domainsLoaded, eoError, domain, data, loading, error, q, typeFilter, plan, planning, lines, formError,
+    return { RECORD_TYPES, EO_AREAS, VALUE_HINT, domains, domainsLoaded, loadDomains, eoError, domain, data, loading, error, q, typeFilter, plan, planning, lines, formError,
       current, zone, eoUsable, shown, load, planDone, closePlan, editor, openEditor, editorTTLs, submitEditor, quick, openQuick, submitQuick, quickName, originEdit, openOrigin, submitOrigin,
       del, toggle, eoPoint, eoOff, eoOn, canEO, ttlText, planServerName, anyCloud, both, listErrors, provider, pick, dkey };
   },
@@ -2090,7 +2125,8 @@ const DnsPage = {
         <label class="field"><span>类型</span>
           <select v-model="typeFilter" aria-label="记录类型"><option value="">全部</option><option v-for="t in RECORD_TYPES" :key="t" :value="t">{{ t }}</option></select></label>
         <span class="grow"></span>
-        <button class="plain icon-only" @click="load(true)" :disabled="loading || !domain" title="刷新" aria-label="刷新"><ui-icon name="refresh"></ui-icon></button>
+        <fresh-note :data="data"></fresh-note>
+        <button class="plain icon-only" @click="loadDomains(true)" :disabled="loading" title="刷新" aria-label="刷新"><ui-icon name="refresh"></ui-icon></button>
         <button @click="openEditor()" :disabled="!domain"><ui-icon name="plus"></ui-icon>添加记录</button>
         <button class="primary" @click="openQuick()" :disabled="!domain"><ui-icon name="bolt"></ui-icon>一键解析</button>
       </div>
@@ -2715,11 +2751,15 @@ const ServerApps = {
 
     // MySQL on 1Panel.
     const dbs = reactive({ apps: null, loading: false, error: '' });
-    async function loadDBs() {
+    async function loadDBs(force) {
       if (props.adapter !== '1panel' || !props.server) return;
+      const server = props.server;
       dbs.loading = true; dbs.error = '';
-      try { dbs.apps = await api('GET', `/api/servers/${props.server}/databases`); }
-      catch (e) { dbs.error = e.message; } finally { dbs.loading = false; }
+      try {
+        dbs.apps = await pageGet(`/api/servers/${server}/databases`, {
+          force: force === true, fresh: d => { if (props.server === server) dbs.apps = d; },
+        });
+      } catch (e) { dbs.error = e.message; } finally { dbs.loading = false; }
     }
     watch(() => props.server, () => { dbs.apps = null; loadDBs(); }, { immediate: true });
     const dbForm = reactive({ open: false, app: '', name: '', user: '', access: '%' });
@@ -2797,7 +2837,8 @@ const ServerApps = {
     </div>
 
     <template v-if="adapter === '1panel'">
-      <div class="group-title">数据库</div>
+      <div class="group-title group-title-row"><span class="grow">数据库</span><fresh-note :data="dbs.apps"></fresh-note>
+        <button class="plain icon-only" @click="loadDBs(true)" :disabled="dbs.loading" title="刷新" aria-label="刷新数据库"><ui-icon name="refresh"></ui-icon></button></div>
       <div class="notice" v-if="dbs.error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ dbs.error }}</div>
       <div class="notice" v-if="dbs.loading && !dbs.apps"><span class="spinner"></span>正在读取数据库……</div>
       <div class="group" v-if="dbs.apps && !dbs.apps.length"><div class="row secondary">1Panel 里没有安装 MySQL 或 MariaDB</div></div>
@@ -2906,14 +2947,21 @@ const CloudPage = {
       else list.value = out;
       loading.value = false;
     }
-    async function loadDetail() {
+    async function loadDetail(force) {
       const o = open.value;
       if (!o) return;
       const n = ++seq;
       dLoading.value = true; dError.value = '';
+      const show = d => {
+        const v = { ...d, instance: { ...d.instance, provider: o.provider } };
+        pageMeta.set(v, metaOf(d));
+        detail.value = v;
+      };
       try {
-        const d = await api('GET', `/api/${o.provider}/servers/${encodeURIComponent(o.region)}/${encodeURIComponent(o.id)}`);
-        if (n === seq) detail.value = { ...d, instance: { ...d.instance, provider: o.provider } };
+        const d = await pageGet(`/api/${o.provider}/servers/${encodeURIComponent(o.region)}/${encodeURIComponent(o.id)}`, {
+          force: force === true, fresh: d => { if (n === seq) show(d); },
+        });
+        if (n === seq) show(d);
       } catch (e) { if (n === seq) dError.value = e.message; }
       finally { if (n === seq) dLoading.value = false; }
     }
@@ -3057,7 +3105,9 @@ const CloudPage = {
         <span class="grow" v-else></span>
         <span class="spinner inline" v-if="dLoading"></span>
       </div>
-      <div class="notice" v-if="dError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ dError }}<button class="plain" @click="loadDetail">重试</button></div>
+      <div class="site-fresh" v-if="detail"><fresh-note :data="detail"></fresh-note>
+        <button class="plain icon-only" @click="loadDetail(true)" :disabled="dLoading" title="刷新" aria-label="刷新"><ui-icon name="refresh"></ui-icon></button></div>
+      <div class="notice" v-if="dError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ dError }}<button class="plain" @click="loadDetail(true)">重试</button></div>
       <div class="notice" v-if="dLoading && !detail"><span class="spinner"></span>正在读取……</div>
 
       <template v-if="detail">
@@ -3391,7 +3441,9 @@ const InboxPage = {
     const serverName = id => id ? ((props.servers.find(s => s.id === id) || {}).name || '已删除的服务器') : '腾讯云';
     const fmt = t => t ? new Date(t).toLocaleString('zh-CN', { hour12: false, month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
     const done = () => { load(); emit('changed'); };
-    return { INBOX_VIEWS, view, plans, error, waiting, serverName, fmt, done, load };
+    const tick = ref(0); // the refresh button reads the reminders again too
+    const refresh = () => { load(); tick.value++; emit('changed'); };
+    return { INBOX_VIEWS, view, plans, error, waiting, serverName, fmt, done, load, tick, refresh };
   },
   template: `
   <div class="inbox">
@@ -3399,6 +3451,8 @@ const InboxPage = {
       <span class="segmented" role="tablist" aria-label="待处理">
         <button v-for="v in INBOX_VIEWS" :key="v.id" role="tab" :aria-selected="view === v.id" :class="{ on: view === v.id }" @click="view = v.id">{{ v.text }}<span class="side-count" v-if="v.id === 'todo' && waiting.length"> {{ waiting.length }}</span></button>
       </span>
+      <span class="grow"></span>
+      <button class="plain" @click="refresh"><ui-icon name="refresh"></ui-icon>刷新</button>
     </div>
     <div class="notice" v-if="error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ error }}</div>
     <template v-if="view === 'todo'">
@@ -3406,7 +3460,7 @@ const InboxPage = {
       <plan-card v-for="pl in waiting" :key="pl.id" :plan="pl" :server-name="serverName(pl.serverId) + ' · ' + fmt(pl.createdAt)" @done="done"></plan-card>
       <div class="group" v-if="plans && !waiting.length"><div class="row secondary"><span class="sdot good"></span>没有等你确认的清单。</div></div>
     </template>
-    <notice-page v-if="view === 'notices'" :active="active && view === 'notices'" @unread="n => $emit('unread', n)"></notice-page>
+    <notice-page v-if="view === 'notices'" :key="tick" :active="active && view === 'notices'" @unread="n => $emit('unread', n)"></notice-page>
     <template v-if="view === 'plans'">
       <p class="small secondary inbox-lead">所有清单都在这里，可以随时回来执行或撤销。</p>
       <plan-card v-for="pl in plans || []" :key="pl.id" :plan="pl" :server-name="serverName(pl.serverId) + ' · ' + fmt(pl.createdAt)" @done="done"></plan-card>
@@ -3512,10 +3566,13 @@ const SitePage = {
     const plan = ref(null), planning = ref(false), formError = ref('');
     let seq = 0;
 
-    async function loadList() {
+    async function loadList(force) {
       loading.value = true; error.value = '';
-      try { list.value = await api('GET', '/api/websites' + (props.server ? '?server=' + props.server : '')); }
-      catch (e) { error.value = e.message; } finally { loading.value = false; }
+      try {
+        list.value = await pageGet('/api/websites' + (props.server ? '?server=' + props.server : ''), {
+          force: force === true, fresh: d => { list.value = d; },
+        });
+      } catch (e) { error.value = e.message; } finally { loading.value = false; }
     }
     watch(() => props.active, v => { if (v) { loadList(); if (open.value) loadDetail(); } }, { immediate: true });
 
@@ -3548,16 +3605,21 @@ const SitePage = {
       loadDetail();
     }
     function back() { open.value = null; detail.value = null; loadList(); }
-    async function loadDetail() {
+    async function loadDetail(force) {
       const o = open.value;
       if (!o) return;
       const n = ++seq;
       dLoading.value = true; dError.value = '';
-      try {
-        const d = await api('GET', `/api/servers/${o.serverId}/websites/${o.siteId}`);
-        if (n !== seq) return;
+      const show = d => {
         siteMemo.set(o.serverId + '/' + o.siteId, d);
         detail.value = d; fill(d);
+      };
+      try {
+        const d = await pageGet(`/api/servers/${o.serverId}/websites/${o.siteId}`, {
+          force: force === true, fresh: d => { if (n === seq) show(d); },
+        });
+        if (n !== seq) return;
+        show(d);
         if (section.value === 'logs') loadLog();
         if (section.value === 'backups') loadBackups();
       } catch (e) { if (n === seq) dError.value = e.message; }
@@ -3835,8 +3897,9 @@ const SitePage = {
         <label class="field site-search"><span>搜索</span>
           <input type="search" v-model="q" placeholder="域名或备注" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" @keydown.esc="q = ''"></label>
         <span class="grow"></span>
+        <fresh-note :data="list"></fresh-note>
         <span class="small tertiary" v-if="list">{{ total }} 个网站</span>
-        <button class="plain icon-only" @click="loadList" :disabled="loading" title="刷新" aria-label="刷新"><ui-icon name="refresh"></ui-icon></button>
+        <button class="plain icon-only" @click="loadList(true)" :disabled="loading" title="刷新" aria-label="刷新"><ui-icon name="refresh"></ui-icon></button>
         <button class="primary" @click="openCreate" :disabled="!usable.length"><ui-icon name="plus"></ui-icon>新建网站</button>
       </div>
       <div class="notice" v-if="error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ error }}</div>
@@ -3901,7 +3964,9 @@ const SitePage = {
         <span class="grow" v-else></span>
         <span class="spinner inline" v-if="dLoading"></span>
       </div>
-      <div class="notice" v-if="dError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ dError }}<button class="plain" @click="loadDetail">重试</button></div>
+      <div class="site-fresh" v-if="detail"><fresh-note :data="detail"></fresh-note>
+        <button class="plain icon-only" @click="loadDetail(true)" :disabled="dLoading" title="刷新" aria-label="刷新"><ui-icon name="refresh"></ui-icon></button></div>
+      <div class="notice" v-if="dError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ dError }}<button class="plain" @click="loadDetail(true)">重试</button></div>
       <div class="notice" v-if="dLoading && !detail"><span class="spinner"></span>正在读取网站……</div>
 
       <template v-if="detail">
@@ -4241,11 +4306,11 @@ const StoragePage = {
     const q = s => `bucket=${encodeURIComponent(bucket.value.name)}&region=${encodeURIComponent(bucket.value.region)}${s || ''}`;
     watch(section, v => setPref('miao.cosSection', v));
 
-    async function loadBuckets(pick) {
+    async function loadBuckets(pick, force) {
       if (!props.configured) return;
       listLoading.value = true;
       try {
-        const r = await api('GET', '/api/cos/buckets');
+        const r = await pageGet('/api/cos/buckets', { force: force === true, fresh: r => { list.value = r; } });
         list.value = r; listError.value = '';
         const want = pick || name.value;
         if (r.buckets.some(b => b.name === want)) { if (name.value !== want) name.value = want; }
@@ -4267,14 +4332,15 @@ const StoragePage = {
     // ---- The bucket's settings ----
     const detail = ref(null), detailError = ref(''), detailLoading = ref(false);
     let dseq = 0;
-    async function loadDetail() {
+    async function loadDetail(force) {
       if (!bucket.value) return;
       const n = ++dseq, b = bucket.value.name;
       detailLoading.value = true;
+      const show = d => { cosMemo.set(b, d); detail.value = d; detailError.value = ''; };
       try {
-        const d = await api('GET', '/api/cos/bucket?' + q());
+        const d = await pageGet('/api/cos/bucket?' + q(), { force: force === true, fresh: d => { if (n === dseq) show(d); } });
         if (n !== dseq) return;
-        cosMemo.set(b, d); detail.value = d; detailError.value = '';
+        show(d);
       } catch (e) { if (n === dseq) detailError.value = e.message; } finally { if (n === dseq) detailLoading.value = false; }
     }
     const acl = computed(() => (detail.value && detail.value.acl && detail.value.acl.canned) || (bucket.value && bucket.value.acl) || '');
@@ -4688,14 +4754,14 @@ const StoragePage = {
     </div>
     <template v-else>
       <div class="page-head"><p>腾讯云 COS 里的存储桶。文件的上传、改名和删除直接执行，会记在「记录」里；设置保存后马上生效，可以撤销。</p></div>
-      <div class="notice" v-if="listError"><ui-icon name="alert" class="st-crit"></ui-icon><span class="grow">{{ listError }}</span><button class="small" @click="loadBuckets()">重试</button></div>
+      <div class="notice" v-if="listError"><ui-icon name="alert" class="st-crit"></ui-icon><span class="grow">{{ listError }}</span><button class="small" @click="loadBuckets(null, true)">重试</button></div>
       <div class="notice" v-else-if="!list"><span class="spinner"></span>正在读取存储桶……</div>
 
       <div class="cos-layout" v-if="list">
         <!-- Buckets -->
         <aside class="cos-side">
           <div class="cos-side-head"><b>存储桶</b><span class="small tertiary">{{ list.buckets.length }} 个</span><span class="grow"></span>
-            <button class="plain icon-only" @click="loadBuckets()" :disabled="listLoading" title="刷新" aria-label="刷新存储桶"><ui-icon name="refresh"></ui-icon></button>
+            <button class="plain icon-only" @click="loadBuckets(null, true)" :disabled="listLoading" title="刷新" aria-label="刷新存储桶"><ui-icon name="refresh"></ui-icon></button>
             <button class="small" @click="openEd('create')"><ui-icon name="plus"></ui-icon>新建</button></div>
           <select class="cos-pick" v-model="name" aria-label="存储桶" v-if="list.buckets.length">
             <option v-for="b in list.buckets" :key="b.name" :value="b.name">{{ shortBucket(b.name) }} · {{ regionText(b.region) }}{{ b.level === 'crit' ? ' · 有风险' : '' }}</option></select>
@@ -4784,7 +4850,7 @@ const StoragePage = {
 
           <!-- Settings -->
           <div v-show="section === 'settings'">
-            <div class="notice" v-if="detailError"><ui-icon name="alert" class="st-crit"></ui-icon><span class="grow">{{ detail ? '刷新失败（下面是之前读到的）：' : '' }}{{ detailError }}</span><button class="small" @click="loadDetail">重试</button></div>
+            <div class="notice" v-if="detailError"><ui-icon name="alert" class="st-crit"></ui-icon><span class="grow">{{ detail ? '刷新失败（下面是之前读到的）：' : '' }}{{ detailError }}</span><button class="small" @click="loadDetail(true)">重试</button></div>
             <div class="notice" v-if="!detail && !detailError"><span class="spinner"></span>正在读取设置……</div>
             <template v-if="detail">
               <div class="group-title">访问</div>
@@ -4831,7 +4897,8 @@ const StoragePage = {
           <!-- Security and usage -->
           <div v-show="section === 'security'">
             <div class="cos-sec-head"><span class="grow small secondary">按设置检查这个桶有没有被公开的风险，以及最近的用量。</span>
-              <button class="plain" @click="loadDetail(); loadUsage()" :disabled="detailLoading || usageLoading"><ui-icon name="refresh"></ui-icon>刷新</button>
+              <fresh-note :data="detail"></fresh-note>
+              <button class="plain" @click="loadDetail(true); loadUsage()" :disabled="detailLoading || usageLoading"><ui-icon name="refresh"></ui-icon>刷新</button>
               <button class="primary" @click="ask"><ui-icon name="sparkles"></ui-icon>让 AI 检查</button></div>
             <div class="notice" v-if="detailError"><ui-icon name="alert" class="st-crit"></ui-icon><span class="grow">{{ detailError }}</span><button class="small" @click="loadDetail">重试</button></div>
             <div class="notice" v-if="!detail && !detailError"><span class="spinner"></span>正在检查……</div>
@@ -5059,12 +5126,13 @@ const EoStats = {
     watch(section, v => setPref('miao.eoSection', v));
     watch(domain, v => { if (v) setPref('miao.eoDomain', v); });
 
-    async function loadSites() {
+    async function loadSites(force) {
       if (!props.configured) return;
-      try {
-        sites.value = await api('GET', '/api/eo/sites');
-        if (!sites.value.includes(domain.value)) domain.value = sites.value.length ? sites.value[0] : '';
-      } catch (e) { error.value = e.message; }
+      const show = s => {
+        sites.value = s;
+        if (!s.includes(domain.value)) domain.value = s.length ? s[0] : '';
+      };
+      try { show(await pageGet('/api/eo/sites', { force: force === true, fresh: show })); } catch (e) { error.value = e.message; }
     }
     const url = (d, h, extra) => `/api/eo/analytics?domain=${encodeURIComponent(d)}&hours=${h}${extra || ''}`;
     function remember(d, h, r) {
@@ -5194,7 +5262,7 @@ const EoStats = {
     // Clearing or warming the cache of the site shown.
     const cacheOpen = ref(false), cachePlan = ref(null);
     const onCachePlan = p => { cacheOpen.value = false; cachePlan.value = p; };
-    return { sites, domain, hours, section, series, data, loading, refreshing, error, updatedAt, every, load, ask, askIP, hit, errors, change, pct,
+    return { sites, domain, hours, section, series, data, loading, refreshing, error, updatedAt, every, load, loadSites, ask, askIP, hit, errors, change, pct,
       alerts, chart, rows, rank, tops, pickDomain, rangeText, EO_RANGES, EO_SECTIONS, EO_SERIES, fmtCount, fmtBytes, fmtBits, timeText, clockText,
       cacheOpen, cachePlan, onCachePlan };
   },
@@ -5214,7 +5282,7 @@ const EoStats = {
         <span class="small tertiary live-note" v-if="updatedAt">
           <span class="spinner inline" v-if="refreshing"></span>更新于 {{ clockText(updatedAt) }} · {{ every === 30000 ? '每 30 秒' : '每分钟' }}自动更新
         </span>
-        <button class="plain" @click="load(true)" :disabled="loading || refreshing || !domain" title="重新读取"><ui-icon name="refresh"></ui-icon>刷新</button>
+        <button class="plain" @click="load(true); loadSites(true)" :disabled="loading || refreshing || !domain" title="重新读取"><ui-icon name="refresh"></ui-icon>刷新</button>
         <button @click="cacheOpen = true" :disabled="!domain"><ui-icon name="bolt"></ui-icon>清除 / 预热缓存</button>
         <button class="primary" @click="ask" :disabled="!domain"><ui-icon name="sparkles"></ui-icon>让 AI 分析</button>
       </div>
@@ -6868,6 +6936,15 @@ const app = createApp({
         notify(upd.newer ? '有新版本 ' + upd.latest.version : '已经是最新版本');
       });
     }
+    // Page data gathered ahead of time (设置 → 数据加载).
+    const preload = reactive({ enabled: true, ranAt: '', running: false });
+    async function loadPreload() { try { Object.assign(preload, await api('GET', '/api/preload')); } catch { /* the row stays as it was */ } }
+    async function setPreload(on) { await guarded('', async () => { Object.assign(preload, await api('PUT', '/api/preload', { enabled: on })); }); }
+    async function runPreload() {
+      await guarded('', async () => { Object.assign(preload, await api('POST', '/api/preload/run')); });
+      notify('正在后台加载各页面的数据');
+      for (let i = 0; i < 60 && preload.running; i++) { await new Promise(r => setTimeout(r, 3000)); await loadPreload(); }
+    }
     async function setUpdateCheck(on) { await guarded('', async () => { Object.assign(upd, await api('PUT', '/api/update/settings', { enabled: on })); }); }
     // One click: ask GitHub for the newest release first when that is not
     // known yet, then download it, check it and restart into it.
@@ -7093,7 +7170,7 @@ const app = createApp({
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); palette.value = !palette.value; }
       if (e.key === 'Escape' && aiPanel.value && !document.querySelector('.sheet-mask')) aiPanel.value = false;
     });
-    watch(tab, t => { if (t === 'chat') aiPanel.value = false; if (t === 'settings') loadUpdate(); });
+    watch(tab, t => { if (t === 'chat') aiPanel.value = false; if (t === 'settings') { loadUpdate(); loadPreload(); } });
 
     // 建议 and 通知 are parts of 待处理 now.
     const inboxFocus = ref(null);
@@ -7529,7 +7606,7 @@ const app = createApp({
       spendText, plans, audit, logView, logFocus, loadAudit, openLog, showAdd, addForm, messages, draft, chatBusy, msgBox, suggestions,
       select, openAdd, addServer, testConn, discover, removeServer, askAbout, send, onEnter, onChatScroll, newChat, applyPreset, saveAI, testAI,
       convs, showConvs, conversationId, openConv, deleteConv, relTime,
-      op, saveOnePanel, testOnePanel, bt, saveBT, testBT, upd, updApplying, updNotes, checkUpdate, setUpdateCheck, applyUpdate, downloadDiagnostics, tc, saveTencent, testTencent, clearTencent, ali, saveAliyun, testAliyun, clearAliyun, freeCmd, setFree, seen, statsView, statsSeen, termRequest, openTerminal, filesRequest, openFiles, sitesRequest, openSite, newSite, unread, me, logout,
+      op, saveOnePanel, testOnePanel, bt, saveBT, testBT, upd, updApplying, updNotes, checkUpdate, setUpdateCheck, applyUpdate, preload, setPreload, runPreload, downloadDiagnostics, tc, saveTencent, testTencent, clearTencent, ali, saveAliyun, testAliyun, clearAliyun, freeCmd, setFree, seen, statsView, statsSeen, termRequest, openTerminal, filesRequest, openFiles, sitesRequest, openSite, newSite, unread, me, logout,
       overview, loadOverview, inboxCount, inboxFocus, openInbox, aiPanel, toggleAI, pageContext, siteContext, serverSiteContext, palette, modKey, serverDot, serverMeta, visitSection, statsRequest, openStats,
       cloud, cloudList, cloudPick, pickCloud, askAI, securityForm, securityPlan, proposeSecurity, securityDone,
       monitorDown, SERVER_TABS, serverTab, seenServerSites, serverSitesRequest, openServerSite, serverStateText, serverFacts, cloudRequest, openCloud, addFromCloud,
@@ -7540,6 +7617,7 @@ const app = createApp({
 });
 
 app.component('plan-card', PlanCard);
+app.component('fresh-note', FreshNote);
 app.component('exec-log', ExecLog);
 app.component('line-chart', LineChart);
 app.component('eo-stats', EoStats);

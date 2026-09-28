@@ -222,7 +222,7 @@ func (a *App) Overview(ctx context.Context) (OverviewView, error) {
 	go func() { defer wg.Done(); certs, certErr = a.LatestCertificates(ctx) }()
 	if source == "edgeone" {
 		wg.Add(1)
-		go func() { defer wg.Done(); blocked, blkErr = a.Blocked(ctx) }()
+		go func() { defer wg.Done(); blocked, _, blkErr = a.BlockedPage(ctx, PageLatest) }()
 	}
 	wg.Wait()
 

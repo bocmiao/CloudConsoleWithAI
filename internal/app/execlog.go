@@ -62,6 +62,9 @@ func (a *App) finishExec(e *store.ExecLog, status, output string) {
 	if e.ID > 0 {
 		_ = a.Store.UpdateExec(*e)
 	}
+	if e.Kind != store.ExecRead {
+		a.PagesChanged() // the pages show what it changed
+	}
 }
 
 func (a *App) finishAction(e *store.ExecLog, out actions.Outcome) {

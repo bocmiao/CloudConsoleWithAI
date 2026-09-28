@@ -83,11 +83,11 @@ func (s *Server) routes() {
 	s.authRoutes()
 
 	api := func(pattern string, h func(w http.ResponseWriter, r *http.Request) (any, error)) {
-		s.mux.HandleFunc(pattern, s.guard(h))
+		s.mux.HandleFunc(pattern, s.guard(s.marksChange(pattern, h)))
 	}
 	// Bodies bigger than the usual 1 MB: an edited file, an upload.
 	big := func(pattern string, limit int64, h func(w http.ResponseWriter, r *http.Request) (any, error)) {
-		s.mux.HandleFunc(pattern, s.guardN(limit, h))
+		s.mux.HandleFunc(pattern, s.guardN(limit, s.marksChange(pattern, h)))
 	}
 	api("GET /api/servers/{id}/files", s.listFiles)
 	api("GET /api/servers/{id}/files/text", s.readFileText)
@@ -138,6 +138,9 @@ func (s *Server) routes() {
 	api("POST /api/servers/{id}/security/plan", s.serverSecurityPlan)
 	api("GET /api/servers/{id}/databases", s.serverDatabases)
 	api("GET /api/update", s.updateStatus)
+	api("GET /api/preload", s.preloadStatus)
+	api("PUT /api/preload", s.setPreload)
+	api("POST /api/preload/run", s.runPreload)
 	api("POST /api/update/check", s.updateCheck)
 	api("PUT /api/update/settings", s.updateSettings)
 	api("POST /api/update/apply", s.updateApply)
@@ -363,12 +366,13 @@ func (s *Server) overview(_ http.ResponseWriter, r *http.Request) (any, error) {
 	return s.app.Overview(r.Context())
 }
 
-func (s *Server) websites(_ http.ResponseWriter, r *http.Request) (any, error) {
+func (s *Server) websites(w http.ResponseWriter, r *http.Request) (any, error) {
 	server, _ := strconv.ParseInt(r.URL.Query().Get("server"), 10, 64)
-	return s.app.Websites(r.Context(), server)
+	v, m, err := s.app.WebsitesPage(r.Context(), server, pageRead(r))
+	return pageAnswer(w, v, m, err)
 }
 
-func (s *Server) website(_ http.ResponseWriter, r *http.Request) (any, error) {
+func (s *Server) website(w http.ResponseWriter, r *http.Request) (any, error) {
 	id, err := pathID(r)
 	if err != nil {
 		return nil, err
@@ -377,7 +381,8 @@ func (s *Server) website(_ http.ResponseWriter, r *http.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return s.app.Website(r.Context(), id, sid)
+	v, m, err := s.app.WebsitePage(r.Context(), id, sid, pageRead(r))
+	return pageAnswer(w, v, m, err)
 }
 
 func (s *Server) websiteBackups(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -642,8 +647,9 @@ func (s *Server) closeTerminal(_ http.ResponseWriter, r *http.Request) (any, err
 	return map[string]bool{"ok": true}, s.app.CloseTerminal(r.PathValue("tid"))
 }
 
-func (s *Server) blockedIPs(_ http.ResponseWriter, r *http.Request) (any, error) {
-	return s.app.Blocked(r.Context())
+func (s *Server) blockedIPs(w http.ResponseWriter, r *http.Request) (any, error) {
+	v, m, err := s.app.BlockedPage(r.Context(), pageRead(r))
+	return pageAnswer(w, v, m, err)
 }
 
 type ipsRequest struct {
@@ -686,13 +692,15 @@ type cosTarget struct {
 	Download bool `json:"download"`
 }
 
-func (s *Server) cosBuckets(_ http.ResponseWriter, r *http.Request) (any, error) {
-	return s.app.COSBuckets(r.Context())
+func (s *Server) cosBuckets(w http.ResponseWriter, r *http.Request) (any, error) {
+	v, m, err := s.app.COSBucketsPage(r.Context(), pageRead(r))
+	return pageAnswer(w, v, m, err)
 }
 
-func (s *Server) cosBucket(_ http.ResponseWriter, r *http.Request) (any, error) {
+func (s *Server) cosBucket(w http.ResponseWriter, r *http.Request) (any, error) {
 	q := r.URL.Query()
-	return s.app.COSBucketDetail(r.Context(), q.Get("bucket"), q.Get("region"))
+	v, m, err := s.app.COSBucketPage(r.Context(), q.Get("bucket"), q.Get("region"), pageRead(r))
+	return pageAnswer(w, v, m, err)
 }
 
 func (s *Server) cosUsage(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -756,12 +764,14 @@ func (s *Server) cosPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
 	return s.app.ProposeCOS(r.Context(), req)
 }
 
-func (s *Server) dnsDomains(_ http.ResponseWriter, r *http.Request) (any, error) {
-	return s.app.DNSDomains(r.Context())
+func (s *Server) dnsDomains(w http.ResponseWriter, r *http.Request) (any, error) {
+	v, m, err := s.app.DNSDomainsPage(r.Context(), pageRead(r))
+	return pageAnswer(w, v, m, err)
 }
 
-func (s *Server) dnsRecords(_ http.ResponseWriter, r *http.Request) (any, error) {
-	return s.app.DNSRecords(r.Context(), r.URL.Query().Get("domain"), r.URL.Query().Get("provider"))
+func (s *Server) dnsRecords(w http.ResponseWriter, r *http.Request) (any, error) {
+	v, m, err := s.app.DNSRecordsPage(r.Context(), r.URL.Query().Get("domain"), r.URL.Query().Get("provider"), pageRead(r))
+	return pageAnswer(w, v, m, err)
 }
 
 func (s *Server) dnsLines(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -873,8 +883,9 @@ func (s *Server) aliyunServers(_ http.ResponseWriter, r *http.Request) (any, err
 	return s.app.AliyunServers(r.Context(), r.URL.Query().Get("refresh") == "1")
 }
 
-func (s *Server) aliyunDetail(_ http.ResponseWriter, r *http.Request) (any, error) {
-	return s.app.AliyunDetail(r.Context(), r.PathValue("region"), r.PathValue("instance"))
+func (s *Server) aliyunDetail(w http.ResponseWriter, r *http.Request) (any, error) {
+	v, m, err := s.app.AliyunDetailPage(r.Context(), r.PathValue("region"), r.PathValue("instance"), pageRead(r))
+	return pageAnswer(w, v, m, err)
 }
 
 func (s *Server) aliyunPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -899,8 +910,9 @@ func (s *Server) serverCloud(_ http.ResponseWriter, r *http.Request) (any, error
 	return map[string]any{"instance": cs}, nil
 }
 
-func (s *Server) cloudDetail(_ http.ResponseWriter, r *http.Request) (any, error) {
-	return s.app.CloudDetail(r.Context(), r.PathValue("region"), r.PathValue("instance"))
+func (s *Server) cloudDetail(w http.ResponseWriter, r *http.Request) (any, error) {
+	v, m, err := s.app.CloudDetailPage(r.Context(), r.PathValue("region"), r.PathValue("instance"), pageRead(r))
+	return pageAnswer(w, v, m, err)
 }
 
 func (s *Server) cloudPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -938,12 +950,13 @@ func (s *Server) diagnosticsLink(_ http.ResponseWriter, _ *http.Request) (any, e
 	return s.newDownload(download{diag: true})
 }
 
-func (s *Server) serverDatabases(_ http.ResponseWriter, r *http.Request) (any, error) {
+func (s *Server) serverDatabases(w http.ResponseWriter, r *http.Request) (any, error) {
 	id, err := pathID(r)
 	if err != nil {
 		return nil, err
 	}
-	return s.app.ServerDatabases(r.Context(), id)
+	v, m, err := s.app.DatabasesPage(r.Context(), id, pageRead(r))
+	return pageAnswer(w, v, m, err)
 }
 
 func (s *Server) serverAppsPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -970,8 +983,9 @@ func (s *Server) serverSecurityPlan(_ http.ResponseWriter, r *http.Request) (any
 	return s.app.ProposeServerSecurity(r.Context(), id, req)
 }
 
-func (s *Server) eoSites(_ http.ResponseWriter, r *http.Request) (any, error) {
-	return s.app.EOSites(r.Context())
+func (s *Server) eoSites(w http.ResponseWriter, r *http.Request) (any, error) {
+	v, m, err := s.app.EOSitesPage(r.Context(), pageRead(r))
+	return pageAnswer(w, v, m, err)
 }
 
 func (s *Server) notices(_ http.ResponseWriter, _ *http.Request) (any, error) {
@@ -1442,4 +1456,78 @@ func (s *Server) downloadFile(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "下载失败："+err.Error(), http.StatusBadGateway)
 		}
 	}
+}
+
+// ---- page data kept ready (app/pages.go) ----
+
+// pageRead says how a page asks for its data: ?refresh=1 for the live
+// answer, ?wait=1 for the copy being gathered, otherwise what is kept.
+func pageRead(r *http.Request) app.PageRead {
+	q := r.URL.Query()
+	switch {
+	case q.Get("refresh") == "1":
+		return app.PageRefresh
+	case q.Get("wait") == "1":
+		return app.PageWait
+	}
+	return app.PageLatest
+}
+
+// pageAnswer sends a page's data, saying in headers when it was gathered
+// and whether a newer copy is on its way.
+func pageAnswer(w http.ResponseWriter, v any, m app.PageMeta, err error) (any, error) {
+	if err != nil {
+		return nil, err
+	}
+	if !m.At.IsZero() {
+		w.Header().Set("X-Miao-At", m.At.UTC().Format(time.RFC3339))
+	}
+	if m.Refreshing {
+		w.Header().Set("X-Miao-Refreshing", "1")
+	}
+	return v, nil
+}
+
+// readOnlyPosts are requests that change nothing the pages show: asking,
+// testing, planning (a checklist changes things only when it runs, and
+// then says so itself), terminals, notices and settings of this kind.
+var readOnlyPosts = []string{"/plan", "/test", "/chat", "/terminal", "/notices", "/update/", "/diagnostics",
+	"/link", "/judge", "/monitor/", "/conversations", "/discover", "/fetch", "/settings/ai", "/settings/free-command", "/preload"}
+
+// marksChange makes a successful change through the API tell the pages to
+// gather anew, so nobody sees what was there before their own change.
+func (s *Server) marksChange(pattern string, h func(w http.ResponseWriter, r *http.Request) (any, error)) func(w http.ResponseWriter, r *http.Request) (any, error) {
+	if strings.HasPrefix(pattern, "GET ") {
+		return h
+	}
+	for _, p := range readOnlyPosts {
+		if strings.Contains(pattern, p) && !strings.Contains(pattern, "/plans/") {
+			return h
+		}
+	}
+	return func(w http.ResponseWriter, r *http.Request) (any, error) {
+		v, err := h(w, r)
+		if err == nil {
+			s.app.PagesChanged()
+		}
+		return v, err
+	}
+}
+
+func (s *Server) preloadStatus(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return s.app.PreloadStatus(), nil
+}
+
+func (s *Server) setPreload(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.SetPreload(r.Context(), req.Enabled)
+}
+
+func (s *Server) runPreload(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.RunPreload(r.Context()), nil
 }

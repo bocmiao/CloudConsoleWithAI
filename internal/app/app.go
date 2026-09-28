@@ -78,6 +78,7 @@ type App struct {
 	upd       updateState
 	certs     certCache
 	visits    snapshots[VisitsView]
+	pages     pageCache // page data kept ready (pages.go)
 	ipf       ipFacts
 	terms     terminals
 	fpool     filePool

@@ -214,6 +214,8 @@ input[type=checkbox]:focus-visible, input[type=radio]:focus-visible { outline: 2
 
 /* Grouped lists, like System Settings */
 .group-title { font-size: 13px; font-weight: 600; color: var(--text-2); margin: 0 4px 8px; }
+.group-title-row { display: flex; align-items: center; gap: 6px; }
+.group-title-row .fresh-note { font-weight: 400; }
 .group { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); margin-bottom: 26px; overflow: hidden; }
 .row { display: flex; align-items: center; gap: 12px; padding: 11px 16px; min-height: 44px; }
 .row + .row { border-top: 1px solid var(--sep); }
@@ -1050,6 +1052,8 @@ a.btn:hover { background: var(--hover); }
 .site-ops { text-align: right; }
 .site-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
 .site-head > button.plain { padding-left: 6px; }
+.site-fresh { display: flex; align-items: center; justify-content: flex-end; gap: 4px; margin: -8px 0 8px; }
+.fresh-note { display: inline-flex; align-items: center; gap: 6px; }
 .site-title h2 { font-size: 22px; letter-spacing: -.02em; overflow-wrap: anywhere; }
 .site-title { flex: 1; min-width: 200px; }
 .site-actions { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -1169,7 +1173,7 @@ button.change-row:hover:not(:disabled) { background: var(--hover); }
 }
 
 /* 待处理 */
-.inbox-bar { margin-bottom: 14px; }
+.inbox-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
 .inbox-bar .side-count { margin-left: 2px; }
 .inbox-lead { margin: 0 4px 14px; }
 
