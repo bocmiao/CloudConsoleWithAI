@@ -40,7 +40,7 @@ func (s *Store) AddUser(name, hash string) (User, error) {
 	at := now()
 	res, err := s.db.Exec(`INSERT INTO users (name, password, created_at, changed_at) VALUES (?, ?, ?, ?)`, name, hash, at, at)
 	if err != nil {
-		return User{}, err
+		return User{}, duplicate(err)
 	}
 	id, _ := res.LastInsertId()
 	return User{ID: id, Name: name, Password: hash, CreatedAt: at, ChangedAt: at}, nil
@@ -86,7 +86,7 @@ func (s *Store) SetContact(id int64, field, value string) error {
 		return errors.New("unknown contact field " + field)
 	}
 	_, err := s.db.Exec(`UPDATE users SET `+field+` = ? WHERE id = ?`, value, id)
-	return err
+	return duplicate(err)
 }
 
 // GetUser finds an account by id.

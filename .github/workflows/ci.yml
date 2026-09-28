@@ -47,6 +47,10 @@ jobs:
           for script in scripts/actions/*.sh; do sh -n "$script"; done
       - name: Check the Linux install scripts
         run: shellcheck -s sh deploy/linux/*.sh
+      # Known vulnerabilities in the Go version and the modules the code
+      # actually calls.
+      - name: Check for known vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
   # The web edition's store, install wizard and everything on top of them
   # against the MySQL and MariaDB versions it supports.

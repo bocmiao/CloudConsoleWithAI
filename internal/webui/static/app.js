@@ -6240,7 +6240,8 @@ const InstallApp = {
       error.value = ''; busy.value = true;
       try { await fn(); } catch (e) { error.value = e.message; } finally { busy.value = false; }
     }
-    const checkCode = () => run(async () => { await api('POST', '/api/install/code', { code: f.code }); step.value = 2; });
+    const sqlite = ref('');
+    const checkCode = () => run(async () => { sqlite.value = (await api('POST', '/api/install/code', { code: f.code })).sqlite; step.value = 2; });
     const testDB = () => run(async () => { const r = await api('POST', '/api/install/check', body());
       checked.value = r.version + (r.missing ? `；库 ${f.database.trim()} 还不存在，下一步会自动创建` : ''); });
     const saveDB = () => run(async () => {
@@ -6255,7 +6256,7 @@ const InstallApp = {
     });
     const submit = () => (step.value === 1 ? checkCode() : step.value === 2 ? saveDB() : createAdmin());
     const STEPS = ['初始化码', '数据库', '管理员账号'];
-    return { step, f, busy, error, checked, existing, where, insecure, STEPS, submit, testDB, reload: () => location.reload() };
+    return { step, f, busy, error, checked, existing, where, sqlite, insecure, STEPS, submit, testDB, reload: () => location.reload() };
   },
   template: `
   <div class="login-page">
@@ -6283,7 +6284,7 @@ const InstallApp = {
           <button type="button" role="radio" :aria-checked="f.kind === 'sqlite'" :class="{ on: f.kind === 'sqlite' }" @click="f.kind = 'sqlite'">内置数据库（推荐）</button>
           <button type="button" role="radio" :aria-checked="f.kind === 'mysql'" :class="{ on: f.kind === 'mysql' }" @click="f.kind = 'mysql'">MySQL</button>
         </div>
-        <p class="small secondary" v-if="f.kind === 'sqlite'">不用另外建库：数据保存在 <code>{{ state.sqlite }}</code>，自动创建。备份时复制整个数据目录即可。</p>
+        <p class="small secondary" v-if="f.kind === 'sqlite'">不用另外建库：数据保存在 <code>{{ sqlite }}</code>，自动创建。备份时复制整个数据目录即可。</p>
         <template v-else>
           <p class="small secondary">需要 MySQL 5.7+ 或 MariaDB 10.3+。填一个能使用这个库的账号（可以在 1Panel、宝塔的「数据库」页面一起建好，字符集选 utf8mb4）；库还不存在、账号又有建库权限时会自动创建。服务器的密码和密钥仍然只保存在数据目录里，不会写进 MySQL。</p>
           <div class="install-row">

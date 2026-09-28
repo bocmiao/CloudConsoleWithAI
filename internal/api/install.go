@@ -58,18 +58,18 @@ func NewInstaller(dir string, sec secrets.Store, version string, ready func(*sto
 		})
 	}
 	open("GET /api/auth/state", func(_ http.ResponseWriter, r *http.Request) (any, error) {
-		return map[string]any{"mode": "server", "version": version, "https": s.https(r), "install": true,
-			"sqlite": filepath.Join(dir, store.DBFile)}, nil
+		return map[string]any{"mode": "server", "version": version, "https": s.https(r), "install": true}, nil
 	})
+	// Where the built-in database would go is told only to whoever has
+	// the code.
 	open("POST /api/install/code", func(_ http.ResponseWriter, r *http.Request) (any, error) {
-		var req installRequest
-		if err := decode(r, &req); err != nil {
+		if _, err := in.request(s, r, false); err != nil {
 			return nil, err
 		}
-		return map[string]bool{"ok": true}, in.codes.CheckSetupCode(s.clientIP(r), req.Code)
+		return map[string]string{"sqlite": filepath.Join(dir, store.DBFile)}, nil
 	})
 	open("POST /api/install/check", func(_ http.ResponseWriter, r *http.Request) (any, error) {
-		req, err := in.request(s, r)
+		req, err := in.request(s, r, true)
 		if err != nil {
 			return nil, err
 		}
@@ -82,7 +82,7 @@ func NewInstaller(dir string, sec secrets.Store, version string, ready func(*sto
 		return map[string]any{"version": v, "missing": missing}, nil
 	})
 	open("POST /api/install/database", func(_ http.ResponseWriter, r *http.Request) (any, error) {
-		req, err := in.request(s, r)
+		req, err := in.request(s, r, false)
 		if err != nil {
 			return nil, err
 		}
@@ -97,8 +97,9 @@ func NewInstaller(dir string, sec secrets.Store, version string, ready func(*sto
 	return s
 }
 
-// request reads a step's body and checks its setup code.
-func (in *installer) request(s *Server, r *http.Request) (installRequest, error) {
+// request reads a step's body and checks its setup code, and the MySQL
+// fields when the step uses them.
+func (in *installer) request(s *Server, r *http.Request, mysql bool) (installRequest, error) {
 	var req installRequest
 	if err := decode(r, &req); err != nil {
 		return req, err
@@ -109,7 +110,7 @@ func (in *installer) request(s *Server, r *http.Request) (installRequest, error)
 	req.MySQL.Host = strings.TrimSpace(req.MySQL.Host)
 	req.MySQL.Database = strings.TrimSpace(req.MySQL.Database)
 	req.MySQL.User = strings.TrimSpace(req.MySQL.User)
-	if req.Kind == "mysql" || strings.HasSuffix(r.URL.Path, "/check") {
+	if mysql || req.Kind == "mysql" {
 		if req.MySQL.Host == "" || req.MySQL.Database == "" || req.MySQL.User == "" {
 			return req, &app.UserError{Msg: "请填写 MySQL 的地址、数据库名和用户名"}
 		}
@@ -166,5 +167,8 @@ func (in *installer) install(req installRequest) (any, error) {
 		return nil, err
 	}
 	in.done = true
+	if users > 0 {
+		auth.DropInstallCode(in.dir) // it had its administrator already
+	}
 	return map[string]any{"users": users, "where": st.Where()}, nil
 }

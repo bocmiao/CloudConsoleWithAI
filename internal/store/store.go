@@ -19,6 +19,9 @@ import (
 // ErrNotFound is returned when a row does not exist.
 var ErrNotFound = errors.New("not found")
 
+// ErrDuplicate is returned when a value that must be unique is taken.
+var ErrDuplicate = errors.New("already taken")
+
 // Store wraps the database.
 type Store struct {
 	db    *sql.DB
@@ -716,7 +719,7 @@ func (s *Store) GetConversation(id string) (Conversation, error) {
 func (s *Store) ListConversations(limit int) ([]Conversation, error) {
 	// Newest first; among those used in the same second, the one made last.
 	rows, err := s.db.Query(`SELECT id, title, created_at, updated_at FROM conversations ORDER BY updated_at DESC, `+
-		s.pick("rowid", "created_at")+` DESC LIMIT ?`, limit)
+		s.pick("rowid", "seq")+` DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}

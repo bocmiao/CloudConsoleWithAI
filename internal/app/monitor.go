@@ -126,7 +126,7 @@ func normTarget(s string) (string, error) {
 		s = "http://" + s
 	}
 	u, err := url.Parse(s)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || strings.ContainsAny(u.Host, " /\\") {
+	if err != nil || len(s) > 2048 || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || strings.ContainsAny(u.Host, " /\\") {
 		return "", userErr("地址不对：%s", s)
 	}
 	u.Host = strings.ToLower(u.Host)

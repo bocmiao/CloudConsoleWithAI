@@ -95,5 +95,10 @@ func Save(dir string, sec secrets.Store, c Choice) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, file), append(raw, '\n'), 0o600)
+	// A new file replaces the old whole, so a crash never leaves half of one.
+	path := filepath.Join(dir, file)
+	if err := os.WriteFile(path+".tmp", append(raw, '\n'), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(path+".tmp", path)
 }

@@ -184,6 +184,9 @@ func InstallCode(dir string) (string, error) {
 	return code, nil
 }
 
+// DropInstallCode removes the setup code once there is an account.
+func DropInstallCode(dir string) { _ = os.Remove(filepath.Join(dir, setupFile)) }
+
 func normCode(c string) string {
 	return strings.ToUpper(strings.NewReplacer("-", "", " ", "").Replace(strings.TrimSpace(c)))
 }
@@ -220,7 +223,7 @@ func (s *Service) Setup(ip, ua, code, name, password string) (string, store.User
 	if err != nil {
 		return "", store.User{}, err
 	}
-	_ = os.Remove(filepath.Join(s.Dir, setupFile))
+	DropInstallCode(s.Dir)
 	_ = s.Store.Audit(name, "auth.setup", name, ip)
 	tok, err := s.newSession(u.ID, ip, ua)
 	return tok, u, err

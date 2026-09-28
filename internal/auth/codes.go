@@ -511,7 +511,7 @@ func (s *Service) ConfirmBind(uid int64, ip, channel, code string) (string, erro
 	}
 	field := map[string]string{"email": "email", "sms": "phone"}[channel]
 	if err := s.Store.SetContact(uid, field, p.target); err != nil {
-		if strings.Contains(err.Error(), "UNIQUE") {
+		if errors.Is(err, store.ErrDuplicate) {
 			return "", refuse("taken", "这个%s已经绑定了别的账号", channelName[channel])
 		}
 		return "", err

@@ -13,7 +13,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -60,33 +59,28 @@ func serveMain(args []string) error {
 	sec := secrets.OpenFile(dir) // a server has no desktop keychain
 	update.CleanUp()
 	ctx, stop := context.WithCancel(context.Background())
-	defer stop()
 
 	// The server answers with the install wizard until a database is
 	// chosen, then with Miao Panel itself: the handler is swapped in place.
 	var current atomic.Pointer[http.Handler]
 	set := func(h http.Handler) { current.Store(&h) }
-	var opened []*store.Store
-	var mu sync.Mutex
+	var opened atomic.Pointer[store.Store]
+	defer func() {
+		stop() // the background work ends before its database closes
+		if st := opened.Load(); st != nil {
+			st.Close()
+		}
+	}()
 	start := func(st *store.Store) error {
 		h, err := startWeb(ctx, st, sec, dir, *trustedProxies)
 		if err != nil {
 			return err
 		}
-		mu.Lock()
-		opened = append(opened, st)
-		mu.Unlock()
+		opened.Store(st)
 		set(h)
 		log.Printf("数据保存在 %s", st.Where())
 		return nil
 	}
-	defer func() {
-		mu.Lock()
-		defer mu.Unlock()
-		for _, st := range opened {
-			st.Close()
-		}
-	}()
 	st, err := dbconf.Open(dir, sec)
 	switch {
 	case errors.Is(err, dbconf.ErrNotInstalled):
@@ -118,11 +112,18 @@ func serveMain(args []string) error {
 	if host, _, _ := net.SplitHostPort(*listen); scheme == "http" && !isLoopback(host) {
 		log.Printf("注意：正在用 HTTP 接受其他机器的连接，密码会明文传输。请在前面加一个 HTTPS 反向代理（1Panel、宝塔、Nginx、Caddy），或者用 --tls-cert/--tls-key")
 	}
-	if !dbconf.Installed(dir) || needsSetup(opened) {
-		code, err := auth.InstallCode(dir)
-		if err != nil {
-			return err
-		}
+	// The setup code: for the install wizard, or for the first account of
+	// a database that has none yet.
+	var code string
+	if st := opened.Load(); st != nil {
+		code, err = auth.New(st, sec, dir).SetupCode()
+	} else {
+		code, err = auth.InstallCode(dir)
+	}
+	if err != nil {
+		return err
+	}
+	if code != "" {
 		log.Printf("\n\n  ==== 第一次使用 ====\n  在浏览器打开 Miao Panel，按安装向导操作，需要这个初始化码：\n\n      %s\n\n  （初始化码也保存在 %s，创建管理员账号后自动失效）\n", code, filepath.Join(dir, "setup-code"))
 	}
 
@@ -148,16 +149,6 @@ func serveMain(args []string) error {
 		_ = srv.Shutdown(sctx)
 	}
 	return nil
-}
-
-// needsSetup says whether the opened database has no account yet.
-func needsSetup(opened []*store.Store) bool {
-	for _, st := range opened {
-		if n, err := st.CountUsers(); err == nil && n == 0 {
-			return true
-		}
-	}
-	return false
 }
 
 // startWeb makes Miao Panel's handler over a database and starts its
@@ -210,7 +201,7 @@ func resetPasswordMain(args []string) error {
 	sec := secrets.OpenFile(dir)
 	st, err := dbconf.Open(dir, sec)
 	if errors.Is(err, dbconf.ErrNotInstalled) {
-		return errors.New("Miao Panel 还没有安装：启动后在浏览器里按安装向导创建管理员账号")
+		return errors.New("还没有安装 Miao Panel：启动后在浏览器里按安装向导创建管理员账号")
 	}
 	if err != nil {
 		return fmt.Errorf("打开数据库: %w", err)

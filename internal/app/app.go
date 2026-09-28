@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/ssh"
 
@@ -179,8 +180,11 @@ func (a *App) AddServer(req AddServerRequest) (store.Server, error) {
 	req.Host = strings.TrimSpace(req.Host)
 	req.Name = strings.TrimSpace(req.Name)
 	req.Username = strings.TrimSpace(req.Username)
-	if req.Host == "" || !hostRe.MatchString(req.Host) {
+	if req.Host == "" || len(req.Host) > 253 || !hostRe.MatchString(req.Host) {
 		return store.Server{}, userErr("请填写正确的服务器 IP 或域名")
+	}
+	if utf8.RuneCountInString(req.Name) > 100 || len(req.Username) > 64 || len(req.KeyPath) > 1024 {
+		return store.Server{}, userErr("名称最多 100 个字，用户名最多 64 个字符，密钥文件路径最多 1024 个字符")
 	}
 	if req.Port == 0 {
 		req.Port = 22

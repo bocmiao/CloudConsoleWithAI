@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -82,6 +83,72 @@ func TestUpsertsAndExactText(t *testing.T) {
 	}
 	if _, _, err := st.GetProfile(sv.ID); err == nil {
 		t.Fatal("profile left behind")
+	}
+}
+
+// Taken names, emails and phones come back as ErrDuplicate from both
+// databases; long text fits as it does in SQLite.
+func TestDuplicatesAndLongText(t *testing.T) {
+	st, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	a, err := st.AddUser("alice", "h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := st.AddUser("bob", "h")
+	if _, err := st.AddUser("alice", "h"); !errors.Is(err, ErrDuplicate) {
+		t.Errorf("same name: %v", err)
+	}
+	long := strings.Repeat("m", 240) + "@example.com"
+	if err := st.SetContact(a.ID, "email", long); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetContact(b.ID, "email", long); !errors.Is(err, ErrDuplicate) {
+		t.Errorf("same email: %v", err)
+	}
+	// Empty is not taken: both can have none.
+	if err := st.SetContact(a.ID, "phone", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetContact(b.ID, "phone", ""); err != nil {
+		t.Errorf("both without a phone: %v", err)
+	}
+
+	name := strings.Repeat("服务器", 200)
+	sv, err := st.AddServer(Server{Name: name, Host: "203.0.113.5", Port: 22, Username: "root", AuthKind: "password"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := st.GetServer(sv.ID); got.Name != name {
+		t.Errorf("long server name cut to %d", len(got.Name))
+	}
+	target := "https://example.com/" + strings.Repeat("a", 3000)
+	if err := st.AddUptimeCheck(UptimeCheck{Target: target, OK: true, Status: 200}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.OpenIncident("site", target, strings.Repeat("站", 600), "down"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Conversations used in the same second come newest first on both.
+func TestConversationOrder(t *testing.T) {
+	st, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	for _, id := range []string{"b", "a", "c"} {
+		if _, err := st.AddConversation(id, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, err := st.ListConversations(10)
+	if err != nil || len(list) != 3 || list[0].ID != "c" || list[1].ID != "a" || list[2].ID != "b" {
+		t.Fatalf("order = %+v %v", list, err)
 	}
 }
 

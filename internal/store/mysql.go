@@ -169,6 +169,15 @@ func checkVersion(v string) error {
 	return nil
 }
 
+// duplicate turns either database's unique-key error into ErrDuplicate.
+func duplicate(err error) error {
+	var me *mysql.MySQLError
+	if errors.As(err, &me) && me.Number == 1062 || err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed") {
+		return fmt.Errorf("%w: %v", ErrDuplicate, err)
+	}
+	return err
+}
+
 // MySQLError puts the usual reasons a MySQL connection fails in words.
 func MySQLError(err error) error {
 	if err == nil {
@@ -239,7 +248,7 @@ func mysqlDSN(dsn string) (MySQL, error) {
 var mysqlSchema = []string{`
 CREATE TABLE IF NOT EXISTS servers (
 	id          BIGINT PRIMARY KEY AUTO_INCREMENT,
-	name        VARCHAR(255) NOT NULL,
+	name        TEXT NOT NULL,
 	host        VARCHAR(255) NOT NULL,
 	port        INT NOT NULL DEFAULT 22,
 	username    VARCHAR(255) NOT NULL,
@@ -291,7 +300,7 @@ CREATE TABLE IF NOT EXISTS exec_logs (
 	started_at    VARCHAR(40) NOT NULL,
 	finished_at   VARCHAR(40) NOT NULL DEFAULT '',
 	server_id     BIGINT NOT NULL,
-	server_name   VARCHAR(255) NOT NULL,
+	server_name   TEXT NOT NULL,
 	adapter       VARCHAR(16) NOT NULL DEFAULT '',
 	origin        VARCHAR(16) NOT NULL,
 	kind          VARCHAR(16) NOT NULL,
@@ -299,9 +308,9 @@ CREATE TABLE IF NOT EXISTS exec_logs (
 	note          MEDIUMTEXT NOT NULL,
 	capability    VARCHAR(191) NOT NULL DEFAULT '',
 	params        MEDIUMTEXT NOT NULL,
-	via           VARCHAR(255) NOT NULL DEFAULT '',
+	via           VARCHAR(1024) NOT NULL DEFAULT '',
 	commands      MEDIUMTEXT NOT NULL,
-	script_name   VARCHAR(255) NOT NULL DEFAULT '',
+	script_name   VARCHAR(1024) NOT NULL DEFAULT '',
 	script        MEDIUMTEXT NOT NULL,
 	status        VARCHAR(32) NOT NULL,
 	output        MEDIUMTEXT NOT NULL,
@@ -317,6 +326,7 @@ CREATE TABLE IF NOT EXISTS exec_logs (
 )`, `
 CREATE TABLE IF NOT EXISTS conversations (
 	id         VARCHAR(191) PRIMARY KEY,
+	seq        BIGINT NOT NULL AUTO_INCREMENT UNIQUE, -- the order they were made, like SQLite's rowid
 	title      TEXT NOT NULL,
 	created_at VARCHAR(40) NOT NULL,
 	updated_at VARCHAR(40) NOT NULL
@@ -342,9 +352,9 @@ CREATE TABLE IF NOT EXISTS users (
 	totp       TINYINT NOT NULL DEFAULT 0,
 	created_at VARCHAR(40) NOT NULL,
 	changed_at VARCHAR(40) NOT NULL,
-	email      VARCHAR(191) NOT NULL DEFAULT '',
+	email      VARCHAR(255) NOT NULL DEFAULT '',
 	phone      VARCHAR(64) NOT NULL DEFAULT '',
-	email_set  VARCHAR(191) GENERATED ALWAYS AS (NULLIF(email, '')) STORED,
+	email_set  VARCHAR(255) GENERATED ALWAYS AS (NULLIF(email, '')) STORED,
 	phone_set  VARCHAR(64) GENERATED ALWAYS AS (NULLIF(phone, '')) STORED,
 	UNIQUE KEY users_email (email_set),
 	UNIQUE KEY users_phone (phone_set)
@@ -360,7 +370,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 )`, `
 CREATE TABLE IF NOT EXISTS uptime_checks (
 	id     BIGINT PRIMARY KEY AUTO_INCREMENT,
-	target VARCHAR(512) NOT NULL,
+	target TEXT NOT NULL,
 	at     VARCHAR(40) NOT NULL,
 	ok     TINYINT NOT NULL,
 	status INT NOT NULL DEFAULT 0,
@@ -387,8 +397,8 @@ CREATE TABLE IF NOT EXISTS server_metrics (
 CREATE TABLE IF NOT EXISTS incidents (
 	id         BIGINT PRIMARY KEY AUTO_INCREMENT,
 	kind       VARCHAR(16) NOT NULL,
-	target     VARCHAR(512) NOT NULL,
-	name       VARCHAR(512) NOT NULL DEFAULT '',
+	target     TEXT NOT NULL,
+	name       TEXT NOT NULL,
 	started_at VARCHAR(40) NOT NULL,
 	ended_at   VARCHAR(40) NOT NULL DEFAULT '',
 	reason     TEXT NOT NULL,

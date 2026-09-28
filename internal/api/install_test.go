@@ -54,7 +54,7 @@ func TestInstallWizardBuiltIn(t *testing.T) {
 		t.Fatal("installed before the wizard")
 	}
 	st := decodeBody(t, serve(call{method: "GET", path: "/api/auth/state"}))
-	if st["install"] != true || st["sqlite"] != filepath.Join(dir, store.DBFile) {
+	if st["install"] != true || st["sqlite"] != nil {
 		t.Fatalf("state = %v", st)
 	}
 	if r := serve(call{method: "GET", path: "/api/servers"}); r.StatusCode != http.StatusServiceUnavailable {
@@ -70,8 +70,10 @@ func TestInstallWizardBuiltIn(t *testing.T) {
 	if r := serve(call{method: "POST", path: "/api/install/database", body: `{"code":"nope","kind":"sqlite"}`}); r.StatusCode != http.StatusBadRequest || dbconf.Installed(dir) {
 		t.Fatalf("database with a wrong code = %d", r.StatusCode)
 	}
-	if r := serve(call{method: "POST", path: "/api/install/code", body: `{"code":"` + strings.ToLower(code) + `"}`}); r.StatusCode != http.StatusOK {
-		t.Fatalf("right code = %d %v", r.StatusCode, decodeBody(t, r))
+	// Only whoever has the code learns where the data would go.
+	if r := serve(call{method: "POST", path: "/api/install/code", body: `{"code":"` + strings.ToLower(code) + `"}`}); r.StatusCode != http.StatusOK ||
+		decodeBody(t, r)["sqlite"] != filepath.Join(dir, store.DBFile) {
+		t.Fatalf("right code = %d", r.StatusCode)
 	}
 	r := serve(call{method: "POST", path: "/api/install/database", body: `{"code":"` + code + `","kind":"sqlite"}`})
 	if m := decodeBody(t, r); r.StatusCode != http.StatusOK || m["users"] != float64(0) {
@@ -134,6 +136,10 @@ func TestInstallWizardMySQL(t *testing.T) {
 	r = serve(call{method: "POST", path: "/api/install/database", body: body(cfg.Passwd)})
 	if m := decodeBody(t, r); r.StatusCode != http.StatusOK || m["users"] != float64(1) || !strings.Contains(m["where"].(string), db) {
 		t.Fatalf("database = %d %v", r.StatusCode, m)
+	}
+	// It had its administrator: the setup code is no longer needed.
+	if _, err := os.Stat(filepath.Join(dir, "setup-code")); !os.IsNotExist(err) {
+		t.Fatalf("setup code left: %v", err)
 	}
 	// The password is in the secret store, not database.json.
 	raw, _ := os.ReadFile(filepath.Join(dir, "database.json"))
