@@ -64,15 +64,7 @@ func (a *App) TencentServers(ctx context.Context, refresh bool) (CloudServers, e
 	servers, _ := a.Store.ListServers()
 	out := CloudServers{Errors: a.cloud.errs, FetchedAt: a.cloud.at.UTC().Format(time.RFC3339), Servers: []CloudServer{}}
 	for _, s := range a.cloud.list {
-		cs := CloudServer{Server: s}
-		for _, sv := range servers {
-			for _, ip := range s.PublicIPs {
-				if sv.Host == ip {
-					cs.ServerID = sv.ID
-				}
-			}
-		}
-		out.Servers = append(out.Servers, cs)
+		out.Servers = append(out.Servers, CloudServer{Server: s, ServerID: matchServer(s, servers)})
 	}
 	return out, nil
 }

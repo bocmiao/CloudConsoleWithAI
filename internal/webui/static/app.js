@@ -378,7 +378,8 @@ const EXEC_STATUS = {
 
 // Everything Miao Panel ran on servers, with details and rollback.
 const ExecLog = {
-  props: { focus: { type: Number, default: 0 } },
+  // server: only what was run on that server, for its workbench.
+  props: { focus: { type: Number, default: 0 }, server: { type: Number, default: 0 } },
   setup(props) {
     const list = ref([]);
     const changesOnly = ref(false);
@@ -389,7 +390,10 @@ const ExecLog = {
 
     async function load() {
       loading.value = true;
-      try { list.value = await api('GET', '/api/exec' + (changesOnly.value ? '?changes=1' : '')); }
+      const q = new URLSearchParams();
+      if (changesOnly.value) q.set('changes', '1');
+      if (props.server) q.set('server', props.server);
+      try { list.value = await api('GET', '/api/exec' + (q.toString() ? '?' + q : '')); }
       catch (e) { notify(e.message, 'error'); } finally { loading.value = false; }
     }
     async function toggle(id) {
@@ -2222,6 +2226,7 @@ const PALETTE_PAGES = [
   { stats: ['logs', 'overview'], label: '访问统计', icon: 'chart', keys: 'stats visits pv uv 统计 流量' },
   { stats: ['logs', 'security'], label: '安全', icon: 'shield', keys: 'security 封禁 ip 攻击' },
   { tab: 'certs', label: '证书', icon: 'lock', keys: 'certs ssl https 证书 续签' },
+  { tab: 'cloud', label: '云服务器', icon: 'cloud', keys: 'cloud lighthouse cvm 轻量 云服务器 实例 防火墙 快照 开机 关机 重启 到期' },
   { stats: ['eo'], label: 'EdgeOne', icon: 'bolt', keys: 'edgeone eo cdn 缓存 cache' },
   { tab: 'dns', label: '解析', icon: 'globe', keys: 'dns dnspod 解析 域名' },
   { tab: 'storage', label: '存储', icon: 'bucket', keys: 'cos storage bucket 存储桶' },
@@ -2461,6 +2466,509 @@ const HomePage = {
   </div>`,
 };
 
+// The server workbench: one server's page, in tabs. 终端 and 文件 stay pages
+// of their own (their sessions and uploads outlive the tab), opened from
+// the buttons at the top.
+const SERVER_TABS = [{ id: 'overview', text: '概览' }, { id: 'sites', text: '网站' }, { id: 'apps', text: '应用' },
+  { id: 'history', text: '执行记录' }, { id: 'connection', text: '连接设置' }];
+
+// What a finding's button offers, by its title. Every one goes to the AI,
+// which looks first and proposes a checklist.
+const FINDING_FIX = [
+  [/没有 swap/, '加 swap', '给这台服务器加一个大小合适的 swap'],
+  [/内存/, '优化内存', '看看是什么占用了内存，能怎么优化'],
+  [/磁盘/, '清理磁盘', '看看是什么占用了磁盘空间，哪些可以安全清理'],
+  [/SSH/, '加固 SSH', '在不把我锁在外面的前提下加固 SSH 登录'],
+  [/服务启动失败|Docker/, '排查', '查一下原因并修复'],
+];
+const findingFix = f => {
+  if (f.level === 'info' && /不是 root/.test(f.title)) return null;
+  const hit = FINDING_FIX.find(([re]) => re.test(f.title));
+  return hit ? { label: hit[1], ask: hit[2] } : { label: '让 AI 处理', ask: '看看怎么处理' };
+};
+
+// A ring gauge, like the widgets on a phone.
+const RING_C = 2 * Math.PI * 23;
+const ServerRing = {
+  props: { pct: Number, level: String },
+  setup(props) {
+    const dash = computed(() => `${(RING_C * Math.min(100, Math.max(0, props.pct || 0)) / 100).toFixed(1)} ${RING_C.toFixed(1)}`);
+    return { dash };
+  },
+  template: `<svg class="ring" viewBox="0 0 56 56" aria-hidden="true">
+    <circle cx="28" cy="28" r="23" class="ring-track"></circle>
+    <circle cx="28" cy="28" r="23" class="ring-value" :class="level" :stroke-dasharray="dash" transform="rotate(-90 28 28)"></circle>
+  </svg>`,
+};
+
+const gbText = mb => mb >= 1024 ? (mb / 1024).toFixed(mb >= 10240 ? 0 : 1) + ' GB' : mb + ' MB';
+
+const ServerOverview = {
+  props: { view: Object, cloud: Object, active: Boolean, busy: Boolean },
+  emits: ['ask', 'tab', 'site', 'discover', 'log'],
+  setup(props, { emit }) {
+    const p = computed(() => props.view && props.view.profile);
+    const sv = computed(() => props.view && props.view.server);
+    const sites = ref(null), sitesError = ref(''), recent = ref([]);
+    let seq = 0;
+    async function load() {
+      const s = sv.value;
+      if (!s) return;
+      const n = ++seq;
+      api('GET', `/api/exec?server=${s.id}&changes=1`).then(r => { if (n === seq) recent.value = r.slice(0, 5); }).catch(() => {});
+      if (s.adapter !== '1panel') { sites.value = null; sitesError.value = ''; return; }
+      try {
+        const r = await api('GET', `/api/websites?server=${s.id}`);
+        if (n !== seq) return;
+        const x = r.servers[0];
+        sites.value = x && !x.noPanel && !x.error ? x.sites : null;
+        sitesError.value = !x ? '' : x.noPanel ? '还没有配置 1Panel 接口' : x.error || '';
+      } catch (e) { if (n === seq) sitesError.value = e.message; }
+    }
+    watch(() => [props.active, sv.value && sv.value.id, props.view && props.view.collectedAt], () => { if (props.active) load(); }, { immediate: true });
+
+    const level = v => v >= 90 ? 'crit' : v >= 80 ? 'warn' : '';
+    const metrics = computed(() => {
+      const x = p.value, out = [];
+      if (!x) return out;
+      const load1 = parseFloat(String(x.load || '').split(/\s+/)[0]);
+      if (x.cpuCores && !isNaN(load1)) {
+        const v = Math.min(100, Math.round(load1 * 100 / x.cpuCores));
+        out.push({ label: 'CPU', pct: v, level: level(v), sub: `${x.cpuCores} 核 · 负载 ${load1}` });
+      }
+      const m = x.memory;
+      if (m && m.totalMB) {
+        const v = Math.round((m.totalMB - m.availableMB) * 100 / m.totalMB);
+        const noSwap = !m.swapTotalMB;
+        out.push({ label: '内存', pct: v, level: level(v) || (noSwap && v >= 70 ? 'warn' : ''),
+          sub: `${gbText(m.totalMB - m.availableMB)} / ${gbText(m.totalMB)}` + (noSwap ? ' · 没有 swap' : '') });
+      }
+      const d = (x.disks || []).find(d => d.mount === '/');
+      if (d) out.push({ label: '磁盘', pct: d.usePct, level: level(d.usePct), sub: `${d.used} / ${d.size}` });
+      const c = props.cloud;
+      if (c && c.trafficTotal) {
+        const v = Math.round(c.trafficUsed * 100 / c.trafficTotal);
+        out.push({ label: '流量包', pct: v, level: level(v), sub: `本月 ${fmtBytes(c.trafficUsed)} / ${fmtBytes(c.trafficTotal)}` });
+      }
+      return out;
+    });
+    const findings = computed(() => (p.value && p.value.findings || []).map(f => ({ ...f, fix: findingFix(f) })));
+    const tone = l => ({ danger: 'crit', warn: 'warn' }[l] || 'info');
+    function fix(f) {
+      emit('ask', `服务器「${sv.value.name}」：${f.title}（${f.detail}）。${f.fix.ask}，能改的话给我一份清单。`);
+    }
+    const programs = computed(() => {
+      const list = (p.value && p.value.programs || []).slice(0, 5);
+      const top = Math.max(1, ...list.map(g => g.memMB));
+      return list.map(g => ({ ...g, w: Math.max(2, Math.round(g.memMB * 100 / top)) + '%' }));
+    });
+    const plainSites = computed(() => p.value && p.value.websites || []);
+    const shownSites = computed(() => (sites.value || []).slice(0, 6));
+    return { p, sv, sites, sitesError, recent, metrics, findings, tone, fix, programs, plainSites, shownSites,
+      SITE_TYPES, certLeft, certLevel, whenText, gbText, fmtTime: t => t ? new Date(t).toLocaleString('zh-CN', { hour12: false }) : '' };
+  },
+  template: `
+  <div class="wb-overview">
+    <div class="wb-rings" v-if="metrics.length">
+      <div class="wb-ring card" v-for="m in metrics" :key="m.label">
+        <div class="wb-ring-gauge"><server-ring :pct="m.pct" :level="m.level"></server-ring><b>{{ m.pct }}<small>%</small></b></div>
+        <div class="grow"><div class="wb-ring-label">{{ m.label }}</div><div class="small" :class="m.level ? 'st-' + m.level + '-text' : 'secondary'">{{ m.sub }}</div></div>
+      </div>
+    </div>
+
+    <section class="card wb-checks">
+      <header class="card-head"><h3>体检结果</h3><span class="small tertiary" v-if="view.collectedAt">{{ whenText(view.collectedAt) }} · 只读检查</span>
+        <span class="grow"></span><button class="plain small" @click="$emit('discover')" :disabled="busy"><ui-icon name="refresh"></ui-icon>重新识别</button></header>
+      <div class="home-empty" v-if="!findings.length"><span class="sdot good"></span>一切正常，没有发现需要处理的问题</div>
+      <div class="wb-check" v-for="(f, i) in findings" :key="i">
+        <span class="wb-check-icon" :class="'st-' + tone(f.level)"><ui-icon :name="f.level === 'danger' ? 'alert' : f.level === 'warn' ? 'warn' : 'info'"></ui-icon></span>
+        <div class="grow"><div>{{ f.title }}</div><div class="small secondary">{{ f.detail }}</div></div>
+        <button v-if="f.fix" @click="fix(f)">{{ f.fix.label }}</button>
+      </div>
+    </section>
+
+    <div class="wb-row">
+      <section class="card">
+        <header class="card-head"><h3>网站</h3><span class="grow"></span>
+          <button class="link small" v-if="sv.adapter === '1panel'" @click="$emit('tab', 'sites')">全部 ›</button></header>
+        <template v-if="sv.adapter === '1panel'">
+          <div class="home-empty" v-if="sitesError"><span class="sdot warn"></span>{{ sitesError }}
+            <button class="link small" v-if="sitesError.includes('1Panel 接口')" @click="$emit('tab', 'connection')">去填写</button></div>
+          <div class="home-empty" v-else-if="!sites"><span class="spinner inline"></span>正在读取……</div>
+          <div class="home-empty" v-else-if="!sites.length">这台服务器上还没有网站</div>
+          <button class="wb-site" v-for="x in shownSites" :key="x.id" @click="$emit('site', x.id)">
+            <span class="sdot" :class="x.running ? 'good' : 'off'"></span>
+            <span class="grow"><span class="block ellipsis">{{ x.domain }}</span><span class="small tertiary">{{ SITE_TYPES[x.type] || x.type }}{{ x.app ? ' · ' + x.app : '' }}</span></span>
+            <span class="small" v-if="x.https" :class="certLevel(x.certDays) === 'good' ? 'secondary' : 'st-' + certLevel(x.certDays) + '-text'">HTTPS {{ certLeft(x.certDays) }}</span>
+            <span class="small st-warn-text" v-else>没开 HTTPS</span>
+          </button>
+          <div class="small tertiary wb-more" v-if="sites && sites.length > shownSites.length">还有 {{ sites.length - shownSites.length }} 个</div>
+        </template>
+        <template v-else>
+          <div class="home-empty" v-if="!plainSites.length">没有发现网站</div>
+          <div class="wb-site" v-for="w in plainSites.slice(0, 8)" :key="w"><span class="grow ellipsis">{{ w }}</span></div>
+          <div class="small tertiary wb-more">网站管理目前支持 1Panel；这里是识别时在 Nginx 配置里看到的网站</div>
+        </template>
+      </section>
+
+      <section class="card">
+        <header class="card-head"><h3>应用和服务</h3><span class="small tertiary">按内存</span><span class="grow"></span>
+          <button class="link small" @click="$emit('tab', 'apps')">全部 ›</button></header>
+        <div class="home-empty" v-if="!programs.length">重新识别后显示占内存最多的程序</div>
+        <div class="wb-app" v-for="g in programs" :key="g.name">
+          <div class="wb-app-top"><span class="grow ellipsis">{{ g.name }}<span class="small tertiary" v-if="g.procs > 1"> · {{ g.procs }} 个进程</span></span><span class="small secondary num">{{ gbText(g.memMB) }}</span></div>
+          <div class="wb-app-bar"><div :style="{ width: g.w }"></div></div>
+        </div>
+      </section>
+    </div>
+
+    <section class="card">
+      <header class="card-head"><h3>最近在这台服务器上</h3><span class="grow"></span><button class="link small" @click="$emit('tab', 'history')">执行记录 ›</button></header>
+      <div class="home-empty" v-if="!recent.length">还没有执行过修改</div>
+      <button class="change-row" v-for="c in recent" :key="c.id" @click="$emit('log', c.id)">
+        <span class="small tertiary change-when">{{ whenText(c.startedAt) }}</span>
+        <span class="grow"><span class="ellipsis block" :title="c.note || c.title">{{ c.note || c.title }}</span>
+          <span class="small secondary">{{ c.status === 'undone' || c.undoneBy ? '已撤销' : c.status === 'done' ? '已完成' : '没有成功' }}</span></span>
+      </button>
+    </section>
+  </div>`,
+};
+
+const ServerApps = {
+  props: { profile: Object, collectedAt: String },
+  emits: ['ask'],
+  setup(props) {
+    const p = computed(() => props.profile || {});
+    const programs = computed(() => p.value.programs || []);
+    const containers = computed(() => (p.value.docker && p.value.docker.list) || []);
+    const services = computed(() => p.value.services || { running: [], failed: [] });
+    const panelApps = computed(() => (p.value.panel && p.value.panel.apps) || []);
+    const runtimes = computed(() => (p.value.panel && p.value.panel.runtimes) || []);
+    return { p, programs, containers, services, panelApps, runtimes, gbText, whenText };
+  },
+  template: `
+  <div class="wb-apps">
+    <p class="small tertiary">来自{{ collectedAt ? ' ' + whenText(collectedAt) + '的' : '最近一次' }}识别（只读）。要更新，点「重新识别」。</p>
+
+    <div class="group-title">占内存最多的程序</div>
+    <div class="group">
+      <div class="row secondary" v-if="!programs.length">重新识别后显示</div>
+      <div class="table-wrap" v-else>
+        <table class="table">
+          <thead><tr><th>程序</th><th class="num">进程</th><th class="num">内存</th><th class="num">CPU</th><th>用户</th></tr></thead>
+          <tbody><tr v-for="g in programs" :key="g.name"><td>{{ g.name }}</td><td class="num">{{ g.procs }}</td><td class="num nowrap">{{ gbText(g.memMB) }}</td>
+            <td class="num">{{ g.cpu.toFixed(1) }}%</td><td class="secondary">{{ g.user }}</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <template v-if="containers.length || (p.docker && p.docker.status && p.docker.status !== 'no')">
+      <div class="group-title">Docker 容器</div>
+      <div class="group">
+        <div class="row secondary" v-if="p.docker.status === 'unreachable'">Docker 已安装但连接不上，服务可能没有运行</div>
+        <div class="row secondary" v-else-if="!containers.length">没有容器</div>
+        <div class="table-wrap" v-else>
+          <table class="table">
+            <thead><tr><th>容器</th><th>镜像</th><th>状态</th><th class="num">内存</th><th class="num">CPU</th></tr></thead>
+            <tbody><tr v-for="c in containers" :key="c.name"><td>{{ c.name }}<div class="small tertiary" v-if="c.ports">{{ c.ports }}</div></td><td class="secondary">{{ c.image }}</td>
+              <td class="nowrap"><span class="sdot" :class="c.running ? 'good' : 'off'"></span>{{ c.status }}</td>
+              <td class="num nowrap">{{ c.mem ? c.mem.split(' / ')[0] : '—' }}</td><td class="num">{{ c.cpu || '—' }}</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </template>
+
+    <div class="group-title">系统服务</div>
+    <div class="group">
+      <div class="row" v-if="services.failed && services.failed.length"><span class="k"><span class="sdot crit"></span>启动失败</span>
+        <span class="v">{{ services.failed.join('、') }}</span>
+        <button @click="$emit('ask', '这台服务器上的服务 ' + services.failed.join('、') + ' 启动失败，帮我查一下原因并修复')">让 AI 排查</button></div>
+      <div class="row"><span class="k">正在运行</span><span class="v"><span class="tags" v-if="services.running && services.running.length"><span class="tag" v-for="s in services.running" :key="s">{{ s }}</span></span><template v-else>—</template></span></div>
+    </div>
+
+    <template v-if="panelApps.length || runtimes.length || (p.databases && p.databases.length) || (p.wordpress && p.wordpress.length) || (p.java && p.java.length)">
+      <div class="group-title">面板应用和运行环境</div>
+      <div class="group">
+        <div class="row" v-if="panelApps.length"><span class="k">面板应用</span><span class="v"><span class="tags"><span class="tag" v-for="a in panelApps" :key="a">{{ a }}</span></span></span></div>
+        <div class="row" v-if="runtimes.length"><span class="k">PHP 运行环境</span><span class="v">{{ runtimes.join('、') }}</span></div>
+        <div class="row" v-if="p.databases && p.databases.length"><span class="k">数据库</span><span class="v">{{ p.databases.join('、') }}</span></div>
+        <div class="row" v-for="w in p.wordpress" :key="w"><span class="k">WordPress</span><span class="v small">{{ w }}</span></div>
+        <div class="row" v-for="j in p.java" :key="j"><span class="k">Java</span><span class="v small">{{ j }}</span></div>
+      </div>
+    </template>
+  </div>`,
+};
+
+// 腾讯云 › 云服务器: the Lighthouse and CVM instances in the account, their
+// expiry and traffic package, and one instance's monitoring, firewall and
+// snapshots. Starting, stopping, rebooting, snapshots and firewall changes
+// are checklists, confirmed first.
+const CLOUD_STATES = { RUNNING: ['good', '运行中'], STOPPED: ['off', '已关机'], STARTING: ['warn', '正在开机'], STOPPING: ['warn', '正在关机'],
+  REBOOTING: ['warn', '正在重启'], PENDING: ['warn', '创建中'], SHUTDOWN: ['off', '已关机'], TERMINATING: ['off', '正在退还'] };
+const cloudState = s => CLOUD_STATES[s] || ['off', s || '未知'];
+const cloudKind = k => k === 'lighthouse' ? '轻量应用服务器' : '云服务器 CVM';
+
+const CloudPage = {
+  props: { active: Boolean, request: Object, servers: { type: Array, default: () => [] }, configured: Boolean },
+  emits: ['server', 'add', 'settings', 'ask'],
+  setup(props, { emit }) {
+    const list = ref(null), loading = ref(false), error = ref('');
+    const open = ref(null); // { region, id }
+    const detail = ref(null), dLoading = ref(false), dError = ref('');
+    const plan = ref(null), planning = ref(false), formError = ref('');
+    const fw = reactive({ open: false, port: '', protocol: 'TCP', who: 'all', cidr: '', description: '' });
+    const snap = reactive({ open: false, name: '' });
+    let seq = 0;
+
+    async function loadList(refresh) {
+      if (!props.configured) return;
+      loading.value = true; error.value = '';
+      try { list.value = await api('GET', '/api/tencent/servers' + (refresh ? '?refresh=1' : '')); }
+      catch (e) { error.value = e.message; } finally { loading.value = false; }
+    }
+    async function loadDetail() {
+      const o = open.value;
+      if (!o) return;
+      const n = ++seq;
+      dLoading.value = true; dError.value = '';
+      try {
+        const d = await api('GET', `/api/tencent/servers/${encodeURIComponent(o.region)}/${encodeURIComponent(o.id)}`);
+        if (n === seq) detail.value = d;
+      } catch (e) { if (n === seq) dError.value = e.message; }
+      finally { if (n === seq) dLoading.value = false; }
+    }
+    function openOne(s) { open.value = { region: s.region, id: s.id }; detail.value = null; loadDetail(); }
+    function back() { open.value = null; detail.value = null; loadList(); }
+    watch(() => props.active, v => { if (v) { if (!list.value) loadList(); if (open.value) loadDetail(); } }, { immediate: true });
+    watch(() => props.configured, v => { if (v && props.active) loadList(); });
+    watch(() => props.request, r => { if (r && r.id) openOne(r); }, { immediate: true });
+
+    const servers = computed(() => (list.value && list.value.servers) || []);
+    const serverOf = id => props.servers.find(s => s.id === id);
+    const inst = computed(() => detail.value && detail.value.instance);
+    const daysTo = t => t ? Math.floor((new Date(t) - Date.now()) / 86400000) : null;
+    function expiry(s) {
+      if (!s.expiredTime) return { text: s.chargeType === 'POSTPAID_BY_HOUR' ? '按量计费' : '', level: '' };
+      const d = daysTo(s.expiredTime);
+      const auto = s.renewFlag === 'NOTIFY_AND_AUTO_RENEW';
+      const text = d < 0 ? '已过期' : `还剩 ${d} 天`;
+      return { text: text + (auto ? ' · 自动续费' : ''), level: d < 0 ? 'crit' : d < 15 && !auto ? 'warn' : '', date: new Date(s.expiredTime).toLocaleDateString('zh-CN') };
+    }
+    const traffic = s => s.trafficTotal ? Math.min(100, Math.round(s.trafficUsed * 100 / s.trafficTotal)) : null;
+    const trafficLevel = v => v >= 90 ? 'crit' : v >= 80 ? 'warn' : '';
+
+    async function propose(body) {
+      planning.value = true; formError.value = '';
+      try {
+        plan.value = await api('POST', '/api/tencent/servers/plan', { instance: open.value.id, region: open.value.region, ...body });
+        fw.open = false; snap.open = false;
+      } catch (e) { formError.value = e.message; if (!fw.open && !snap.open) notify(e.message, 'error'); }
+      finally { planning.value = false; }
+    }
+    const power = op => propose({ op });
+    function openFirewall() { Object.assign(fw, { open: true, port: '', protocol: 'TCP', who: 'all', cidr: '', description: '' }); formError.value = ''; }
+    function submitFirewall() {
+      propose({ op: 'firewall_open', port: fw.port.trim(), protocol: fw.protocol, cidr: fw.who === 'all' ? '0.0.0.0/0' : fw.cidr.trim(), description: fw.description.trim() });
+    }
+    function closeRule(r) {
+      propose({ op: 'firewall_close', port: r.port, protocol: r.protocol, cidr: r.source });
+    }
+    function openSnap() { Object.assign(snap, { open: true, name: '' }); formError.value = ''; }
+    function submitSnap() { propose({ op: 'snapshot', name: snap.name.trim() }); }
+    // Closed while it still runs: look again once it has finished.
+    async function closePlan() {
+      const p = plan.value;
+      plan.value = null;
+      if (!p) return;
+      for (let i = 0; i < 100; i++) {
+        await new Promise(r => setTimeout(r, 3000));
+        try {
+          const now = await api('GET', `/api/plans/${p.id}`);
+          if (now.status === 'running') continue;
+          await loadList(true); loadDetail();
+        } catch { /* looked at again when the page opens */ }
+        return;
+      }
+    }
+    function planDone() { loadList(true); loadDetail(); }
+    const loginPort = r => /^(22|3389)$/.test(String(r.port)) || /\bALL\b/i.test(String(r.port));
+    const metricFormat = m => v => (Math.round(v * 10) / 10) + ' ' + (m.unit === '%' ? '%' : m.unit || '');
+    const snapState = s => ({ NORMAL: '可用', CREATING: '创建中', ROLLBACKING: '回滚中' }[s.state] || s.state);
+    function ask() {
+      const s = inst.value;
+      emit('ask', `帮我看看腾讯云${cloudKind(s.kind)}「${s.name || s.id}」（${s.id}，${s.regionName}）的状况：监控、防火墙和到期，有没有需要处理的？`);
+    }
+    return { list, loading, error, open, detail, dLoading, dError, plan, planning, formError, fw, snap, servers, serverOf, inst,
+      loadList, loadDetail, openOne, back, expiry, traffic, trafficLevel, power, openFirewall, submitFirewall, closeRule, openSnap, submitSnap,
+      closePlan, planDone, loginPort, metricFormat, snapState, ask, cloudState, cloudKind, fmtBytes };
+  },
+  template: `
+  <div class="cloud-page">
+    <div class="group" v-if="!configured">
+      <div class="row"><ui-icon name="cloud" class="lg" style="color: var(--accent)"></ui-icon>
+        <div class="grow">还没有配置腾讯云密钥<span class="small secondary block">在「设置 → 腾讯云」填写 SecretId 和 SecretKey，就能在这里看到账号里的轻量应用服务器和云服务器。</span></div>
+        <button class="primary" @click="$emit('settings')">去设置</button></div>
+    </div>
+
+    <!-- The instances -->
+    <template v-else-if="!open">
+      <div class="page-head"><p>腾讯云账号里的轻量应用服务器和云服务器 CVM：到期、流量包、监控、防火墙和快照。开关机、快照和防火墙的修改都会先生成一份清单，确认后才执行。</p></div>
+      <div class="stat-bar">
+        <span class="small tertiary" v-if="list">{{ servers.length }} 台<span v-if="list.fetchedAt"> · 更新于 {{ new Date(list.fetchedAt).toLocaleTimeString('zh-CN', { hour12: false }) }}</span></span>
+        <span class="grow"></span>
+        <button class="plain" @click="loadList(true)" :disabled="loading"><ui-icon name="refresh"></ui-icon>刷新</button>
+      </div>
+      <div class="notice" v-if="error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ error }}</div>
+      <div class="notice" v-for="e in (list && list.errors) || []" :key="e"><ui-icon name="warn" class="st-warn"></ui-icon>{{ e }}</div>
+      <div class="notice" v-if="loading && !list"><span class="spinner"></span>正在读取各个地域的服务器……</div>
+      <div class="group" v-if="list && !servers.length"><div class="row secondary">这个账号里还没有轻量应用服务器或云服务器</div></div>
+      <div class="group cloud-list" v-if="servers.length">
+        <div class="table-wrap">
+          <table class="table cloud-table">
+            <thead><tr><th>服务器</th><th>状态</th><th>配置</th><th>公网 IP</th><th>到期</th><th>流量包</th><th>Miao Panel</th></tr></thead>
+            <tbody>
+              <tr v-for="s in servers" :key="s.id" class="site-row" @click="openOne(s)">
+                <td><div class="site-name">{{ s.name || s.id }}</div><div class="small tertiary">{{ cloudKind(s.kind) }} · {{ s.regionName }}</div></td>
+                <td class="nowrap"><span class="sdot" :class="cloudState(s.state)[0]"></span>{{ cloudState(s.state)[1] }}</td>
+                <td class="nowrap">{{ s.cpu }} 核 · {{ s.memoryGB }} GB<div class="small tertiary">{{ s.diskGB }} GB 硬盘<span v-if="s.bandwidthMbps"> · {{ s.bandwidthMbps }} Mbps</span></div></td>
+                <td class="nowrap mono small">{{ (s.publicIPs || [])[0] || '—' }}</td>
+                <td class="nowrap"><span :class="expiry(s).level ? 'st-' + expiry(s).level + '-text' : ''">{{ expiry(s).text || '—' }}</span><div class="small tertiary" v-if="expiry(s).date">{{ expiry(s).date }}</div></td>
+                <td class="cloud-traffic"><template v-if="traffic(s) != null">
+                  <div class="small nowrap">{{ fmtBytes(s.trafficUsed) }} / {{ fmtBytes(s.trafficTotal) }}</div>
+                  <div class="meter" :class="trafficLevel(traffic(s))" role="meter" :aria-valuenow="traffic(s)" aria-valuemin="0" aria-valuemax="100" aria-label="流量包用量"><div :style="{ width: traffic(s) + '%' }"></div></div></template>
+                  <span class="tertiary" v-else>—</span></td>
+                <td class="nowrap" @click.stop>
+                  <button class="link small" v-if="s.serverId && serverOf(s.serverId)" @click="$emit('server', s.serverId)">{{ serverOf(s.serverId).name }} ›</button>
+                  <button class="link small" v-else-if="(s.publicIPs || []).length" @click="$emit('add', s)">添加</button>
+                  <span class="tertiary" v-else>—</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </template>
+
+    <!-- One instance -->
+    <template v-else>
+      <div class="site-head">
+        <button class="plain" @click="back"><ui-icon name="chevron" class="flip"></ui-icon>云服务器</button>
+        <template v-if="inst">
+          <div class="grow site-title">
+            <h2>{{ inst.name || inst.id }}</h2>
+            <div class="small secondary"><span class="sdot" :class="cloudState(inst.state)[0]"></span>{{ cloudState(inst.state)[1] }} · {{ cloudKind(inst.kind) }} · {{ inst.regionName }} · {{ inst.id }}</div>
+          </div>
+          <div class="site-actions">
+            <button v-if="inst.serverId && serverOf(inst.serverId)" @click="$emit('server', inst.serverId)"><ui-icon name="server"></ui-icon>服务器页</button>
+            <button @click="ask"><ui-icon name="sparkles"></ui-icon>让 AI 检查</button>
+            <button v-if="inst.state === 'STOPPED'" class="primary" @click="power('start')" :disabled="planning">开机</button>
+            <template v-else-if="inst.state === 'RUNNING'">
+              <button @click="power('reboot')" :disabled="planning">重启</button>
+              <button class="destructive" @click="power('stop')" :disabled="planning">关机</button>
+            </template>
+          </div>
+        </template>
+        <span class="grow" v-else></span>
+        <span class="spinner inline" v-if="dLoading"></span>
+      </div>
+      <div class="notice" v-if="dError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ dError }}<button class="plain" @click="loadDetail">重试</button></div>
+      <div class="notice" v-if="dLoading && !detail"><span class="spinner"></span>正在读取……</div>
+
+      <template v-if="detail">
+        <div class="group">
+          <div class="row"><span class="k">配置</span><span class="v">{{ inst.cpu }} 核 · {{ inst.memoryGB }} GB 内存 · 系统盘 {{ inst.diskGB }} GB<span v-if="inst.bandwidthMbps"> · 带宽 {{ inst.bandwidthMbps }} Mbps</span></span></div>
+          <div class="row"><span class="k">系统</span><span class="v">{{ inst.os || '—' }}</span></div>
+          <div class="row"><span class="k">IP</span><span class="v mono small">{{ (inst.publicIPs || []).join('、') || '—' }}<span class="tertiary" v-if="(inst.privateIPs || []).length"> · 内网 {{ inst.privateIPs.join('、') }}</span></span></div>
+          <div class="row"><span class="k">到期</span><span class="v"><span :class="expiry(inst).level ? 'st-' + expiry(inst).level + '-text' : ''">{{ expiry(inst).date ? expiry(inst).date + '（' + expiry(inst).text + '）' : expiry(inst).text || '—' }}</span></span></div>
+          <div class="row stack" v-if="traffic(inst) != null">
+            <div style="display: flex"><span>本月流量包</span><span class="secondary" style="margin-left: auto">已用 {{ fmtBytes(inst.trafficUsed) }} / {{ fmtBytes(inst.trafficTotal) }}</span></div>
+            <div class="meter" :class="trafficLevel(traffic(inst))" role="meter" :aria-valuenow="traffic(inst)" aria-valuemin="0" aria-valuemax="100" aria-label="流量包用量"><div :style="{ width: traffic(inst) + '%' }"></div></div>
+          </div>
+        </div>
+
+        <div class="group-title">最近 24 小时</div>
+        <div class="notice" v-if="detail.metricError"><ui-icon name="warn" class="st-warn"></ui-icon>监控：{{ detail.metricError }}</div>
+        <div class="cloud-metrics" v-if="detail.metrics.length">
+          <section class="card" v-for="m in detail.metrics" :key="m.label">
+            <header class="card-head"><h3>{{ m.label }}</h3><span class="small secondary num">现在 {{ metricFormat(m)(m.latest) }} · 平均 {{ metricFormat(m)(m.avg) }} · 最高 {{ metricFormat(m)(m.max) }}</span></header>
+            <line-chart v-if="m.points.length" :points="m.points" :label="m.label" :format="metricFormat(m)" :span="24"></line-chart>
+            <div class="home-empty" v-else>没有数据</div>
+          </section>
+        </div>
+
+        <div class="group-title cloud-title">{{ inst.kind === 'lighthouse' ? '防火墙' : '安全组' }}<span class="tertiary small" v-if="detail.group">{{ detail.group }}（同一安全组的服务器共用这些规则）</span>
+          <span class="grow"></span><button class="plain small" @click="openFirewall" :disabled="planning"><ui-icon name="plus"></ui-icon>放行端口</button></div>
+        <div class="group">
+          <div class="row" v-if="detail.firewallError"><ui-icon name="alert" class="st-crit"></ui-icon><span class="grow secondary">{{ detail.firewallError }}</span></div>
+          <div class="row secondary" v-else-if="!detail.firewall.length">没有入站规则</div>
+          <div class="table-wrap" v-else>
+            <table class="table">
+              <thead><tr><th>端口</th><th>协议</th><th>来源</th><th>策略</th><th>备注</th><th><span class="sr-only">操作</span></th></tr></thead>
+              <tbody><tr v-for="(r, i) in detail.firewall" :key="i">
+                <td class="mono">{{ r.port }}</td><td>{{ r.protocol }}</td>
+                <td>{{ r.everyone ? '所有人' : r.source }}<span class="tertiary small cloud-cidr" v-if="r.everyone">{{ r.source }}</span></td>
+                <td><span class="sdot" :class="r.action === 'ACCEPT' ? 'good' : 'off'"></span>{{ r.action === 'ACCEPT' ? '允许' : '拒绝' }}</td>
+                <td class="secondary">{{ r.description || '' }}</td>
+                <td class="site-ops"><button class="link small destructive" v-if="r.action === 'ACCEPT' && !loginPort(r)" @click="closeRule(r)" :disabled="planning">关闭</button>
+                  <span class="small tertiary" v-else-if="loginPort(r)" title="远程登录用的端口，关掉会连不上">登录用</span></td>
+              </tr></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="group-title cloud-title">系统盘快照<span class="grow"></span><button class="plain small" @click="openSnap" :disabled="planning"><ui-icon name="plus"></ui-icon>创建快照</button></div>
+        <div class="group">
+          <div class="row" v-if="detail.snapshotError"><ui-icon name="alert" class="st-crit"></ui-icon><span class="grow secondary">{{ detail.snapshotError }}</span></div>
+          <div class="row secondary" v-else-if="!detail.snapshots.length">还没有快照。大改之前做一个，出问题可以在腾讯云控制台回滚。</div>
+          <div class="row" v-for="sn in detail.snapshots" :key="sn.id">
+            <div class="grow"><div>{{ sn.name || sn.id }}</div><div class="small tertiary">{{ sn.id }}<span v-if="sn.created"> · {{ new Date(sn.created).toLocaleString('zh-CN', { hour12: false }) }}</span><span v-if="sn.sizeGB"> · {{ sn.sizeGB }} GB</span></div></div>
+            <span class="small"><span class="sdot" :class="sn.state === 'NORMAL' ? 'good' : 'warn'"></span>{{ snapState(sn) }}<span v-if="sn.state === 'CREATING' && sn.percent"> {{ sn.percent }}%</span></span>
+          </div>
+        </div>
+      </template>
+    </template>
+
+    <!-- Opening a port -->
+    <div class="sheet-mask" v-if="fw.open" @click.self="fw.open = false">
+      <div class="sheet" role="dialog" aria-label="放行端口">
+        <h2>放行端口</h2>
+        <p>在{{ inst && inst.kind === 'lighthouse' ? '防火墙' : '安全组' }}里加一条允许访问的规则。只给自己用的端口（数据库、面板）最好只允许自己的 IP。</p>
+        <div class="group">
+          <div class="row form"><span class="k">端口</span><span class="v"><input v-model="fw.port" placeholder="如 8080，或 8000-8100" aria-label="端口" autocomplete="off"></span></div>
+          <div class="row form"><span class="k">协议</span><span class="v"><span class="segmented"><button :class="{on: fw.protocol === 'TCP'}" @click="fw.protocol = 'TCP'">TCP</button><button :class="{on: fw.protocol === 'UDP'}" @click="fw.protocol = 'UDP'">UDP</button></span></span></div>
+          <div class="row form"><span class="k">允许谁</span><span class="v"><span class="segmented"><button :class="{on: fw.who === 'all'}" @click="fw.who = 'all'">所有人</button><button :class="{on: fw.who === 'ip'}" @click="fw.who = 'ip'">指定 IP</button></span></span></div>
+          <div class="row form" v-if="fw.who === 'ip'"><span class="k">IP 或网段</span><span class="v"><input v-model="fw.cidr" placeholder="如 203.0.113.7 或 203.0.113.0/24" aria-label="IP 或网段" autocomplete="off"></span></div>
+          <div class="row form"><span class="k">备注</span><span class="v"><input v-model="fw.description" placeholder="可以不填" aria-label="备注" autocomplete="off"></span></div>
+        </div>
+        <div class="notice" v-if="formError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ formError }}</div>
+        <div class="sheet-actions"><button @click="fw.open = false">取消</button>
+          <button class="primary" @click="submitFirewall" :disabled="planning || !fw.port.trim() || (fw.who === 'ip' && !fw.cidr.trim())">{{ planning ? '正在生成……' : '生成清单' }}</button></div>
+      </div>
+    </div>
+
+    <!-- Taking a snapshot -->
+    <div class="sheet-mask" v-if="snap.open" @click.self="snap.open = false">
+      <div class="sheet" role="dialog" aria-label="创建快照">
+        <h2>创建快照</h2>
+        <p>给系统盘做一个整盘备份，不影响运行。{{ inst && inst.kind === 'cvm' ? '云服务器的快照按容量收费。' : '轻量应用服务器有免费的快照额度。' }}</p>
+        <div class="group"><div class="row form"><span class="k">名称</span><span class="v"><input v-model="snap.name" placeholder="不填自动生成，如 升级前" aria-label="快照名称" autocomplete="off"></span></div></div>
+        <div class="notice" v-if="formError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ formError }}</div>
+        <div class="sheet-actions"><button @click="snap.open = false">取消</button>
+          <button class="primary" @click="submitSnap" :disabled="planning">{{ planning ? '正在生成……' : '生成清单' }}</button></div>
+      </div>
+    </div>
+
+    <!-- The checklist to confirm -->
+    <div class="sheet-mask" v-if="plan" @click.self="closePlan">
+      <div class="sheet plan-sheet" role="dialog" aria-label="确认清单">
+        <h2>{{ plan.title }}</h2>
+        <p>勾选后点「执行」，确认后才会生效。</p>
+        <plan-card :plan="plan" server-name="腾讯云" @done="planDone"></plan-card>
+        <div class="sheet-actions"><button @click="closePlan">关闭</button></div>
+      </div>
+    </div>
+  </div>`,
+};
+
 // 待处理: checklists waiting for the user, alerts and daily reports, and
 // every checklist so far.
 const INBOX_VIEWS = [{ id: 'todo', text: '等你确认' }, { id: 'notices', text: '提醒和日报' }, { id: 'plans', text: '全部清单' }];
@@ -2584,7 +3092,8 @@ const EoCacheForm = {
 };
 
 const SitePage = {
-  props: { servers: { type: Array, default: () => [] }, active: Boolean, request: Object },
+  // server: only that server's sites, for its workbench.
+  props: { servers: { type: Array, default: () => [] }, active: Boolean, request: Object, server: { type: Number, default: 0 } },
   emits: ['ask', 'server', 'context'],
   setup(props, { emit }) {
     const list = ref(null), loading = ref(false), error = ref('');
@@ -2599,7 +3108,7 @@ const SitePage = {
 
     async function loadList() {
       loading.value = true; error.value = '';
-      try { list.value = await api('GET', '/api/websites'); }
+      try { list.value = await api('GET', '/api/websites' + (props.server ? '?server=' + props.server : '')); }
       catch (e) { error.value = e.message; } finally { loading.value = false; }
     }
     watch(() => props.active, v => { if (v) { loadList(); if (open.value) loadDetail(); } }, { immediate: true });
@@ -2607,7 +3116,7 @@ const SitePage = {
     const panels = computed(() => list.value ? list.value.servers : []);
     const shownServers = computed(() => {
       const k = q.value.trim().toLowerCase();
-      return panels.value.filter(s => !serverFilter.value || String(s.id) === serverFilter.value).map(s => ({
+      return panels.value.filter(s => props.server || !serverFilter.value || String(s.id) === serverFilter.value).map(s => ({
         ...s, shown: s.sites.filter(x => !k || [x.domain, x.remark || '', x.alias, x.app || '', x.runtime || ''].some(v => v.toLowerCase().includes(k))),
       }));
     });
@@ -2852,9 +3361,9 @@ const SitePage = {
   <div class="site-page">
     <!-- The list -->
     <template v-if="!open">
-      <div class="page-head"><p>1Panel 上的网站：域名、HTTPS 证书、反向代理、伪静态和 Nginx 配置。每次修改都会先生成一份清单，确认后才执行，执行后可以撤销。</p></div>
+      <div class="page-head" v-if="!server"><p>1Panel 上的网站：域名、HTTPS 证书、反向代理、伪静态和 Nginx 配置。每次修改都会先生成一份清单，确认后才执行，执行后可以撤销。</p></div>
       <div class="stat-bar site-bar">
-        <label class="field" v-if="panels.length > 1"><span>服务器</span>
+        <label class="field" v-if="panels.length > 1 && !server"><span>服务器</span>
           <select v-model="serverFilter" aria-label="服务器"><option value="">全部</option><option v-for="s in panels" :key="s.id" :value="String(s.id)">{{ s.name }}</option></select></label>
         <label class="field site-search"><span>搜索</span>
           <input type="search" v-model="q" placeholder="域名或备注" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" @keydown.esc="q = ''"></label>
@@ -2872,14 +3381,14 @@ const SitePage = {
 
       <section class="site-server" v-for="s in shownServers" :key="s.id">
         <div class="group-title site-server-title">
-          <ui-icon name="server"></ui-icon><span>{{ s.name }}</span>
+          <template v-if="!server"><ui-icon name="server"></ui-icon><span>{{ s.name }}</span></template>
           <span class="tertiary small" v-if="s.openresty && s.openresty.installed">OpenResty {{ s.openresty.version }}<span class="sdot" :class="s.openresty.running ? 'good' : 'crit'"></span>{{ s.openresty.running ? '运行中' : '没有运行' }}</span>
           <span class="tertiary small" v-else-if="s.openresty">没有安装 OpenResty</span>
           <span v-if="loading" class="spinner inline"></span>
         </div>
         <div class="group" v-if="s.noPanel">
           <div class="row"><ui-icon name="plug" class="lg" style="color: var(--accent)"></ui-icon>
-            <div class="grow">还没有配置 1Panel 接口<span class="small secondary block">在服务器页面填写 1Panel 的端口和 API 密钥，就能在这里管理网站。</span></div>
+            <div class="grow">还没有配置 1Panel 接口<span class="small secondary block">在服务器的「连接设置」里填写 1Panel 的端口和 API 密钥，就能在这里管理网站。</span></div>
             <button @click="$emit('server', s.id)">去填写</button></div>
         </div>
         <div class="group" v-else-if="s.error"><div class="row"><ui-icon name="alert" class="st-crit"></ui-icon><div class="grow secondary">{{ s.error }}</div>
@@ -5816,10 +6325,15 @@ const app = createApp({
     // ⌘J / Ctrl+J; a question asked there says which page it came from.
     const aiPanel = ref(false);
     const siteContext = ref('');
-    const PAGE_NAMES = { home: '总览', chat: 'AI 助手', inbox: '待处理', certs: '证书', dns: '解析', storage: '存储', terminal: '终端', files: '文件', logs: '记录', settings: '设置', sites: '网站管理' };
+    const PAGE_NAMES = { home: '总览', chat: 'AI 助手', inbox: '待处理', certs: '证书', dns: '解析', storage: '存储', terminal: '终端', files: '文件', logs: '记录', settings: '设置', sites: '网站管理', cloud: '腾讯云 · 云服务器' };
     const pageContext = computed(() => {
       const t = tab.value;
-      if (t === 'servers') return current.value ? '服务器 ' + current.value.server.name : '服务器';
+      if (t === 'servers') {
+        if (!current.value) return '服务器';
+        if (serverTab.value === 'sites' && siteContext.value) return siteContext.value;
+        const part = serverTab.value === 'overview' ? '' : (SERVER_TABS.find(x => x.id === serverTab.value) || { text: '' }).text;
+        return '服务器 ' + current.value.server.name + (part ? ' · ' + part : '');
+      }
       if (t === 'sites') return siteContext.value || '网站管理';
       if (t === 'stats') return statsView.value === 'eo' ? 'EdgeOne 实时统计' : (visitSection.value === 'security' ? '访问统计 · 安全' : '访问统计');
       return PAGE_NAMES[t] || '';
@@ -5862,6 +6376,13 @@ const app = createApp({
       showAdd.value = true;
       cloudPick.value = '';
       if (tc.configured) api('GET', '/api/tencent/servers').then(r => { cloudList.value = (r.servers || []).filter(s => s.publicIPs && s.publicIPs.length); }).catch(() => {});
+    }
+    // 添加 on the 云服务器 page: the add dialog, filled in from the instance.
+    function addFromCloud(inst) {
+      openAdd();
+      if (!cloudList.value.some(x => x.id === inst.id)) cloudList.value = [...cloudList.value, inst];
+      cloudPick.value = inst.id;
+      pickCloud();
     }
     function pickCloud() {
       const s = cloudList.value.find(x => x.id === cloudPick.value);
@@ -6210,6 +6731,47 @@ const app = createApp({
       if (o.memPct != null) return kind + ' · 内存 ' + o.memPct + '%';
       return kind + ' · ' + (o.note || s.host);
     }
+    // The server workbench's tab; the 网站 tab stays open once shown.
+    const serverTab = ref('overview');
+    const seenServerSites = ref(false);
+    watch(serverTab, t => { if (t === 'sites') seenServerSites.value = true; });
+    const serverSitesRequest = ref(null);
+    function openServerSite(siteId) {
+      serverTab.value = 'sites';
+      serverSitesRequest.value = { serverId: selectedId.value, siteId };
+    }
+    function serverStateText(id) {
+      const o = serverState(id);
+      if (!o || o.level === 'unknown') return '还没有识别';
+      return { ok: '运行正常', warn: '需要注意', crit: '有严重问题' }[o.level] || '';
+    }
+    // The line of facts under the server's name.
+    const serverFacts = computed(() => {
+      const c = current.value;
+      if (!c) return [];
+      const x = c.profile, k = cloud.value, out = [];
+      if (x && x.os) out.push({ k: '系统', v: x.os });
+      if (x) out.push({ k: '面板', v: adapterName(x.adapter) + (x.panel && x.panel.version ? ' ' + x.panel.version : '') });
+      const spec = [];
+      if (k) spec.push(k.cpu + ' 核', k.memoryGB + ' GB 内存', k.diskGB + ' GB 硬盘');
+      else if (x) {
+        if (x.cpuCores) spec.push(x.cpuCores + ' 核');
+        if (x.memory && x.memory.totalMB) spec.push(gbText(x.memory.totalMB) + ' 内存');
+        const d = (x.disks || []).find(d => d.mount === '/');
+        if (d) spec.push(d.size + ' 硬盘');
+      }
+      if (spec.length) out.push({ k: '配置', v: spec.join(' · ') });
+      if (k) out.push({ k: '位置', v: (k.kind === 'lighthouse' ? '腾讯云轻量' : '腾讯云 CVM') + ' · ' + k.regionName });
+      out.push({ k: 'IP', v: c.server.host });
+      if (k && k.expiredTime) {
+        const d = daysTo(k.expiredTime);
+        out.push({ k: '到期', v: new Date(k.expiredTime).toLocaleDateString('zh-CN') + (d < 30 ? (d < 0 ? '（已过期）' : `（还剩 ${d} 天）`) : ''), warn: d < 15 });
+      }
+      return out;
+    });
+    // 腾讯云 › 云服务器, opened on one instance.
+    const cloudRequest = ref(null);
+    function openCloud(c) { cloudRequest.value = { region: c.region, id: c.id }; go('cloud'); }
     // 网站 › 访问统计 and 安全, 腾讯云 › EdgeOne: parts of the statistics page.
     const visitSection = ref(pref('miao.visitSection', 'overview'));
     const statsRequest = ref(null);
@@ -6237,6 +6799,7 @@ const app = createApp({
       op, saveOnePanel, testOnePanel, tc, saveTencent, testTencent, clearTencent, freeCmd, setFree, seen, statsView, statsSeen, termRequest, openTerminal, filesRequest, openFiles, sitesRequest, openSite, newSite, unread, me, logout,
       overview, loadOverview, inboxCount, inboxFocus, openInbox, aiPanel, toggleAI, pageContext, siteContext, palette, modKey, serverDot, serverMeta, visitSection, statsRequest, openStats,
       cloud, cloudList, cloudPick, pickCloud, askAI, daysTo, fmtBytes,
+      SERVER_TABS, serverTab, seenServerSites, serverSitesRequest, openServerSite, serverStateText, serverFacts, cloudRequest, openCloud, addFromCloud,
       memPct, rootDisk, envSub, dockerText, money, mb, meterClass, levelClass, levelIcon, levelName, riskName, adapterName,
       fmtTime, serverName, parseSteps, toolName, toolDetail, actorName, actionName, md, live, liveStatus, thinkTail, stopAnswer,
     };
@@ -6255,6 +6818,10 @@ app.component('cert-page', CertPage);
 app.component('dns-page', DnsPage);
 app.component('site-page', SitePage);
 app.component('home-page', HomePage);
+app.component('server-ring', ServerRing);
+app.component('server-overview', ServerOverview);
+app.component('server-apps', ServerApps);
+app.component('cloud-page', CloudPage);
 app.component('command-palette', CommandPalette);
 app.component('inbox-page', InboxPage);
 app.component('eo-cache-form', EoCacheForm);

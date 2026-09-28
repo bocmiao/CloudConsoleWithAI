@@ -51,7 +51,7 @@ func TestWebsitesPage(t *testing.T) {
 	other := addTestServer(t, a, srv2, "pw")
 	_ = a.Store.SaveProfile(other.ID, "", "1panel")
 
-	v, err := a.Websites(ctx)
+	v, err := a.Websites(ctx, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -136,8 +136,8 @@ func execView(e store.ExecLog) ExecView {
 }
 
 // ExecLogs lists what Miao Panel ran on servers, newest first.
-func (a *App) ExecLogs(changesOnly bool) ([]ExecView, error) {
-	list, err := a.Store.ListExec(changesOnly, 500)
+func (a *App) ExecLogs(changesOnly bool, serverID int64) ([]ExecView, error) {
+	list, err := a.Store.ListServerExec(serverID, changesOnly, 500)
 	if err != nil {
 		return nil, err
 	}

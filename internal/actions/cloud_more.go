@@ -131,6 +131,17 @@ func applyFirewallOpen(ctx context.Context, env *Env, v map[string]string, out *
 	return *out
 }
 
+// LoginPortIn returns the remote login port (SSH 22, Windows remote
+// desktop 3389) that a port or range covers, or 0.
+func LoginPortIn(port string) int {
+	for _, p := range []int{22, 3389} {
+		if portCovers(port, p) {
+			return p
+		}
+	}
+	return 0
+}
+
 func applyFirewallClose(ctx context.Context, env *Env, v map[string]string, out *Outcome, report func(string, ...any)) Outcome {
 	c := env.Cloud
 	s, err := findInstance(ctx, c, v["region"], v["instance"])
@@ -140,12 +151,10 @@ func applyFirewallClose(ctx context.Context, env *Env, v map[string]string, out 
 		return *out
 	}
 	want := firewallRule(v)
-	for _, p := range []int{22, 3389} {
-		if portCovers(want.Port, p) {
-			out.Status = StatusRefused
-			out.logf("端口 %d 是远程登录用的，关掉会连不上服务器，不允许在这里关闭", p)
-			return *out
-		}
+	if p := LoginPortIn(want.Port); p != 0 {
+		out.Status = StatusRefused
+		out.logf("端口 %d 是远程登录用的，关掉会连不上服务器，不允许在这里关闭", p)
+		return *out
 	}
 	group, rules, err := cloudRules(ctx, c, s)
 	if err != nil {

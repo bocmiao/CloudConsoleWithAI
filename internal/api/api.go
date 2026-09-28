@@ -124,6 +124,8 @@ func (s *Server) routes() {
 	api("POST /api/settings/tencent/test", s.testTencent)
 	api("GET /api/tencent/servers", s.tencentServers)
 	api("GET /api/servers/{id}/cloud", s.serverCloud)
+	api("GET /api/tencent/servers/{region}/{instance}", s.cloudDetail)
+	api("POST /api/tencent/servers/plan", s.cloudPlan)
 	api("GET /api/visits/sources", s.visitSources)
 	api("GET /api/visits", s.getVisits)
 	api("GET /api/visits/blocked", s.blockedIPs)
@@ -305,7 +307,8 @@ func (s *Server) overview(_ http.ResponseWriter, r *http.Request) (any, error) {
 }
 
 func (s *Server) websites(_ http.ResponseWriter, r *http.Request) (any, error) {
-	return s.app.Websites(r.Context())
+	server, _ := strconv.ParseInt(r.URL.Query().Get("server"), 10, 64)
+	return s.app.Websites(r.Context(), server)
 }
 
 func (s *Server) website(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -765,6 +768,18 @@ func (s *Server) serverCloud(_ http.ResponseWriter, r *http.Request) (any, error
 	return map[string]any{"instance": cs}, nil
 }
 
+func (s *Server) cloudDetail(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.CloudDetail(r.Context(), r.PathValue("region"), r.PathValue("instance"))
+}
+
+func (s *Server) cloudPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req app.CloudRequest
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.ProposeCloud(r.Context(), req)
+}
+
 func (s *Server) eoSites(_ http.ResponseWriter, r *http.Request) (any, error) {
 	return s.app.EOSites(r.Context())
 }
@@ -978,7 +993,8 @@ func (s *Server) undoPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
 }
 
 func (s *Server) execLogs(_ http.ResponseWriter, r *http.Request) (any, error) {
-	return s.app.ExecLogs(r.URL.Query().Get("changes") == "1")
+	server, _ := strconv.ParseInt(r.URL.Query().Get("server"), 10, 64)
+	return s.app.ExecLogs(r.URL.Query().Get("changes") == "1", server)
 }
 
 func (s *Server) execEntry(_ http.ResponseWriter, r *http.Request) (any, error) {

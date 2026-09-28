@@ -236,8 +236,9 @@ func (a *App) serverSites(ctx context.Context, sv store.Server) SiteServerView {
 	return out
 }
 
-// Websites lists the sites of every 1Panel server, asking them all at once.
-func (a *App) Websites(ctx context.Context) (WebsitesView, error) {
+// Websites lists the sites of every 1Panel server, asking them all at once;
+// serverID picks one server.
+func (a *App) Websites(ctx context.Context, serverID int64) (WebsitesView, error) {
 	servers, err := a.Store.ListServers()
 	if err != nil {
 		return WebsitesView{}, err
@@ -245,6 +246,9 @@ func (a *App) Websites(ctx context.Context) (WebsitesView, error) {
 	v := WebsitesView{Servers: []SiteServerView{}}
 	var panels []store.Server
 	for _, sv := range servers {
+		if serverID != 0 && sv.ID != serverID {
+			continue
+		}
 		switch sv.Adapter {
 		case "1panel":
 			panels = append(panels, sv)

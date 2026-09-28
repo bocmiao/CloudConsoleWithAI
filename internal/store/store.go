@@ -579,11 +579,25 @@ func (s *Store) GetExec(id int64) (ExecLog, error) {
 // ListExec returns entries newest first, without scripts and output. With
 // changesOnly, read-only checks are left out.
 func (s *Store) ListExec(changesOnly bool, limit int) ([]ExecLog, error) {
-	where := ""
+	return s.ListServerExec(0, changesOnly, limit)
+}
+
+// ListServerExec is ListExec for one server; serverID 0 means all.
+func (s *Store) ListServerExec(serverID int64, changesOnly bool, limit int) ([]ExecLog, error) {
+	var where []string
+	var args []any
 	if changesOnly {
-		where = `WHERE kind != 'read'`
+		where = append(where, `kind != 'read'`)
 	}
-	rows, err := s.db.Query(`SELECT `+fmt.Sprintf(execCols, "''", "''")+` FROM exec_logs `+where+` ORDER BY id DESC LIMIT ?`, limit)
+	if serverID != 0 {
+		where = append(where, `server_id = ?`)
+		args = append(args, serverID)
+	}
+	cond := ""
+	if len(where) > 0 {
+		cond = "WHERE " + strings.Join(where, " AND ")
+	}
+	rows, err := s.db.Query(`SELECT `+fmt.Sprintf(execCols, "''", "''")+` FROM exec_logs `+cond+` ORDER BY id DESC LIMIT ?`, append(args, limit)...)
 	if err != nil {
 		return nil, err
 	}
