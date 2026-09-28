@@ -21,7 +21,8 @@ RUN apk add --no-cache ca-certificates \
  && mkdir /data && chown miaopanel /data && chmod 700 /data
 COPY --from=build /out/miaopanel /usr/local/bin/miaopanel
 USER miaopanel
-# MIAO_DOCKER: updates come from a new image, not from the page.
+# MIAO_DOCKER: an update from the page goes into the /data volume, which
+# outlives the container; a newer image still wins over it.
 ENV MIAO_DATA=/data MIAO_LISTEN=0.0.0.0:18765 TZ=Asia/Shanghai MIAO_DOCKER=1
 VOLUME /data
 EXPOSE 18765

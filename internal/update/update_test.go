@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -67,9 +68,13 @@ func TestDownloadAndInstall(t *testing.T) {
 		t.Fatalf("latest = %+v, %v", rel, err)
 	}
 	dir := t.TempDir()
-	path, err := c.Download(ctx, rel, "linux", "amd64", dir)
+	var got int64
+	path, err := c.Download(ctx, rel, "linux", "amd64", dir, func(done, _ int64) { got = done })
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got != int64(len(program)) {
+		t.Errorf("progress ended at %d of %d", got, len(program))
 	}
 	if b, _ := os.ReadFile(path); string(b) != string(program) {
 		t.Fatal("wrong content")
@@ -85,18 +90,45 @@ func TestDownloadAndInstall(t *testing.T) {
 	if b, _ := os.ReadFile(exe); string(b) != string(program) {
 		t.Fatal("not installed")
 	}
-	if _, err := c.Download(ctx, rel, "darwin", "arm64", dir); err == nil {
+	if _, err := c.Download(ctx, rel, "darwin", "arm64", dir, nil); err == nil {
 		t.Error("a missing file was downloaded")
 	}
 
 	bad := fakeGitHub(t, program, true)
 	c = &Checker{URL: bad.URL + "/latest"}
 	rel, _ = c.Latest(ctx)
-	if _, err := c.Download(ctx, rel, "linux", "amd64", dir); err == nil || !strings.Contains(err.Error(), "校验值") {
+	if _, err := c.Download(ctx, rel, "linux", "amd64", dir, nil); err == nil || !strings.Contains(err.Error(), "校验值") {
 		t.Errorf("bad checksum: %v", err)
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
 		t.Errorf("left files behind: %v", entries)
+	}
+}
+
+// An update left in the data directory runs instead of an older program,
+// and goes away once the program has caught up.
+func TestNewerLocal(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a shell script as the program")
+	}
+	dir := t.TempDir()
+	if p, _ := NewerLocal(dir, "v0.4.0"); p != "" {
+		t.Fatalf("nothing there, got %s", p)
+	}
+	local := LocalPath(dir)
+	_ = os.MkdirAll(filepath.Dir(local), 0o700)
+	_ = os.WriteFile(local, []byte("#!/bin/sh\necho v0.5.0\n"), 0o755)
+	if p, v := NewerLocal(dir, "dev"); p != "" {
+		t.Errorf("a development build switched to %s %s", p, v)
+	}
+	if p, v := NewerLocal(dir, "v0.4.0"); p != local || v != "v0.5.0" {
+		t.Fatalf("newer = %q %q", p, v)
+	}
+	if p, _ := NewerLocal(dir, "v0.5.0"); p != "" {
+		t.Fatalf("the same version switched to %s", p)
+	}
+	if _, err := os.Stat(local); !os.IsNotExist(err) {
+		t.Error("the caught-up program was kept")
 	}
 }
 

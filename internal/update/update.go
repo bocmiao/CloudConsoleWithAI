@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -174,8 +175,9 @@ func (c *Checker) get(ctx context.Context, url string, w io.Writer, limit int64)
 
 // Download fetches the release's file for this system into dir (so it can
 // be renamed over the program) and checks its SHA-256 against the
-// release's SHA256SUMS.txt. It returns the new file's path.
-func (c *Checker) Download(ctx context.Context, rel Release, goos, goarch, dir string) (string, error) {
+// release's SHA256SUMS.txt. It returns the new file's path. progress, when
+// not nil, hears how much of the file has come.
+func (c *Checker) Download(ctx context.Context, rel Release, goos, goarch, dir string, progress func(done, total int64)) (string, error) {
 	want := AssetName(goos, goarch)
 	var file, sums Asset
 	for _, a := range rel.Assets {
@@ -212,7 +214,7 @@ func (c *Checker) Download(ctx context.Context, rel Release, goos, goarch, dir s
 		return "", fmt.Errorf("程序所在的目录不能写入（%v），请手动下载新版本", err)
 	}
 	h := sha256.New()
-	err = c.get(ctx, file.URL, io.MultiWriter(tmp, h), 300<<20)
+	err = c.get(ctx, file.URL, io.MultiWriter(tmp, h, &counter{total: file.Size, report: progress}), 300<<20)
 	if cerr := tmp.Close(); err == nil {
 		err = cerr
 	}
@@ -229,6 +231,20 @@ func (c *Checker) Download(ctx context.Context, rel Release, goos, goarch, dir s
 	return tmp.Name(), nil
 }
 
+// counter reports the bytes written through it.
+type counter struct {
+	done, total int64
+	report      func(done, total int64)
+}
+
+func (c *counter) Write(p []byte) (int, error) {
+	c.done += int64(len(p))
+	if c.report != nil {
+		c.report(c.done, c.total)
+	}
+	return len(p), nil
+}
+
 // Install puts the downloaded program in place of exe. On Windows the
 // running program cannot be replaced, only renamed, so it becomes
 // exe.old (removed on the next start).
@@ -236,7 +252,7 @@ func Install(exe, next string) error {
 	if runtime.GOOS == "windows" {
 		old := exe + ".old"
 		_ = os.Remove(old)
-		if err := os.Rename(exe, old); err != nil {
+		if err := os.Rename(exe, old); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("没能换下正在运行的程序：%w", err)
 		}
 		if err := os.Rename(next, exe); err != nil {
@@ -274,6 +290,50 @@ func Writable(dir string) bool {
 	_ = f.Close()
 	_ = os.Remove(name)
 	return true
+}
+
+// LocalPath is where an update goes when the program cannot replace
+// itself: in Docker, or when its own directory cannot be written (a
+// systemd service kept out of /usr/local/bin). It is in the data
+// directory, which such installations keep.
+func LocalPath(dataDir string) string {
+	name := "miaopanel"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	return filepath.Join(dataDir, "bin", name)
+}
+
+// NewerLocal returns the program an earlier update left in the data
+// directory when it is newer than the running version, to be run
+// instead. One that is not newer (a new image or package has caught up)
+// is removed. Development builds keep running themselves.
+func NewerLocal(dataDir, current string) (path, version string) {
+	path = LocalPath(dataDir)
+	if !IsRelease(current) {
+		return "", ""
+	}
+	if _, err := os.Stat(path); err != nil {
+		return "", ""
+	}
+	if exe, err := Executable(); err == nil && sameFile(exe, path) {
+		return "", "" // it is the one running
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, "version").Output()
+	version = strings.TrimSpace(string(out))
+	if err != nil || !Newer(version, current) {
+		_ = os.Remove(path)
+		return "", ""
+	}
+	return path, version
+}
+
+func sameFile(a, b string) bool {
+	sa, err1 := os.Stat(a)
+	sb, err2 := os.Stat(b)
+	return err1 == nil && err2 == nil && os.SameFile(sa, sb)
 }
 
 // CleanUp removes what an update on Windows left behind.

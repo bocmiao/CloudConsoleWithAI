@@ -23,11 +23,8 @@ import (
 	"github.com/bocmiao/CloudConsoleWithAI/internal/update"
 )
 
-func TestUpdates(t *testing.T) {
-	if update.InDocker() {
-		t.Skip("updates are by image in Docker")
-	}
-	program := []byte("new program")
+// fakeRelease serves v0.3.0 with this system's program, GitHub-like.
+func fakeRelease(t *testing.T, program []byte) *update.Checker {
 	sum := sha256.Sum256(program)
 	name := update.AssetName(runtime.GOOS, runtime.GOARCH)
 	var srv *httptest.Server
@@ -35,16 +32,36 @@ func TestUpdates(t *testing.T) {
 		switch r.URL.Path {
 		case "/latest":
 			fmt.Fprintf(w, `{"tag_name":"v0.3.0","html_url":"https://example.com/v0.3.0","body":"## 新功能\n\n- 监控和备份\n- 更多","assets":[
-				{"name":%q,"browser_download_url":"%s/f"},{"name":"SHA256SUMS.txt","browser_download_url":"%s/sums"}]}`, name, srv.URL, srv.URL)
+				{"name":%q,"browser_download_url":"%s/f","size":%d},{"name":"SHA256SUMS.txt","browser_download_url":"%s/sums"}]}`, name, srv.URL, len(program), srv.URL)
 		case "/f":
 			_, _ = w.Write(program)
 		case "/sums":
 			fmt.Fprintf(w, "%s  %s\n", hex.EncodeToString(sum[:]), name)
 		}
 	}))
-	defer srv.Close()
+	t.Cleanup(srv.Close)
+	return &update.Checker{URL: srv.URL + "/latest"}
+}
+
+// waitRestart waits for the background update to restart the program and
+// says as which file.
+func waitRestart(t *testing.T, restarted *atomic.Value) string {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for restarted.Load() == nil && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	exe, _ := restarted.Load().(string)
+	return exe
+}
+
+func TestUpdates(t *testing.T) {
+	if update.InDocker() {
+		t.Skip("updates go to the data directory in Docker")
+	}
+	program := []byte("new program")
 	a := newApp(t)
-	a.Updater = &update.Checker{URL: srv.URL + "/latest"}
+	a.Updater = fakeRelease(t, program)
 	ctx := context.Background()
 
 	a.Version = "dev"
@@ -106,6 +123,45 @@ func TestUpdates(t *testing.T) {
 	a.Version = "v0.3.0"
 	if _, err := a.ApplyUpdate(ctx); err == nil {
 		t.Error("updated to the same version")
+	}
+}
+
+// In Docker, or where the program's directory cannot be written, the new
+// program goes into the data directory; the one in place stays.
+func TestUpdateIntoDataDir(t *testing.T) {
+	t.Setenv("MIAO_DOCKER", "1")
+	program := []byte("new program for the data directory")
+	a := newApp(t)
+	a.Updater = fakeRelease(t, program)
+	a.Version = "v0.2.0"
+	a.UpdateExe = filepath.Join(t.TempDir(), "miaopanel")
+	_ = os.WriteFile(a.UpdateExe, []byte("old program"), 0o755)
+	var restarted atomic.Value
+	a.Restart = func(exe string) error { restarted.Store(exe); return nil }
+
+	if v := a.UpdateStatus(); v.CanApply || !strings.Contains(v.Why, "不能写入") {
+		t.Fatalf("no data directory = %+v", v) // the desktop edition has none
+	}
+	a.DataDir = t.TempDir()
+	if v := a.UpdateStatus(); !v.CanApply {
+		t.Fatalf("status = %+v", v)
+	}
+	// One click: it looks for the newest release itself.
+	if v, err := a.ApplyUpdate(context.Background()); err != nil || !v.Applying || v.Latest.Version != "v0.3.0" {
+		t.Fatalf("apply = %+v, %v", v, err)
+	}
+	local := update.LocalPath(a.DataDir)
+	if exe := waitRestart(t, &restarted); exe != local {
+		t.Fatalf("restarted as %q", exe)
+	}
+	if b, _ := os.ReadFile(local); !bytes.Equal(b, program) {
+		t.Fatalf("installed %q", b)
+	}
+	if b, _ := os.ReadFile(a.UpdateExe); string(b) != "old program" {
+		t.Error("the program in place was touched")
+	}
+	if v := a.UpdateStatus(); v.Got != int64(len(program)) || v.Size != int64(len(program)) {
+		t.Errorf("progress %d of %d", v.Got, v.Size)
 	}
 }
 

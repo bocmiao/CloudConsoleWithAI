@@ -56,6 +56,15 @@ func serveMain(args []string) error {
 	if err != nil {
 		return err
 	}
+	// An update that could not replace this program (Docker, or a
+	// directory the service may not write) left a newer one in the data
+	// directory: run that instead.
+	if p, v := update.NewerLocal(dir, version); p != "" {
+		log.Printf("运行更新后的 %s：%s", v, p)
+		if err := restartSelf(p); err != nil {
+			log.Printf("没能运行 %s：%v，继续用 %s", p, err, version)
+		}
+	}
 	sec := secrets.OpenFile(dir) // a server has no desktop keychain
 	update.CleanUp()
 	ctx, stop := context.WithCancel(context.Background())
@@ -155,7 +164,7 @@ func serveMain(args []string) error {
 // background work.
 func startWeb(ctx context.Context, st *store.Store, sec secrets.Store, dir, trustedProxies string) (http.Handler, error) {
 	a := app.New(st, sec)
-	a.CacheDir = filepath.Join(dir, "cache")
+	a.CacheDir, a.DataDir = filepath.Join(dir, "cache"), dir
 	a.Version, a.Restart = version, restartSelf
 	au := auth.New(st, sec, dir)
 	api.ConnectSenders(a, au) // login codes go out by the app's mail and SMS settings

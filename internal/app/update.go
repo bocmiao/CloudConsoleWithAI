@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -24,6 +25,7 @@ type updateState struct {
 	checkedAt time.Time
 	err       string
 	applying  bool
+	got, size int64 // how much of the new program has been downloaded
 }
 
 // UpdateView is the 设置 page's 版本 section.
@@ -38,6 +40,8 @@ type UpdateView struct {
 	Why       string          `json:"why"`
 	OS        string          `json:"os"`
 	Applying  bool            `json:"applying"`
+	Got       int64           `json:"got"`  // bytes of the new program downloaded
+	Size      int64           `json:"size"` // and its size
 }
 
 func (a *App) updateEnabled() bool {
@@ -48,22 +52,21 @@ func (a *App) updateEnabled() bool {
 // UpdateStatus says what is known about updates now.
 func (a *App) UpdateStatus() UpdateView {
 	v := UpdateView{Current: a.Version, Enabled: a.updateEnabled(), OS: runtime.GOOS + "/" + runtime.GOARCH}
-	exe, exeErr := a.updateExe()
+	_, err := a.updateTarget()
 	switch {
-	case update.InDocker():
-		v.Why = "Docker 版在服务器的项目目录里运行 git pull && docker compose up -d --build 更新，数据在卷里不会丢"
 	case !update.IsRelease(a.Version):
 		v.Why = "这是自己编译的开发版，不能自动更新"
-	case a.Restart == nil || exeErr != nil:
+	case a.Restart == nil:
 		v.Why = "这种运行方式不能自动更新，请下载新版本替换"
-	case !update.Writable(filepath.Dir(exe)):
-		v.Why = "Miao Panel 不能写入程序所在的目录 " + filepath.Dir(exe) + "，请按部署文档的升级步骤下载新版本替换（systemd 版用 sudo install）"
+	case err != nil:
+		v.Why = err.Error()
 	default:
 		v.CanApply = true
 	}
 	a.upd.mu.Lock()
 	defer a.upd.mu.Unlock()
 	v.Latest, v.Error, v.Applying = a.upd.latest, a.upd.err, a.upd.applying
+	v.Got, v.Size = a.upd.got, a.upd.size
 	if !a.upd.checkedAt.IsZero() {
 		v.CheckedAt = a.upd.checkedAt.UTC().Format(time.RFC3339)
 	}
@@ -79,6 +82,28 @@ func (a *App) updateExe() (string, error) {
 		return a.UpdateExe, nil
 	}
 	return update.Executable()
+}
+
+// updateTarget is where the new program goes: in place of the running one
+// when its directory can be written; otherwise, and always in Docker
+// (whose program comes back with every new container), into the data
+// directory, which the next start prefers while it is the newer one.
+func (a *App) updateTarget() (string, error) {
+	exe, err := a.updateExe()
+	if err == nil && !update.InDocker() && update.Writable(filepath.Dir(exe)) {
+		return exe, nil
+	}
+	if a.DataDir == "" {
+		if err != nil {
+			return "", err
+		}
+		return "", errors.New("Miao Panel 不能写入程序所在的目录 " + filepath.Dir(exe) + "，请下载新版本替换")
+	}
+	local := update.LocalPath(a.DataDir)
+	if err := os.MkdirAll(filepath.Dir(local), 0o700); err != nil || !update.Writable(filepath.Dir(local)) {
+		return "", errors.New("程序所在的目录和数据目录 " + a.DataDir + " 都不能写入，请下载新版本替换")
+	}
+	return local, nil
 }
 
 // CheckUpdate asks GitHub for the newest release now.
@@ -137,9 +162,9 @@ func (a *App) ApplyUpdate(ctx context.Context) (UpdateView, error) {
 			return v, userErr("已经是最新版本了")
 		}
 	}
-	exe, err := a.updateExe()
+	exe, err := a.updateTarget()
 	if err != nil {
-		return v, userErr("找不到程序文件：%v", err)
+		return v, userErr("%v", err)
 	}
 	a.upd.mu.Lock()
 	if a.upd.applying {
@@ -150,7 +175,7 @@ func (a *App) ApplyUpdate(ctx context.Context) (UpdateView, error) {
 		a.upd.mu.Unlock()
 		return v, userErr("有清单正在执行，等它完成再更新")
 	}
-	a.upd.applying, a.upd.err = true, ""
+	a.upd.applying, a.upd.err, a.upd.got, a.upd.size = true, "", 0, 0
 	a.upd.mu.Unlock()
 	go a.runUpdate(*v.Latest, exe)
 	return a.UpdateStatus(), nil
@@ -166,7 +191,11 @@ func (a *App) runUpdate(rel update.Release, exe string) {
 	// However slow the line to GitHub: the program is some 30 MB.
 	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	defer cancel()
-	next, err := a.updater().Download(ctx, rel, runtime.GOOS, runtime.GOARCH, filepath.Dir(exe))
+	next, err := a.updater().Download(ctx, rel, runtime.GOOS, runtime.GOARCH, filepath.Dir(exe), func(got, size int64) {
+		a.upd.mu.Lock()
+		a.upd.got, a.upd.size = got, size
+		a.upd.mu.Unlock()
+	})
 	if err != nil {
 		fail(err.Error())
 		return

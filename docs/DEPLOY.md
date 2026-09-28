@@ -64,7 +64,7 @@ docker logs miaopanel          # 找到「初始化码」
 数据（数据库和密钥）在 Docker 卷 `miaopanel-data` 里，删除容器不会丢；**删除这个卷就全没了**。
 在安装向导里选 MySQL 时，地址不能填 `127.0.0.1`（那是容器自己），要填 MySQL 所在机器的内网 IP，或者同一个 Docker 网络里 MySQL 容器的名字。
 
-升级：`git pull && docker compose up -d --build`。有新版本时「设置 → 版本和诊断」和总览会提醒（每天问一次 GitHub，可以关掉），Docker 版不能在页面上一键更新。
+升级：在「设置 → 版本和诊断」点「更新到最新版本」，会从 GitHub 下载新程序、核对校验值后自动重启。新程序放在数据卷的 `/data/bin` 里，重建容器也还在；以后换用更新的镜像（`git pull && docker compose up -d --build`）时自动用较新的那个。有新版本时总览也会提醒（每天问一次 GitHub，可以关掉）。
 
 ## 数据库：内置还是 MySQL
 
@@ -136,7 +136,7 @@ sudo journalctl -u miaopanel   # 找到「初始化码」
 ```
 
 服务文件在 [`deploy/miaopanel.service`](../deploy/miaopanel.service)：以 `miaopanel` 用户运行，数据在 `/var/lib/miaopanel`，只监听 `127.0.0.1:18765`。
-升级：下载新版本，`sudo install -m 755 MiaoPanel-linux-amd64 /usr/local/bin/miaopanel` 替换后 `sudo systemctl restart miaopanel`。服务以 `miaopanel` 用户运行、不能写 `/usr/local/bin`，所以页面上只提醒有新版本，不能一键更新。
+升级：在「设置 → 版本和诊断」点「更新到最新版本」。服务以 `miaopanel` 用户运行、不能写 `/usr/local/bin`，所以新程序放在数据目录的 `/var/lib/miaopanel/bin` 里；每次启动时，`/usr/local/bin/miaopanel` 发现那里有更新的版本就改为运行它。也可以照旧下载新版本，`sudo install -m 755 MiaoPanel-linux-amd64 /usr/local/bin/miaopanel` 替换后 `sudo systemctl restart miaopanel`。
 
 ## 配置 HTTPS 反向代理
 

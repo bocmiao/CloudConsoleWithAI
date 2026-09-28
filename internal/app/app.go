@@ -46,6 +46,9 @@ type App struct {
 	Updater *update.Checker
 	// UpdateExe is the program file an update replaces; tests set it.
 	UpdateExe string
+	// DataDir is the web edition's data directory: an update goes there
+	// (update.LocalPath) when the program cannot replace itself.
+	DataDir string
 	// AliyunCloudEndpoint overrides 阿里云 API addresses for servers, DNS
 	// and CDN; tests set it.
 	AliyunCloudEndpoint func(product, region string) string

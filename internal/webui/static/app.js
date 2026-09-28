@@ -6848,7 +6848,7 @@ const app = createApp({
     const op = reactive({ port: 0, host: '', apiKey: '', hasKey: false, info: '' });
     const bt = reactive({ port: 0, apiKey: '', hasKey: false, info: '' }); // 宝塔's API
     // Updates and the diagnostics bundle.
-    const upd = reactive({ current: '', os: '', latest: null, newer: false, enabled: true, canApply: false, why: '', error: '', checkedAt: '' });
+    const upd = reactive({ current: '', os: '', latest: null, newer: false, enabled: true, canApply: false, why: '', error: '', checkedAt: '', got: 0, size: 0 });
     const updApplying = ref('');
     // The release notes as plain lines: no Markdown marks, no blank runs.
     const updNotes = computed(() => {
@@ -6869,8 +6869,14 @@ const app = createApp({
       });
     }
     async function setUpdateCheck(on) { await guarded('', async () => { Object.assign(upd, await api('PUT', '/api/update/settings', { enabled: on })); }); }
+    // One click: ask GitHub for the newest release first when that is not
+    // known yet, then download it, check it and restart into it.
     async function applyUpdate() {
-      if (!confirm(`更新到 ${upd.latest.version}？会下载新版本、核对校验值后替换现在的程序，然后自动重新启动（大约几秒钟）。更新期间不能执行清单。`)) return;
+      if (!upd.newer) {
+        await checkUpdate();
+        if (!upd.newer) return;
+      }
+      if (!confirm(`更新到 ${upd.latest.version}？会从 GitHub 下载新版本、核对校验值后替换现在的程序，然后自动重新启动（大约几秒钟）。更新期间不能执行清单。`)) return;
       await guarded('正在开始更新……', async () => { Object.assign(upd, await api('POST', '/api/update/apply')); });
       if (!upd.applying) return;
       const from = upd.current;
@@ -6885,6 +6891,10 @@ const app = createApp({
         }
         if (v.current !== from) { location.reload(); return; }
         Object.assign(upd, v);
+        if (v.applying && v.size) {
+          const mb = n => (n / 1048576).toFixed(1);
+          updApplying.value = `正在下载新版本 ${mb(v.got)} / ${mb(v.size)} MB，核对校验值后会替换程序并自动重新启动……`;
+        }
         if (!v.applying) { updApplying.value = ''; if (v.error) notify(v.error, 'error'); }
       }
     }

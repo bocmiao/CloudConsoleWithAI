@@ -581,7 +581,7 @@
             <a class="small" :href="upd.latest.url" target="_blank" rel="noopener"> 更新说明</a></span></div>
           <div class="row stack small secondary" v-if="upd.newer && upd.latest.notes"><pre class="upd-notes">{{ updNotes }}</pre></div>
           <div class="row small secondary" v-if="upd.error"><ui-icon name="warn" class="st-warn"></ui-icon><span class="grow">{{ upd.error }}</span></div>
-          <div class="row small secondary" v-if="upd.newer && !upd.canApply && upd.why"><ui-icon name="info"></ui-icon><span class="grow">{{ upd.why }}</span></div>
+          <div class="row small secondary" v-if="!upd.canApply && upd.why"><ui-icon name="info"></ui-icon><span class="grow">{{ upd.why }}</span></div>
           <div class="row" v-if="updApplying"><span class="spinner"></span><span class="grow">{{ updApplying }}</span></div>
           <div class="row"><span class="grow small secondary">每天自动检查一次（只问 GitHub 最新的版本号，不发送任何数据）<template v-if="upd.checkedAt"> · 上次 {{ fmtTime(upd.checkedAt) }}</template></span>
             <span class="segmented"><button :class="{on: !upd.enabled}" @click="setUpdateCheck(false)" :disabled="busy">关闭</button><button :class="{on: upd.enabled}" @click="setUpdateCheck(true)" :disabled="busy">开启</button></span></div>
@@ -589,7 +589,7 @@
           <div class="row upd-actions"><span class="grow"></span>
             <button @click="downloadDiagnostics" :disabled="busy">下载诊断包</button>
             <button @click="checkUpdate" :disabled="busy || !!updApplying">检查更新</button>
-            <button class="primary" v-if="upd.newer && upd.canApply" @click="applyUpdate" :disabled="busy || !!updApplying">更新到 {{ upd.latest.version }}</button></div>
+            <button class="primary" v-if="upd.canApply" @click="applyUpdate" :disabled="busy || !!updApplying">{{ upd.newer ? '更新到 ' + upd.latest.version : '更新到最新版本' }}</button></div>
         </div>
       </div>
     </template>
