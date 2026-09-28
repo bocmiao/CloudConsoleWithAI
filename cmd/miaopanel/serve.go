@@ -87,6 +87,7 @@ func serveMain(args []string) error {
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
 	go a.KeepWarm(ctx, 20*time.Minute)
+	go a.Monitor(ctx)
 	go func() {
 		t := time.NewTicker(time.Hour)
 		defer t.Stop()

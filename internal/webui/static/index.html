@@ -27,6 +27,8 @@
       <div class="side-item" :class="{active: tab === 'chat'}" @click="go('chat')"><ui-icon name="sparkles"></ui-icon><span class="grow">AI 助手</span></div>
       <div class="side-item" :class="{active: tab === 'inbox'}" @click="go('inbox')"><ui-icon name="inbox"></ui-icon><span class="grow">待处理</span>
         <span class="side-count" v-if="inboxCount">{{ inboxCount > 99 ? '99+' : inboxCount }}</span></div>
+      <div class="side-item" :class="{active: tab === 'monitor'}" @click="go('monitor')"><ui-icon name="pulse"></ui-icon><span class="grow">监控</span>
+        <span class="side-count crit" v-if="monitorDown">{{ monitorDown }}</span></div>
     </div>
 
     <div class="side-section">
@@ -347,6 +349,14 @@
     </div>
 
     <!-- 待处理: checklists waiting, alerts and daily reports, every checklist -->
+    <!-- Monitoring -->
+    <div class="tab-pane" v-if="seen.monitor" v-show="tab === 'monitor'">
+      <header class="toolbar"><h1>监控</h1></header>
+      <div class="page wide">
+        <monitor-page :active="tab === 'monitor'" @server="select" @ask="askAI"></monitor-page>
+      </div>
+    </div>
+
     <div class="tab-pane" v-if="seen.inbox" v-show="tab === 'inbox'">
       <header class="toolbar"><h1>待处理</h1></header>
       <div class="page">

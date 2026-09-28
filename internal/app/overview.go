@@ -186,7 +186,15 @@ func (a *App) Overview(ctx context.Context) (OverviewView, error) {
 	}
 	for _, sv := range servers {
 		raw, at, _ := a.Store.GetProfile(sv.ID)
-		v.Servers = append(v.Servers, serverState(sv, raw, at))
+		o := serverState(sv, raw, at)
+		// A sample from the last ten minutes is fresher than the profile.
+		if list, _ := a.Store.ServerSamples(sv.ID, time.Now().Add(-10*time.Minute).UTC().Format(time.RFC3339)); len(list) > 0 {
+			if m := list[len(list)-1]; m.OK {
+				cpu, mem, disk := int(m.CPU+.5), int(m.Mem+.5), int(m.Disk+.5)
+				o.CPUPct, o.MemPct, o.DiskPct = &cpu, &mem, &disk
+			}
+		}
+		v.Servers = append(v.Servers, o)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
@@ -258,6 +266,34 @@ func (a *App) Overview(ctx context.Context) (OverviewView, error) {
 		}
 	}
 
+	// What the monitoring finds wrong now.
+	if list, err := a.Store.Incidents(time.Now().UTC().Format(time.RFC3339), 50); err == nil {
+		for _, in := range list {
+			if in.EndedAt != "" {
+				continue
+			}
+			item := OverviewItem{Level: "warn", Kind: "monitor", Action: "让 AI 排查", Meta: in.Reason + " · " + whenShort(in.StartedAt) + "开始"}
+			switch in.Kind {
+			case "site":
+				item.Level, item.Title = "crit", "网站打不开："+in.Name
+			case "server":
+				item.Level, item.Title = "crit", "服务器连不上："+in.Name
+			case "disk":
+				item.Title, item.Meta = "磁盘快满了："+in.Name, whenShort(in.StartedAt)+"开始"
+			case "mem":
+				item.Title, item.Meta = "内存快用完了："+in.Name, whenShort(in.StartedAt)+"开始"
+			default:
+				item.Title, item.Meta = "CPU 一直很忙："+in.Name, whenShort(in.StartedAt)+"开始"
+			}
+			v.Todo = append(v.Todo, item)
+			for i := range v.Servers {
+				if in.Kind == "server" && strconv.FormatInt(v.Servers[i].ID, 10) == in.Target {
+					v.Servers[i].Level, v.Servers[i].Note = "crit", "连不上"
+				}
+			}
+		}
+	}
+
 	// Checklists proposed but not run, newest first.
 	if plans, err := a.Store.ListPlans(50); err == nil {
 		for _, p := range plans {
@@ -279,8 +315,13 @@ func (a *App) Overview(ctx context.Context) (OverviewView, error) {
 	}
 	nv := a.Notices()
 	v.Unread = nv.Unread
+	listed := map[string]bool{}
+	for _, t := range v.Todo {
+		listed[t.Title] = true
+	}
 	for _, n := range nv.Notices {
-		if n.Read || n.Kind != "alert" || len(v.Todo) >= 8 {
+		// An outage still going on is listed already, from the monitoring.
+		if n.Read || n.Kind != "alert" || len(v.Todo) >= 8 || listed[n.Title] {
 			continue
 		}
 		v.Todo = append(v.Todo, OverviewItem{Level: "warn", Kind: "notice", ID: n.ID, Action: "查看", Title: n.Title, Meta: whenShort(n.At)})

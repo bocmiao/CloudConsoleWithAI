@@ -167,9 +167,11 @@ func open(dsn string) (*Store, error) {
 	// SQLite handles one writer at a time; a single connection also keeps
 	// in-memory databases alive across calls.
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(schema); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate: %w", err)
+	for _, q := range []string{schema, monitorSchema} {
+		if _, err := db.Exec(q); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("migrate: %w", err)
+		}
 	}
 	for _, c := range [][3]string{
 		{"plans", "result", "TEXT NOT NULL DEFAULT ''"},

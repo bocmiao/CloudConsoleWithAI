@@ -1281,3 +1281,28 @@ button.wb-site:hover:not(:disabled) { background: var(--hover); }
   .cloud-table td:nth-child(7) { grid-column: 2; }
   .cloud-table td:nth-child(6):has(> .tertiary) { display: none; }
 }
+
+/* 监控 */
+.monitor-page { container-type: inline-size; }
+.monitor-page .stat-bar { flex-wrap: wrap; gap: 8px 12px; }
+.mon-summary { display: inline-flex; align-items: center; font-size: 14px; }
+.mon-bars { display: flex; align-items: flex-end; justify-content: flex-end; gap: 1px; height: 22px; width: 240px; }
+.mon-bars span { width: 3px; flex: none; border-radius: 1px; background: var(--good); opacity: .75; }
+.mon-table .site-ops .link + .link { margin-left: 12px; }
+.mon-strip { display: flex; gap: 1px; height: 10px; margin: 8px 0 4px; }
+.mon-strip span { flex: 1; border-radius: 1px; background: var(--good); opacity: .7; }
+.mon-strip span.fail { background: var(--crit); opacity: 1; }
+.mon-strip span.none { background: var(--fill); }
+.mon-bars span.fail { background: var(--crit); opacity: 1; }
+.mon-server { display: flex; align-items: center; gap: 18px; cursor: pointer; flex-wrap: wrap; }
+.mon-server:hover { background: var(--hover); }
+.mon-server-name { flex: 1 1 180px; min-width: 0; }
+.mon-metric { width: 110px; flex: none; }
+.mon-metric .meter { margin: 4px 0 0; }
+.mon-history { width: min(760px, 100%); }
+.mon-history .segmented { margin: 4px 0 8px; }
+@container (max-width: 640px) {
+  .mon-table th:nth-child(5), .mon-table td:nth-child(5) { display: none; }
+  .mon-metric { width: calc(33% - 12px); }
+  .mon-server .mon-metric:last-child { display: none; }
+}

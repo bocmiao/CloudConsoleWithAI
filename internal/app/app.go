@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
@@ -42,6 +43,9 @@ type App struct {
 	// Analyst, when set, stands in for the model that reads suspicious IPs
 	// on the statistics page; tests set it.
 	Analyst func(ctx context.Context, prompt string) (string, error)
+	// ProbeTransport, when set, answers the monitoring's website checks
+	// (tests and demos).
+	ProbeTransport http.RoundTripper
 	// CacheDir keeps downloaded files such as EdgeOne's offline logs.
 	CacheDir string
 	// Reviewer, when set, stands in for the model that independently
@@ -62,6 +66,7 @@ type App struct {
 	smsCount  smsCounter
 	eoReports eoReportCache
 	lines     dnsLines
+	mon       monitorState
 }
 
 // New creates an App.
@@ -350,6 +355,7 @@ const maxDiscoverOutput = 256 << 10
 // Discover runs discover.sh. With no sections it runs everything and saves
 // the result as the server's profile; with sections it only returns them.
 func (a *App) Discover(ctx context.Context, id int64, sections []string) (string, *profile.Profile, error) {
+	defer a.relistTargets() // what the server runs may have changed
 	for _, s := range sections {
 		if !scripts.ValidSection(s) {
 			return "", nil, userErr("未知的检查项：%s", s)

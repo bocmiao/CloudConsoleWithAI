@@ -103,6 +103,7 @@ const ICONS = {
   cloud: 'M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 8.6 4.5 4.5 0 0 1 17.5 18z',
   bucket: 'M4 7h16l-1.6 12.2a2 2 0 0 1-2 1.8H7.6a2 2 0 0 1-2-1.8zM4 7c0-1.7 3.6-3 8-3s8 1.3 8 3',
   bell: 'M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15zM10 20.5a2 2 0 0 0 4 0',
+  pulse: 'M3 12h4l2.5-6 4.5 12 2.5-6H21',
   window: 'M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM3 9h18M6 7h.01M9 7h.01',
   home: 'M4 10.5 12 4l8 6.5V19a1 1 0 0 1-1 1h-4.5v-5.5h-5V20H5a1 1 0 0 1-1-1z',
   inbox: 'M4 13.5 6.5 5h11L20 13.5V19a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1zM4 13.5h4.5l1.5 2.5h4l1.5-2.5H20',
@@ -2222,6 +2223,7 @@ const PALETTE_PAGES = [
   { tab: 'home', label: '总览', icon: 'home', keys: 'home overview zonglan' },
   { tab: 'chat', label: 'AI 助手', icon: 'sparkles', keys: 'ai chat' },
   { tab: 'inbox', label: '待处理', icon: 'inbox', keys: 'inbox todo 建议 通知 清单 plans notices' },
+  { tab: 'monitor', label: '监控', icon: 'pulse', keys: 'monitor uptime 监控 可用性 宕机 打不开 告警 cpu 内存 磁盘' },
   { tab: 'sites', label: '网站管理', icon: 'window', keys: 'sites website 网站 1panel nginx https 反向代理 证书' },
   { stats: ['logs', 'overview'], label: '访问统计', icon: 'chart', keys: 'stats visits pv uv 统计 流量' },
   { stats: ['logs', 'security'], label: '安全', icon: 'shield', keys: 'security 封禁 ip 攻击' },
@@ -2360,6 +2362,7 @@ const HomePage = {
       else if (t.kind === 'cert') emit('go', 'certs');
       else if (t.kind === 'security') emit('stats', 'logs', 'security');
       else if (t.kind === 'notice') emit('go', 'inbox');
+      else if (t.kind === 'monitor') emit('ask', `${t.title}（${t.meta}）。帮我排查原因，能修的话给我一份清单。`);
       else if (t.kind === 'server') {
         const s = ov.value.servers.find(x => x.id === t.id);
         emit('ask', `服务器 ${s ? s.name : ''} 提示「${s ? s.note : ''}」，帮我看看是怎么回事，要不要处理，怎么处理？`);
@@ -2509,13 +2512,15 @@ const ServerOverview = {
   setup(props, { emit }) {
     const p = computed(() => props.view && props.view.profile);
     const sv = computed(() => props.view && props.view.server);
-    const sites = ref(null), sitesError = ref(''), recent = ref([]);
+    const sites = ref(null), sitesError = ref(''), recent = ref([]), samples = ref([]);
+    const chartKind = ref('cpu');
     let seq = 0;
     async function load() {
       const s = sv.value;
       if (!s) return;
       const n = ++seq;
       api('GET', `/api/exec?server=${s.id}&changes=1`).then(r => { if (n === seq) recent.value = r.slice(0, 5); }).catch(() => {});
+      api('GET', `/api/servers/${s.id}/metrics?hours=24`).then(r => { if (n === seq) samples.value = r; }).catch(() => {});
       if (s.adapter !== '1panel') { sites.value = null; sitesError.value = ''; return; }
       try {
         const r = await api('GET', `/api/websites?server=${s.id}`);
@@ -2528,23 +2533,31 @@ const ServerOverview = {
     watch(() => [props.active, sv.value && sv.value.id, props.view && props.view.collectedAt], () => { if (props.active) load(); }, { immediate: true });
 
     const level = v => v >= 90 ? 'crit' : v >= 80 ? 'warn' : '';
+    // The monitoring's last sample, when it is from the last ten minutes.
+    const live = computed(() => {
+      const l = samples.value[samples.value.length - 1];
+      return l && Date.now() - new Date(l.at) < 10 * 60000 ? l : null;
+    });
     const metrics = computed(() => {
-      const x = p.value, out = [];
+      const x = p.value, out = [], l = live.value;
       if (!x) return out;
-      const load1 = parseFloat(String(x.load || '').split(/\s+/)[0]);
+      const load1 = l ? l.load1 : parseFloat(String(x.load || '').split(/\s+/)[0]);
       if (x.cpuCores && !isNaN(load1)) {
-        const v = Math.min(100, Math.round(load1 * 100 / x.cpuCores));
+        const v = l ? Math.round(l.cpu) : Math.min(100, Math.round(load1 * 100 / x.cpuCores));
         out.push({ label: 'CPU', pct: v, level: level(v), sub: `${x.cpuCores} 核 · 负载 ${load1}` });
       }
       const m = x.memory;
       if (m && m.totalMB) {
-        const v = Math.round((m.totalMB - m.availableMB) * 100 / m.totalMB);
+        const v = l ? Math.round(l.mem) : Math.round((m.totalMB - m.availableMB) * 100 / m.totalMB);
         const noSwap = !m.swapTotalMB;
         out.push({ label: '内存', pct: v, level: level(v) || (noSwap && v >= 70 ? 'warn' : ''),
-          sub: `${gbText(m.totalMB - m.availableMB)} / ${gbText(m.totalMB)}` + (noSwap ? ' · 没有 swap' : '') });
+          sub: `${gbText(Math.round(m.totalMB * v / 100))} / ${gbText(m.totalMB)}` + (noSwap ? ' · 没有 swap' : '') });
       }
       const d = (x.disks || []).find(d => d.mount === '/');
-      if (d) out.push({ label: '磁盘', pct: d.usePct, level: level(d.usePct), sub: `${d.used} / ${d.size}` });
+      if (d) {
+        const v = l ? Math.round(l.disk) : d.usePct;
+        out.push({ label: '磁盘', pct: v, level: level(v), sub: l ? `共 ${d.size}` : `${d.used} / ${d.size}` });
+      }
       const c = props.cloud;
       if (c && c.trafficTotal) {
         const v = Math.round(c.trafficUsed * 100 / c.trafficTotal);
@@ -2562,19 +2575,32 @@ const ServerOverview = {
       const top = Math.max(1, ...list.map(g => g.memMB));
       return list.map(g => ({ ...g, w: Math.max(2, Math.round(g.memMB * 100 / top)) + '%' }));
     });
+    const chart = computed(() => {
+      const pts = samples.value.map(m => ({ t: Math.floor(new Date(m.at) / 1000), m }));
+      if (pts.length < 2) return null;
+      const k = chartKind.value;
+      if (k === 'net') return { points: pts.map(x => ({ t: x.t, v: x.m.rx })), more: [{ label: '出', points: pts.map(x => ({ t: x.t, v: x.m.tx })), format: v => fmtBytes(v) + '/s' }], label: '入', format: v => fmtBytes(v) + '/s' };
+      return { points: pts.map(x => ({ t: x.t, v: k === 'cpu' ? x.m.cpu : x.m.mem })), more: [], label: k === 'cpu' ? 'CPU' : '内存', format: v => Math.round(v) + '%' };
+    });
     const plainSites = computed(() => p.value && p.value.websites || []);
     const shownSites = computed(() => (sites.value || []).slice(0, 6));
-    return { p, sv, sites, sitesError, recent, metrics, findings, tone, fix, programs, plainSites, shownSites,
+    return { live, chart, chartKind, p, sv, sites, sitesError, recent, metrics, findings, tone, fix, programs, plainSites, shownSites,
       SITE_TYPES, certLeft, certLevel, whenText, gbText, fmtTime: t => t ? new Date(t).toLocaleString('zh-CN', { hour12: false }) : '' };
   },
   template: `
   <div class="wb-overview">
     <div class="wb-rings" v-if="metrics.length">
-      <div class="wb-ring card" v-for="m in metrics" :key="m.label">
+      <div class="wb-ring card" v-for="m in metrics" :key="m.label" :title="live && m.label !== '流量包' ? '两分钟前的实时数据' : ''">
         <div class="wb-ring-gauge"><server-ring :pct="m.pct" :level="m.level"></server-ring><b>{{ m.pct }}<small>%</small></b></div>
         <div class="grow"><div class="wb-ring-label">{{ m.label }}</div><div class="small" :class="m.level ? 'st-' + m.level + '-text' : 'secondary'">{{ m.sub }}</div></div>
       </div>
     </div>
+
+    <section class="card" v-if="chart">
+      <header class="card-head"><h3>最近 24 小时</h3><span class="small tertiary">{{ live ? '每两分钟采样' : '最近没有采样' }}</span><span class="grow"></span>
+        <span class="segmented small"><button :class="{on: chartKind === 'cpu'}" @click="chartKind = 'cpu'">CPU</button><button :class="{on: chartKind === 'mem'}" @click="chartKind = 'mem'">内存</button><button :class="{on: chartKind === 'net'}" @click="chartKind = 'net'">网络</button></span></header>
+      <line-chart :points="chart.points" :more="chart.more" :label="chart.label" :format="chart.format" :span="24"></line-chart>
+    </section>
 
     <section class="card wb-checks">
       <header class="card-head"><h3>体检结果</h3><span class="small tertiary" v-if="view.collectedAt">{{ whenText(view.collectedAt) }} · 只读检查</span>
@@ -2964,6 +2990,217 @@ const CloudPage = {
         <p>勾选后点「执行」，确认后才会生效。</p>
         <plan-card :plan="plan" server-name="腾讯云" @done="planDone"></plan-card>
         <div class="sheet-actions"><button @click="closePlan">关闭</button></div>
+      </div>
+    </div>
+  </div>`,
+};
+
+// 监控: every website opened once a minute, every server sampled every two,
+// and what went wrong in the last week. Alerts go to 待处理 and the webhook.
+const INCIDENT_KIND = { site: '网站打不开', server: '服务器连不上', disk: '磁盘快满', mem: '内存快用完', cpu: 'CPU 过高' };
+const MonitorPage = {
+  props: { active: Boolean },
+  emits: ['server', 'ask', 'settings'],
+  setup(props, { emit }) {
+    const v = ref(null), loading = ref(false), error = ref(''), checking = ref(false);
+    const hist = reactive({ open: false, site: null, hours: 24, points: [], loading: false });
+    const form = reactive({ open: false, saving: false, error: '' });
+    let timer = null;
+    async function load() {
+      loading.value = true; error.value = '';
+      try { v.value = await api('GET', '/api/monitor'); }
+      catch (e) { error.value = e.message; } finally { loading.value = false; }
+    }
+    async function checkNow() {
+      checking.value = true;
+      try { v.value = await api('POST', '/api/monitor/check'); notify('已检查一遍'); }
+      catch (e) { notify(e.message, 'error'); } finally { checking.value = false; }
+    }
+    watch(() => props.active, on => {
+      clearInterval(timer);
+      if (on) { load(); timer = setInterval(load, 60000); }
+    }, { immediate: true });
+    onUnmounted(() => clearInterval(timer));
+
+    const sites = computed(() => (v.value && v.value.sites) || []);
+    const down = computed(() => sites.value.filter(s => s.up === false).length);
+    const servers = computed(() => (v.value && v.value.servers) || []);
+    const incidents = computed(() => (v.value && v.value.incidents) || []);
+    const bars = s => {
+      const top = Math.max(200, ...s.recent);
+      return s.recent.map(ms => ms < 0 ? { cls: 'fail', h: '100%' } : { cls: '', h: Math.max(18, Math.round(ms * 100 / top)) + '%' });
+    };
+    const uptimeText = s => s.uptime == null ? '—' : s.uptime.toFixed(s.uptime === 100 ? 0 : 2) + '%';
+    const uptimeLevel = s => s.uptime == null ? '' : s.uptime < 95 ? 'crit' : s.uptime < 99.5 ? 'warn' : '';
+    const lastedText = in_ => {
+      const a = new Date(in_.startedAt), b = in_.endedAt ? new Date(in_.endedAt) : new Date();
+      const m = Math.round((b - a) / 60000);
+      return m < 2 ? '约 1 分钟' : m < 60 ? `约 ${m} 分钟` : m < 2880 ? `约 ${(m / 60).toFixed(1)} 小时` : `约 ${Math.round(m / 1440)} 天`;
+    };
+    const when = t => new Date(t).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+    const rate = b => fmtBytes(b) + '/s';
+
+    async function openHistory(s) {
+      Object.assign(hist, { open: true, site: s, points: [] });
+      await loadHistory();
+    }
+    async function loadHistory() {
+      hist.loading = true;
+      try { hist.points = await api('GET', `/api/monitor/site?url=${encodeURIComponent(hist.site.url)}&hours=${hist.hours}`); }
+      catch (e) { notify(e.message, 'error'); } finally { hist.loading = false; }
+    }
+    watch(() => hist.hours, () => { if (hist.open) loadHistory(); });
+    const histMain = computed(() => hist.points.map(p => ({ t: p.t, v: p.n > p.fails ? p.ms : 0 })));
+    const histMore = computed(() => [{ label: '失败', points: hist.points.map(p => ({ t: p.t, v: p.fails })), format: n => n + ' 次' }]);
+    const histFails = computed(() => hist.points.reduce((n, p) => n + p.fails, 0));
+    const histChecks = computed(() => hist.points.reduce((n, p) => n + p.n, 0));
+
+    function ask(s) {
+      emit('ask', `网站 ${s.name}（${s.url}）现在打不开：${s.error || '没有响应'}。帮我排查是什么原因：DNS、EdgeOne、服务器、Nginx 还是应用，能修的话给我一份清单。`);
+    }
+    function openSettings() {
+      const st = v.value.settings;
+      Object.assign(form, { open: true, saving: false, error: '', enabled: st.enabled, auto: st.auto, servers: st.servers,
+        extra: st.extra.join('\n'), skip: st.skip.join('\n'), diskPct: st.diskPct, memPct: st.memPct, cpuPct: st.cpuPct, email: st.email || '' });
+    }
+    async function saveSettings() {
+      form.saving = true; form.error = '';
+      const lines = t => t.split(/[\n,，\s]+/).map(x => x.trim()).filter(Boolean);
+      try {
+        await api('PUT', '/api/monitor/settings', { enabled: form.enabled, auto: form.auto, servers: form.servers, extra: lines(form.extra), skip: lines(form.skip),
+          diskPct: +form.diskPct, memPct: +form.memPct, cpuPct: +form.cpuPct, email: form.email.trim() });
+        form.open = false;
+        await checkNow();
+      } catch (e) { form.error = e.message; } finally { form.saving = false; }
+    }
+    function skipSite(s) {
+      const st = v.value.settings;
+      api('PUT', '/api/monitor/settings', { ...st, skip: [...st.skip, s.url], extra: st.extra.filter(x => x !== s.url) })
+        .then(() => { notify('不再监控 ' + s.name); return api('POST', '/api/monitor/check'); }).then(r => { v.value = r; }).catch(e => notify(e.message, 'error'));
+    }
+    return { v, loading, error, checking, hist, form, sites, down, servers, incidents, bars, uptimeText, uptimeLevel, lastedText, when, rate,
+      checkNow, load, openHistory, histMain, histMore, histFails, histChecks, ask, openSettings, saveSettings, skipSite, INCIDENT_KIND, fmtBytes };
+  },
+  template: `
+  <div class="monitor-page">
+    <div class="notice" v-if="error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ error }}</div>
+    <div class="notice" v-if="loading && !v"><span class="spinner"></span>正在读取……</div>
+    <template v-if="v">
+      <div class="group" v-if="!v.settings.enabled">
+        <div class="row"><ui-icon name="info" class="lg" style="color: var(--accent)"></ui-icon>
+          <div class="grow">监控已关闭。打开后每分钟检查一次网站能不能打开，每两分钟看一次服务器，出问题马上提醒。</div>
+          <button class="primary" @click="openSettings">打开</button></div>
+      </div>
+      <div class="stat-bar">
+        <span class="mon-summary"><span class="sdot" :class="down ? 'crit' : sites.length ? 'good' : 'off'"></span>
+          <b v-if="down">{{ down }} 个网站打不开</b><template v-else-if="sites.length">{{ sites.length }} 个网站都正常</template><template v-else>还没有要监控的网站</template></span>
+        <span class="small tertiary">每分钟检查一次 · 出问题会提醒到「待处理」{{ v.mail && v.settings.email ? '、邮件' : '' }}和推送</span>
+        <span class="grow"></span>
+        <button class="plain" @click="openSettings"><ui-icon name="gear"></ui-icon>设置</button>
+        <button @click="checkNow" :disabled="checking"><ui-icon name="refresh"></ui-icon>{{ checking ? '正在检查……' : '立即检查' }}</button>
+      </div>
+
+      <div class="group-title">网站</div>
+      <div class="group">
+        <div class="row secondary" v-if="!sites.length">{{ v.listed ? '没有找到网站。在「设置」里手动添加要监控的地址，或者在服务器上用 1Panel 建站。' : '正在整理要监控的网站，一分钟内出结果……' }}</div>
+        <div class="table-wrap" v-else>
+          <table class="table mon-table">
+            <thead><tr><th>网站</th><th>现在</th><th class="num">响应</th><th class="num">24 小时可用率</th><th>最近一小时</th><th><span class="sr-only">操作</span></th></tr></thead>
+            <tbody>
+              <tr v-for="s in sites" :key="s.url">
+                <td><div class="site-name">{{ s.name }}</div><div class="small tertiary ellipsis">{{ s.source }}</div></td>
+                <td><template v-if="s.up == null"><span class="sdot off"></span><span class="tertiary">还没检查</span></template>
+                  <template v-else-if="s.up"><span class="sdot good"></span>正常</template>
+                  <template v-else><span class="sdot crit"></span><span class="st-crit-text">打不开</span><div class="small secondary">{{ s.error }}<span v-if="s.since"> · {{ when(s.since) }} 起</span></div></template></td>
+                <td class="num nowrap">{{ s.up ? s.ms + ' ms' : '—' }}</td>
+                <td class="num nowrap" :class="uptimeLevel(s) ? 'st-' + uptimeLevel(s) + '-text' : ''">{{ uptimeText(s) }}</td>
+                <td><div class="mon-bars" :title="'最近 ' + s.recent.length + ' 次检查'"><span v-for="(b, i) in bars(s)" :key="i" :class="b.cls" :style="{ height: b.h }"></span></div></td>
+                <td class="site-ops nowrap">
+                  <button class="link small" v-if="s.up === false" @click="ask(s)">让 AI 排查</button>
+                  <button class="link small" @click="openHistory(s)">历史</button>
+                  <button class="link small tertiary" v-if="s.source !== '手动添加'" @click="skipSite(s)" :title="'不再监控 ' + s.name">忽略</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <template v-if="servers.length">
+        <div class="group-title">服务器<span class="tertiary small"> · 每两分钟一次{{ v.settings.servers ? '' : '（已关闭）' }}</span></div>
+        <div class="group">
+          <div class="row mon-server" v-for="s in servers" :key="s.id" @click="$emit('server', s.id)">
+            <div class="mon-server-name"><span class="sdot" :class="s.down ? 'crit' : s.problems.length ? 'warn' : s.latest ? 'good' : 'off'"></span>{{ s.name }}
+              <div class="small tertiary" v-if="!s.sampled">通过自动化助手连接，不采样</div>
+              <div class="small st-crit-text" v-else-if="s.down">连不上 · {{ when(s.since) }} 起</div>
+              <div class="small st-warn-text" v-else-if="s.problems.length">{{ s.problems[0] }}</div>
+              <div class="small tertiary" v-else-if="s.latest">{{ when(s.latest.at) }}</div>
+              <div class="small tertiary" v-else>等待第一次采样</div></div>
+            <template v-if="s.latest && !s.down">
+              <div class="mon-metric" v-for="k in [['CPU', s.latest.cpu], ['内存', s.latest.mem], ['磁盘', s.latest.disk]]" :key="k[0]">
+                <div class="small"><span class="secondary">{{ k[0] }}</span> <b class="num">{{ Math.round(k[1]) }}%</b></div>
+                <div class="meter" :class="k[1] >= 90 ? 'crit' : k[1] >= 80 ? 'warn' : ''"><div :style="{ width: Math.min(100, k[1]) + '%' }"></div></div></div>
+              <div class="mon-metric small"><span class="secondary">网络</span><div class="num">↓ {{ rate(s.latest.rx) }}</div><div class="num">↑ {{ rate(s.latest.tx) }}</div></div>
+            </template>
+            <span class="grow" v-else></span>
+          </div>
+        </div>
+      </template>
+
+      <div class="group-title">最近 7 天的故障</div>
+      <div class="group">
+        <div class="row secondary" v-if="!incidents.length">没有故障</div>
+        <div class="row" v-for="x in incidents" :key="x.id">
+          <span class="sdot" :class="x.endedAt ? 'off' : (x.kind === 'site' || x.kind === 'server') ? 'crit' : 'warn'"></span>
+          <div class="grow"><div>{{ INCIDENT_KIND[x.kind] || x.kind }}：{{ x.name }}</div><div class="small secondary">{{ x.reason }}</div></div>
+          <div class="small nowrap" style="text-align: right"><div>{{ when(x.startedAt) }}</div>
+            <div :class="x.endedAt ? 'tertiary' : 'st-crit-text'">{{ x.endedAt ? '持续 ' + lastedText(x) : '还没恢复 · ' + lastedText(x) }}</div></div>
+        </div>
+      </div>
+    </template>
+
+    <!-- A website's history -->
+    <div class="sheet-mask" v-if="hist.open" @click.self="hist.open = false">
+      <div class="sheet mon-history" role="dialog" aria-label="网站历史">
+        <h2>{{ hist.site.name }}</h2>
+        <p class="small secondary">{{ hist.site.url }} · 每分钟检查一次；图上是响应时间，失败的次数在提示里。</p>
+        <span class="segmented small"><button :class="{on: hist.hours === 24}" @click="hist.hours = 24">24 小时</button><button :class="{on: hist.hours === 168}" @click="hist.hours = 168">7 天</button></span>
+        <div class="notice" v-if="hist.loading && !hist.points.length"><span class="spinner"></span>正在读取……</div>
+        <template v-else>
+          <p class="small">{{ histChecks }} 次检查，{{ histFails }} 次失败</p>
+          <div class="mon-strip" aria-label="可用性，红色是有失败的时段"><span v-for="p in hist.points" :key="p.t" :class="p.fails ? 'fail' : p.n ? '' : 'none'"
+            :title="new Date(p.t * 1000).toLocaleString('zh-CN', { hour12: false }) + (p.fails ? ' · 失败 ' + p.fails + ' 次' : ' · 正常')"></span></div>
+          <line-chart v-if="histMain.length > 1" :points="histMain" :more="histMore" label="响应时间" :format="n => Math.round(n) + ' ms'" :span="hist.hours"></line-chart>
+          <div class="home-empty" v-else>数据还不够画图，过几分钟再看</div>
+        </template>
+        <div class="sheet-actions"><button @click="hist.open = false">关闭</button></div>
+      </div>
+    </div>
+
+    <!-- Settings -->
+    <div class="sheet-mask" v-if="form.open" @click.self="form.open = false">
+      <div class="sheet" role="dialog" aria-label="监控设置">
+        <h2>监控设置</h2>
+        <div class="group">
+          <label class="row"><span class="grow">打开监控</span><input type="checkbox" v-model="form.enabled"></label>
+          <label class="row"><span class="grow">自动监控认识的网站<span class="small secondary block">1Panel 上运行中的网站，和其他服务器 Nginx 配置里的域名</span></span><input type="checkbox" v-model="form.auto"></label>
+          <label class="row"><span class="grow">采样服务器的 CPU、内存和磁盘<span class="small secondary block">通过 SSH，连接会保持，不会每次都登录</span></span><input type="checkbox" v-model="form.servers"></label>
+        </div>
+        <div class="group-title">再监控这些地址（一行一个）</div>
+        <div class="group"><div class="row"><textarea v-model="form.extra" rows="3" placeholder="https://example.com/health" aria-label="要监控的地址" class="grow"></textarea></div></div>
+        <div class="group-title">不监控这些地址</div>
+        <div class="group"><div class="row"><textarea v-model="form.skip" rows="2" placeholder="https://test.example.com" aria-label="不监控的地址" class="grow"></textarea></div></div>
+        <div class="group-title">什么时候提醒</div>
+        <div class="group">
+          <div class="row form"><span class="k">磁盘用到</span><span class="v"><input type="number" min="50" max="100" v-model="form.diskPct" aria-label="磁盘提醒线"> %</span></div>
+          <div class="row form"><span class="k">内存连续 6 分钟</span><span class="v"><input type="number" min="50" max="100" v-model="form.memPct" aria-label="内存提醒线"> %</span></div>
+          <div class="row form"><span class="k">CPU 连续 10 分钟</span><span class="v"><input type="number" min="50" max="100" v-model="form.cpuPct" aria-label="CPU 提醒线"> %</span></div>
+          <div class="row form"><span class="k">同时发邮件到</span><span class="v"><input v-model="form.email" placeholder="可以不填" aria-label="提醒邮箱" autocomplete="email"></span></div>
+          <div class="row small secondary" v-if="!v.mail">发邮件要先设置发信邮箱（SMTP），在 Web 版的「设置 → 账号」里。</div>
+          <div class="row small secondary">网站连续两次打不开、服务器连续三次连不上也会提醒，恢复后再说一声。推送地址（企业微信、钉钉、飞书、Server酱）在「待处理 → 提醒和日报」里设置。</div>
+        </div>
+        <div class="notice" v-if="form.error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ form.error }}</div>
+        <div class="sheet-actions"><button @click="form.open = false">取消</button>
+          <button class="primary" @click="saveSettings" :disabled="form.saving">{{ form.saving ? '正在保存……' : '保存' }}</button></div>
       </div>
     </div>
   </div>`,
@@ -6325,7 +6562,7 @@ const app = createApp({
     // ⌘J / Ctrl+J; a question asked there says which page it came from.
     const aiPanel = ref(false);
     const siteContext = ref('');
-    const PAGE_NAMES = { home: '总览', chat: 'AI 助手', inbox: '待处理', certs: '证书', dns: '解析', storage: '存储', terminal: '终端', files: '文件', logs: '记录', settings: '设置', sites: '网站管理', cloud: '腾讯云 · 云服务器' };
+    const PAGE_NAMES = { home: '总览', chat: 'AI 助手', inbox: '待处理', certs: '证书', dns: '解析', storage: '存储', terminal: '终端', files: '文件', logs: '记录', settings: '设置', sites: '网站管理', cloud: '腾讯云 · 云服务器', monitor: '监控' };
     const pageContext = computed(() => {
       const t = tab.value;
       if (t === 'servers') {
@@ -6722,6 +6959,8 @@ const app = createApp({
     setInterval(() => { if (document.visibilityState === 'visible') loadOverview(); }, 120000);
     const inboxCount = computed(() => (overview.value ? overview.value.pending : 0) + unread.value);
     const serverState = id => overview.value && overview.value.servers.find(x => x.id === id);
+    // Websites and servers the monitoring finds down now.
+    const monitorDown = computed(() => ((overview.value && overview.value.todo) || []).filter(t => t.kind === 'monitor' && t.level === 'crit').length);
     const serverDot = id => ({ ok: 'good', warn: 'warn', crit: 'crit' }[(serverState(id) || {}).level] || 'off');
     function serverMeta(s) {
       const o = serverState(s.id);
@@ -6799,7 +7038,7 @@ const app = createApp({
       op, saveOnePanel, testOnePanel, tc, saveTencent, testTencent, clearTencent, freeCmd, setFree, seen, statsView, statsSeen, termRequest, openTerminal, filesRequest, openFiles, sitesRequest, openSite, newSite, unread, me, logout,
       overview, loadOverview, inboxCount, inboxFocus, openInbox, aiPanel, toggleAI, pageContext, siteContext, palette, modKey, serverDot, serverMeta, visitSection, statsRequest, openStats,
       cloud, cloudList, cloudPick, pickCloud, askAI, daysTo, fmtBytes,
-      SERVER_TABS, serverTab, seenServerSites, serverSitesRequest, openServerSite, serverStateText, serverFacts, cloudRequest, openCloud, addFromCloud,
+      monitorDown, SERVER_TABS, serverTab, seenServerSites, serverSitesRequest, openServerSite, serverStateText, serverFacts, cloudRequest, openCloud, addFromCloud,
       memPct, rootDisk, envSub, dockerText, money, mb, meterClass, levelClass, levelIcon, levelName, riskName, adapterName,
       fmtTime, serverName, parseSteps, toolName, toolDetail, actorName, actionName, md, live, liveStatus, thinkTail, stopAnswer,
     };
@@ -6822,6 +7061,7 @@ app.component('server-ring', ServerRing);
 app.component('server-overview', ServerOverview);
 app.component('server-apps', ServerApps);
 app.component('cloud-page', CloudPage);
+app.component('monitor-page', MonitorPage);
 app.component('command-palette', CommandPalette);
 app.component('inbox-page', InboxPage);
 app.component('eo-cache-form', EoCacheForm);

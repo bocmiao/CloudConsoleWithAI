@@ -48,6 +48,7 @@ func (a *App) OnePanel(id int64) (OnePanelSettings, error) {
 
 // SaveOnePanel stores the settings, and the API key if one is given.
 func (a *App) SaveOnePanel(id int64, s OnePanelSettings, apiKey string) (OnePanelSettings, error) {
+	defer a.relistTargets()
 	if _, err := a.Store.GetServer(id); err != nil {
 		return s, userErr("找不到这台服务器（编号 %d）", id)
 	}

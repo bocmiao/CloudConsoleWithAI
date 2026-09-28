@@ -223,6 +223,13 @@ func (a *App) tools() map[string]ai.Tool {
 			}, "server_id", "website"),
 		}, Run: a.toolPanelWebsite},
 		{Def: ai.ToolDef{
+			Name: "monitor_status",
+			Description: "Miao Panel 自己的监控（只读）：每个网站每分钟打开一次的结果（现在能不能打开、原因、响应时间、最近 24 小时可用率），" +
+				"每台服务器每两分钟的 CPU、内存、磁盘、网络（最新值和最近 24 小时的平均和最高），以及最近 7 天的故障记录（网站打不开、服务器连不上、磁盘满、内存或 CPU 长时间过高，开始和结束时间）。" +
+				"用户问「网站现在正常吗」「昨晚是不是宕机了」「服务器最近负载怎么样」时先用它。",
+			Schema: obj(map[string]any{}),
+		}, Run: a.toolMonitorStatus},
+		{Def: ai.ToolDef{
 			Name: "tencent_servers",
 			Description: "列出腾讯云账号下所有地域的轻量应用服务器和云服务器 CVM（只读）：实例 id、地域、状态、配置、公网 IP、到期时间和剩余天数、自动续费、" +
 				"轻量服务器本月流量包用量、CVM 安全组，以及对应的 Miao Panel 服务器编号。结果缓存 5 分钟，refresh=true 强制刷新。",

@@ -114,6 +114,7 @@ func run(port int, dataDir string, openBrowser, window bool) error {
 	warmCtx, stopWarm := context.WithCancel(context.Background())
 	defer stopWarm()
 	go a.KeepWarm(warmCtx, 20*time.Minute) // statistics ready before the pages open
+	go a.Monitor(warmCtx)                  // websites every minute, servers every two
 	srv := &http.Server{
 		Handler:           api.New(a, token, boundPort, version),
 		ReadHeaderTimeout: 10 * time.Second,

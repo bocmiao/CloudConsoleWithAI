@@ -132,6 +132,11 @@ func (s *Server) routes() {
 	api("POST /api/visits/block", s.blockIPs)
 	api("POST /api/servers/{id}/realip", s.proposeRealIP)
 	api("GET /api/overview", s.overview)
+	api("GET /api/monitor", s.monitor)
+	api("PUT /api/monitor/settings", s.monitorSettings)
+	api("POST /api/monitor/check", s.monitorCheck)
+	api("GET /api/monitor/site", s.monitorSite)
+	api("GET /api/servers/{id}/metrics", s.serverMetrics)
 	api("GET /api/websites", s.websites)
 	api("GET /api/servers/{id}/websites/{sid}", s.website)
 	api("GET /api/servers/{id}/websites/{sid}/log", s.websiteLog)
@@ -300,6 +305,36 @@ func siteID(r *http.Request) (uint, error) {
 		return 0, &app.UserError{Msg: "网站编号不对"}
 	}
 	return uint(n), nil
+}
+
+func (s *Server) monitor(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.MonitorPage(r.Context())
+}
+
+func (s *Server) monitorSettings(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req app.MonitorSettings
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.SaveMonitorSettings(req)
+}
+
+func (s *Server) monitorCheck(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.CheckNow(r.Context())
+}
+
+func (s *Server) monitorSite(_ http.ResponseWriter, r *http.Request) (any, error) {
+	hours, _ := strconv.Atoi(r.URL.Query().Get("hours"))
+	return s.app.SiteHistory(r.URL.Query().Get("url"), hours)
+}
+
+func (s *Server) serverMetrics(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	hours, _ := strconv.Atoi(r.URL.Query().Get("hours"))
+	return s.app.ServerHistory(id, hours)
 }
 
 func (s *Server) overview(_ http.ResponseWriter, r *http.Request) (any, error) {
