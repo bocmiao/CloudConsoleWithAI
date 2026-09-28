@@ -142,7 +142,7 @@
             @ask="askAI" @tab="t => serverTab = t" @site="openServerSite" @discover="discover" @log="openLog"></server-overview>
           <div v-show="serverTab === 'sites'" v-if="seenServerSites">
             <site-page v-if="current.server.adapter === '1panel' || current.server.adapter === 'bt'" :key="'s' + current.server.id" :server="current.server.id" :servers="servers" :active="tab === 'servers' && serverTab === 'sites'"
-              :request="serverSitesRequest" @ask="askAI" @server="serverTab = 'connection'" @context="v => siteContext = v"></site-page>
+              :request="serverSitesRequest" @ask="askAI" @server="serverTab = 'connection'" @context="v => serverSiteContext = v"></site-page>
             <div class="group" v-else>
               <div class="row"><ui-icon name="info" class="lg" style="color: var(--accent)"></ui-icon>
                 <div class="grow">网站管理支持 1Panel 和宝塔。{{ adapterName(current.server.adapter) }} 服务器上识别到的网站：
@@ -584,9 +584,10 @@
           <div class="row" v-if="updApplying"><span class="spinner"></span><span class="grow">{{ updApplying }}</span></div>
           <div class="row"><span class="grow small secondary">每天自动检查一次（只问 GitHub 最新的版本号，不发送任何数据）<template v-if="upd.checkedAt"> · 上次 {{ fmtTime(upd.checkedAt) }}</template></span>
             <span class="segmented"><button :class="{on: !upd.enabled}" @click="setUpdateCheck(false)" :disabled="busy">关闭</button><button :class="{on: upd.enabled}" @click="setUpdateCheck(true)" :disabled="busy">开启</button></span></div>
-          <div class="row"><span class="grow small secondary">遇到问题时下载诊断包附在反馈里：版本、系统、哪些功能配置了、最近的操作记录和故障（没有密钥、密码和对话内容，服务器地址只保留前两段）。</span>
+          <div class="row small secondary">遇到问题时下载诊断包附在反馈里：版本、系统、哪些功能配置了、最近的操作记录和故障（没有密钥、密码和对话内容，服务器地址只保留前两段）。</div>
+          <div class="row upd-actions"><span class="grow"></span>
             <button @click="downloadDiagnostics" :disabled="busy">下载诊断包</button>
-            <button @click="checkUpdate" :disabled="busy">检查更新</button>
+            <button @click="checkUpdate" :disabled="busy || !!updApplying">检查更新</button>
             <button class="primary" v-if="upd.newer && upd.canApply" @click="applyUpdate" :disabled="busy || !!updApplying">更新到 {{ upd.latest.version }}</button></div>
         </div>
       </div>
