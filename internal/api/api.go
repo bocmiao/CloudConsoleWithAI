@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -80,8 +79,7 @@ func NewServer(a *app.App, au *auth.Service, version string) *Server {
 
 func (s *Server) routes() {
 	s.mux = http.NewServeMux()
-	static, _ := fs.Sub(webui.Static, "static")
-	s.mux.Handle("GET /", http.FileServerFS(static))
+	s.mux.Handle("GET /", webui.Handler())
 	s.authRoutes()
 
 	api := func(pattern string, h func(w http.ResponseWriter, r *http.Request) (any, error)) {

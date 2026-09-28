@@ -6,6 +6,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.75.0
 	github.com/jchv/go-webview2 v0.0.0-20260205173254-56598839c808
 	github.com/pkg/sftp v1.13.11
+	github.com/ulikunitz/xz v0.5.17
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/crypto v0.57.0
 	golang.org/x/sys v0.48.0
