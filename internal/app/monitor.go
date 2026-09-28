@@ -188,8 +188,14 @@ func (a *App) monitorTargets(ctx context.Context, s MonitorSettings) []monTarget
 		add(monTarget{URL: x, Name: u.Host + strings.TrimSuffix(u.Path, "/"), Source: "手动添加"})
 	}
 	if s.Auto {
+		listed := map[int64]bool{} // servers whose panel listed their sites
 		if v, err := a.Websites(ctx, 0); err == nil {
 			for _, sv := range v.Servers {
+				panel := "1Panel"
+				if sv.Panel == "bt" {
+					panel = "宝塔"
+				}
+				listed[sv.ID] = sv.Error == "" && !sv.NoPanel
 				for _, x := range sv.Sites {
 					d := strings.ToLower(x.Domain)
 					if !x.Running || !hostnameRe.MatchString(d) || x.Type == "stream" {
@@ -199,13 +205,13 @@ func (a *App) monitorTargets(ctx context.Context, s MonitorSettings) []monTarget
 					if x.HTTPS {
 						scheme = "https"
 					}
-					add(monTarget{URL: scheme + "://" + d + "/", Name: d, Source: "1Panel · " + sv.Name})
+					add(monTarget{URL: scheme + "://" + d + "/", Name: d, Source: panel + " · " + sv.Name})
 				}
 			}
 		}
 		servers, _ := a.Store.ListServers()
 		for _, sv := range servers {
-			if sv.Adapter == "1panel" {
+			if sv.Adapter == "1panel" || listed[sv.ID] {
 				continue
 			}
 			raw, _, _ := a.Store.GetProfile(sv.ID)

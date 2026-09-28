@@ -53,6 +53,10 @@ func TestBTWebsites(t *testing.T) {
 	if got.Panel != "bt" || got.Error != "" || got.NoPanel || len(got.Sites) != 1 || got.Sites[0].Domain != "blog.example.com" || got.Sites[0].Type != "php" || !got.Sites[0].Running {
 		t.Fatalf("server = %+v", got)
 	}
+	// The monitoring watches it, named by its panel.
+	if ts := a.monitorTargets(ctx, MonitorSettings{Auto: true}); len(ts) != 1 || ts[0].Name != "blog.example.com" || ts[0].Source != "宝塔 · "+sv.Name {
+		t.Fatalf("monitor targets = %+v", ts)
+	}
 	id := got.Sites[0].ID
 	d, err := a.Website(ctx, sv.ID, id)
 	if err != nil {
