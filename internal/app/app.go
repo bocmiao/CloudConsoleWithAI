@@ -35,6 +35,9 @@ type App struct {
 	Dial func(ctx context.Context, t sshx.Target) (*sshx.Client, error)
 	// TencentEndpoint overrides Tencent Cloud API addresses; tests set it.
 	TencentEndpoint func(service string) string
+	// AliyunCloudEndpoint overrides 阿里云 API addresses for servers, DNS
+	// and CDN; tests set it.
+	AliyunCloudEndpoint func(product, region string) string
 	// AliyunEndpoint, when set, sends Alibaba Cloud SMS there (tests).
 	AliyunEndpoint string
 	// PollInterval, when set, is how often running actions check on
@@ -57,6 +60,7 @@ type App struct {
 	stops     map[string]context.CancelFunc // answers being given, by conversation
 	locks     serverLocks
 	cloud     cloudCache
+	aliCloud  aliCache
 	certs     certCache
 	visits    snapshots[VisitsView]
 	ipf       ipFacts

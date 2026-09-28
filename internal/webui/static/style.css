@@ -1263,7 +1263,7 @@ button.wb-site:hover:not(:disabled) { background: var(--hover); }
   .wb-ring { padding: 10px 12px; gap: 10px; }
 }
 
-/* 腾讯云 › 云服务器 */
+/* 云服务 › 云服务器 */
 .cloud-page { container-type: inline-size; }
 .cloud-traffic { min-width: 130px; }
 .cloud-cidr { margin-left: 6px; }

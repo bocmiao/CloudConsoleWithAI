@@ -212,7 +212,7 @@ func (a *App) env(ctx context.Context, id int64) (store.Server, *actions.Env, er
 		c.Close()
 		return sv, nil, err
 	}
-	env.Cloud = a.tencentClient()
+	env.Cloud, env.Aliyun = a.tencentClient(), a.aliyunClient()
 	return sv, env, nil
 }
 
@@ -368,7 +368,7 @@ func (a *App) runPlan(planID, serverID int64, who string) {
 			needServer = true
 		}
 	}
-	env := &actions.Env{Cloud: a.tencentClient(), PollInterval: a.PollInterval}
+	env := &actions.Env{Cloud: a.tencentClient(), Aliyun: a.aliyunClient(), PollInterval: a.PollInterval}
 	if needServer {
 		if sv, env, err = a.env(ctx, serverID); err != nil {
 			fail(friendlySSHError(err).Error())
@@ -401,7 +401,7 @@ func (a *App) runPlan(planID, serverID int64, who string) {
 			title += "（" + pt + "）"
 		}
 		entry := a.startExec(store.ExecLog{
-			ServerID: sv.ID, ServerName: sv.Name, Adapter: sv.Adapter, Origin: OriginPlan, Kind: store.ExecChange,
+			ServerID: sv.ID, ServerName: serverNameFor(sv, st.Capability), Adapter: sv.Adapter, Origin: OriginPlan, Kind: store.ExecChange,
 			Title: title, Note: st.Summary, Capability: st.Capability, Params: st.Params, Via: r.Impl.Via,
 			Reversible: r.Cap.Reversible, PlanID: v.ID, StepIdx: i,
 		})
@@ -463,7 +463,7 @@ func (a *App) UndoStep(ctx context.Context, planID int64, idx int) (PlanView, er
 	} else {
 		// Run before the execution log existed: the step has what we need.
 		e = store.ExecLog{
-			ServerID: sv.ID, ServerName: sv.Name, Adapter: sv.Adapter, Kind: store.ExecChange, Title: st.Title,
+			ServerID: sv.ID, ServerName: serverNameFor(sv, st.Capability), Adapter: sv.Adapter, Kind: store.ExecChange, Title: st.Title,
 			Capability: st.Capability, Params: st.Params, Via: st.Via, Status: st.Status, Undo: st.Undo,
 			Reversible: st.Reversible, PlanID: planID, StepIdx: idx,
 		}

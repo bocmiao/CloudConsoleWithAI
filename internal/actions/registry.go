@@ -742,6 +742,11 @@ func paramValue(p Param, raw any) (string, error) {
 			return "", fmt.Errorf("参数 %s 要是腾讯云实例 ID（lhins- 或 ins- 开头），%q 不是", p.Name, s)
 		}
 		return s, nil
+	case "aliinstance":
+		if !aliInstanceRe.MatchString(s) {
+			return "", fmt.Errorf("参数 %s 要是阿里云实例 ID（i- 开头，或 32 位十六进制），%q 不是", p.Name, s)
+		}
+		return s, nil
 	case "region":
 		if !regionRe.MatchString(s) {
 			return "", fmt.Errorf("参数 %s 要是地域，例如 ap-guangzhou，%q 不是", p.Name, s)

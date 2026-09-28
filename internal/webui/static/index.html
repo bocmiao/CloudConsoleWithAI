@@ -55,7 +55,7 @@
     </div>
 
     <div class="side-section">
-      <div class="side-label">腾讯云</div>
+      <div class="side-label">云服务</div>
       <div class="side-item" :class="{active: tab === 'cloud'}" @click="go('cloud')"><ui-icon name="cloud"></ui-icon><span class="grow">云服务器</span></div>
       <div class="side-item" :class="{active: tab === 'stats' && statsView === 'eo'}" @click="openStats('eo')"><ui-icon name="bolt"></ui-icon><span class="grow">EdgeOne</span></div>
       <div class="side-item" :class="{active: tab === 'dns'}" @click="go('dns')"><ui-icon name="globe"></ui-icon><span class="grow">解析</span></div>
@@ -201,7 +201,7 @@
               <div class="group">
                 <div class="row"><span class="k">实例</span><span class="v">{{ cloud.kind === 'lighthouse' ? '轻量应用服务器' : '云服务器 CVM' }} · {{ cloud.name }} · {{ cloud.id }}</span></div>
                 <div class="row"><span class="k">地域和配置</span><span class="v">{{ cloud.regionName }} · {{ cloud.cpu }} 核 {{ cloud.memoryGB }}GB · 系统盘 {{ cloud.diskGB }}GB · 带宽 {{ cloud.bandwidthMbps }}Mbps</span></div>
-                <div class="row"><span class="grow small secondary">防火墙、快照、开关机和监控在「腾讯云 › 云服务器」里。</span>
+                <div class="row"><span class="grow small secondary">防火墙、快照、开关机和监控在「云服务 › 云服务器」里。</span>
                   <button @click="openCloud(cloud)"><ui-icon name="cloud"></ui-icon>打开</button></div>
               </div>
             </template>
@@ -407,11 +407,11 @@
       </div>
     </div>
 
-    <!-- Tencent Cloud servers -->
+    <!-- Cloud servers: Tencent Cloud and 阿里云 -->
     <div class="tab-pane" v-if="seen.cloud" v-show="tab === 'cloud'">
       <header class="toolbar"><h1>云服务器</h1></header>
       <div class="page wide">
-        <cloud-page :configured="tc.configured" :active="tab === 'cloud'" :request="cloudRequest" :servers="servers"
+        <cloud-page :configured="tc.configured" :aliyun="ali.configured" :active="tab === 'cloud'" :request="cloudRequest" :servers="servers"
           @server="select" @add="addFromCloud" @settings="go('settings')" @ask="askAI"></cloud-page>
       </div>
     </div>
@@ -514,6 +514,26 @@
             <li>用户权限里搜索并勾选：<code>QcloudDNSPodFullAccess</code>（解析）、<code>QcloudTEOFullAccess</code>（EdgeOne）、<code>QcloudLighthouseFullAccess</code>（轻量服务器）、<code>QcloudCVMFullAccess</code> 和 <code>QcloudVPCFullAccess</code>（云服务器和它的安全组）、<code>QcloudCBSFullAccess</code>（云服务器快照）、<code>QcloudMonitorReadOnlyAccess</code>（监控数据）、<code>QcloudTATFullAccess</code>（自动化助手，不用密码连接服务器时需要）、<code>QcloudSSLReadOnlyAccess</code>（在「证书」页查看腾讯云 SSL 证书）、<code>QcloudCOSFullAccess</code>（「存储」页管理存储桶和文件）、<code>QcloudSMSFullAccess</code>（Web 版用短信验证码登录时）。用不到的产品可以不勾；只想让 AI 查看、不让它修改的话，改选名字里带 ReadOnly 的同名策略；</li>
             <li>创建完成后复制 SecretId 和 SecretKey 粘贴到上面。SecretKey 只显示一次；</li>
             <li>不要用主账号的密钥。子账号只有你勾选的权限，不能购买新资源，随时可以在访问管理里删掉。</li>
+          </ol>
+        </details>
+
+        <div class="group-title">阿里云</div>
+        <div class="group">
+          <div class="row form"><span class="k">AccessKey ID</span><span class="v"><input v-model="ali.id" :placeholder="ali.configured ? '已保存：' + ali.hint + '（留空表示不修改）' : '一般以 LTAI 开头'" autocomplete="off" aria-label="AccessKey ID"></span></div>
+          <div class="row form"><span class="k">AccessKey Secret</span><span class="v"><input type="password" v-model="ali.secret" :placeholder="ali.configured ? '已保存（留空表示不修改）' : '创建时只显示一次，请复制保存'" autocomplete="off" aria-label="AccessKey Secret"></span></div>
+          <div class="row"><span class="grow small secondary">{{ ali.info || (ali.configured ? '已配置' : '还没有配置。配好后「云服务器」里会出现阿里云的轻量应用服务器和 ECS，AI 也能查看和管理它们') }}</span>
+            <button v-if="ali.configured" class="plain destructive" @click="clearAliyun" :disabled="busy">清除</button>
+            <button @click="testAliyun" :disabled="busy || !ali.configured">测试</button>
+            <button class="primary" @click="saveAliyun" :disabled="busy || !ali.id || !ali.secret">保存</button></div>
+        </div>
+        <details class="guide">
+          <summary><ui-icon name="chevron"></ui-icon>怎么创建给 Miao Panel 用的 RAM 用户（只给需要的权限）？</summary>
+          <ol>
+            <li>打开阿里云控制台的<a href="https://ram.console.aliyun.com/users" target="_blank" rel="noopener">访问控制（RAM）</a>，进入「用户 → 创建用户」；</li>
+            <li>登录名称随便填，比如 miaopanel；访问方式只勾选「使用永久 AccessKey 访问」，<b>不要</b>勾选控制台访问；</li>
+            <li>创建后给这个用户「添加权限」，搜索并勾选：<code>AliyunECSFullAccess</code>（云服务器 ECS 和它的安全组、快照）、<code>AliyunSWASFullAccess</code>（轻量应用服务器）、<code>AliyunCloudMonitorReadOnlyAccess</code>（ECS 的监控数据）、<code>AliyunDNSFullAccess</code>（云解析）、<code>AliyunCDNFullAccess</code>（CDN）。用不到的产品可以不勾；只想让 AI 查看的话，改选名字里带 ReadOnly 的同名策略；</li>
+            <li>复制 AccessKey ID 和 AccessKey Secret 粘贴到上面。Secret 只显示一次；</li>
+            <li>不要用主账号的 AccessKey。RAM 用户只有你勾选的权限，随时可以在访问控制里禁用或删除。</li>
           </ol>
         </details>
 

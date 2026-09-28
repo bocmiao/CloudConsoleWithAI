@@ -1521,3 +1521,14 @@ Web 版除了「用户名 + 密码」，可以用邮箱或手机收到的验证�
 - **页面**：网站详情多一个「备份」：立即备份、定时备份（时间、保留 3/7/14/30 份、放在服务器本机或备份账号；选本机时提醒「服务器坏了会一起丢」）、备份列表（时间、备注、位置、文件名，下载和恢复）。下载时先让 1Panel 把文件准备在服务器上，再走文件管理的下载。
 - **AI**：新工具 `panel_backups` 看一个网站的备份和定时备份；改动前建议先 `site.backup`，只在用户明确要求时才 `site.restore`。
 - 纯 Linux 和宝塔服务器上的备份（tar 加 mysqldump 的定时任务）还没有做。
+
+### 阿里云：服务器（已完成）
+
+「设置 → 阿里云」保存一个 RAM 用户的 AccessKey（和腾讯云的一样放在密钥存储里，页面上列出要勾的策略：`AliyunECSFullAccess`、`AliyunSWASFullAccess`、`AliyunCloudMonitorReadOnlyAccess`、`AliyunDNSFullAccess`、`AliyunCDNFullAccess`），「测试」会分别说服务器、云解析、CDN 能不能用，缺哪个权限。
+
+- **客户端**（`internal/aliyun`）：RPC 签名（HMAC-SHA1），ECS、轻量应用服务器（SWAS）、云监控、云解析、CDN 的接口；`aliyuntest` 是一个严格的假阿里云（检查签名、nonce、时间、版本、必填参数、地域和接入点是否对得上），测试全部跑在它上面。
+- **云服务器页**：侧边栏的「腾讯云」改叫「云服务」。云服务器页同时读两家（`/api/tencent/servers`、`/api/aliyun/servers`），一家读不到只在那家报错；两家都配了时每台前面标出是哪家。阿里云的详情（`GET /api/aliyun/servers/{region}/{instance}`）和腾讯云同一个样子：24 小时 CPU、内存、公网出入带宽（带宽换算成 Mbps），防火墙（ECS 是第一个安全组），系统盘快照。
+- **清单**：`aliyun.server.start / stop / reboot`、`aliyun.snapshot.create`、`aliyun.firewall.open / close`，和 `cloud.*` 一样的规则（22、3389 不允许关，数据库端口对所有人放行是 R3）；阿里云一条规则只能是一个端口或一段范围。按量付费的 ECS 关机用「继续计费」模式，保证公网 IP 不变、一定能再开机，清单里写明。没有对应 Miao Panel 服务器的清单，记录里记在「阿里云」名下。
+- **添加服务器**：从阿里云实例「添加」时带上名称和公网 IP，用 SSH 连接（阿里云没有腾讯云的自动化助手）。
+- **AI**：`aliyun_servers`，不带参数列出全部，带实例看详情。
+- 下一步：阿里云云解析接入「解析」页，CDN 的刷新和预热。

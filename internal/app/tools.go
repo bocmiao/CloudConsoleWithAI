@@ -51,6 +51,12 @@ const systemPrompt = `你是 Miao Panel 里的服务器运维助手。用户可�
   清单的 server_id 填对应的 Miao Panel 服务器编号，没有就填 0；
 - 重启、关机或其他大改动前，建议先加一步 cloud.snapshot.create；到期不足 15 天、流量包用量超过 80% 要主动提醒用户。
 
+阿里云服务器（轻量应用服务器、云服务器 ECS）：
+- aliyun_servers 不带参数看所有实例（到期、自动续费、流量包、对应的 Miao Panel 服务器），带 instance 和 region 看一台的防火墙、快照和 24 小时监控；
+- 能执行：aliyun.firewall.open / aliyun.firewall.close（轻量服务器防火墙或 ECS 的第一个安全组；一条规则只能是一个端口或一段范围）、aliyun.snapshot.create（系统盘快照）、
+  aliyun.server.reboot / stop / start。清单的 server_id 填对应的 Miao Panel 服务器编号，没有就填 0；
+- 按量付费的 ECS 关机后仍然计费（保留公网 IP），关机前告诉用户；其他提醒和腾讯云服务器一样。
+
 网站访问量（PV、UV、独立 IP、地区、访问的页面和目录、来源、爬虫、状态码、设备）和可疑 IP：用 site_visits，可以看全部网站合计，也可以用 site 只看一个网站。
 - 经过 EdgeOne 的网站用 source=edgeone（EdgeOne 离线日志：每个请求都在，访客 IP 真实）；没有经过 EdgeOne 的网站给 server_id 看服务器日志。
   服务器日志里访客 IP 是 EdgeOne 节点时（结果里会提示），那台服务器的 UV、IP、地区和风险 IP 都不准，不要据此封禁；
@@ -248,6 +254,15 @@ func (a *App) tools() map[string]ai.Tool {
 				"轻量服务器本月流量包用量、CVM 安全组，以及对应的 Miao Panel 服务器编号。结果缓存 5 分钟，refresh=true 强制刷新。",
 			Schema: obj(map[string]any{"refresh": map[string]any{"type": "boolean"}}),
 		}, Run: a.toolTencentServers},
+		{Def: ai.ToolDef{
+			Name: "aliyun_servers",
+			Description: "阿里云的轻量应用服务器和云服务器 ECS（只读）。不带参数：所有地域的实例 id、地域、状态、配置、公网 IP、计费方式、到期和剩余天数、自动续费、" +
+				"轻量服务器流量包用量，以及对应的 Miao Panel 服务器编号（缓存 5 分钟）。带 instance 和 region：这一台的防火墙或安全组入站规则、系统盘快照、最近 24 小时的 CPU、内存和公网带宽。",
+			Schema: obj(map[string]any{
+				"instance": map[string]any{"type": "string", "description": "实例 id（i- 开头是 ECS，32 位十六进制是轻量服务器）；不填列出全部"},
+				"region":   map[string]any{"type": "string", "description": "地域，例如 cn-hangzhou"},
+			}),
+		}, Run: a.toolAliyunServers},
 		{Def: ai.ToolDef{
 			Name:        "tencent_server_detail",
 			Description: "查看一台腾讯云服务器的详情（只读）：防火墙/安全组入站规则、系统盘快照，以及云监控的 CPU、内存、公网带宽（平均、最高及时间、走势）。",

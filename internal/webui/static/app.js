@@ -2251,7 +2251,7 @@ const PALETTE_PAGES = [
   { stats: ['logs', 'overview'], label: '访问统计', icon: 'chart', keys: 'stats visits pv uv 统计 流量' },
   { stats: ['logs', 'security'], label: '安全', icon: 'shield', keys: 'security 封禁 ip 攻击' },
   { tab: 'certs', label: '证书', icon: 'lock', keys: 'certs ssl https 证书 续签' },
-  { tab: 'cloud', label: '云服务器', icon: 'cloud', keys: 'cloud lighthouse cvm 轻量 云服务器 实例 防火墙 快照 开机 关机 重启 到期' },
+  { tab: 'cloud', label: '云服务器', icon: 'cloud', keys: 'cloud lighthouse cvm ecs aliyun 阿里云 腾讯云 轻量 云服务器 实例 防火墙 安全组 快照 开机 关机 重启 到期' },
   { stats: ['eo'], label: 'EdgeOne', icon: 'bolt', keys: 'edgeone eo cdn 缓存 cache' },
   { tab: 'dns', label: '解析', icon: 'globe', keys: 'dns dnspod 解析 域名' },
   { tab: 'storage', label: '存储', icon: 'bucket', keys: 'cos storage bucket 存储桶' },
@@ -2748,32 +2748,54 @@ const ServerApps = {
   </div>`,
 };
 
-// 腾讯云 › 云服务器: the Lighthouse and CVM instances in the account, their
-// expiry and traffic package, and one instance's monitoring, firewall and
-// snapshots. Starting, stopping, rebooting, snapshots and firewall changes
+// 云服务 › 云服务器: the lightweight and full servers in the Tencent Cloud
+// and 阿里云 accounts, their expiry and traffic package, and one instance's
+// monitoring, firewall and snapshots. Starting, stopping, rebooting, snapshots and firewall changes
 // are checklists, confirmed first.
 const CLOUD_STATES = { RUNNING: ['good', '运行中'], STOPPED: ['off', '已关机'], STARTING: ['warn', '正在开机'], STOPPING: ['warn', '正在关机'],
-  REBOOTING: ['warn', '正在重启'], PENDING: ['warn', '创建中'], SHUTDOWN: ['off', '已关机'], TERMINATING: ['off', '正在退还'] };
+  REBOOTING: ['warn', '正在重启'], PENDING: ['warn', '创建中'], SHUTDOWN: ['off', '已关机'], TERMINATING: ['off', '正在退还'],
+  RESETTING: ['warn', '正在重置'], UPGRADING: ['warn', '正在升级'], DISABLED: ['off', '已停用'] };
 const cloudState = s => CLOUD_STATES[s] || ['off', s || '未知'];
-const cloudKind = k => k === 'lighthouse' ? '轻量应用服务器' : '云服务器 CVM';
+const cloudKind = k => ({ lighthouse: '轻量应用服务器', cvm: '云服务器 CVM', swas: '轻量应用服务器', ecs: '云服务器 ECS' })[k] || k;
+// A lightweight server has its own firewall; the others use a security group.
+const cloudLight = k => k === 'lighthouse' || k === 'swas';
+const CLOUD_NAMES = { tencent: '腾讯云', aliyun: '阿里云' };
 
 const CloudPage = {
-  props: { active: Boolean, request: Object, servers: { type: Array, default: () => [] }, configured: Boolean },
+  // configured: Tencent Cloud's keys are set; aliyun: 阿里云's.
+  props: { active: Boolean, request: Object, servers: { type: Array, default: () => [] }, configured: Boolean, aliyun: Boolean },
   emits: ['server', 'add', 'settings', 'ask'],
   setup(props, { emit }) {
     const list = ref(null), loading = ref(false), error = ref('');
-    const open = ref(null); // { region, id }
+    const open = ref(null); // { provider, region, id }
     const detail = ref(null), dLoading = ref(false), dError = ref('');
     const plan = ref(null), planning = ref(false), formError = ref('');
     const fw = reactive({ open: false, port: '', protocol: 'TCP', who: 'all', cidr: '', description: '' });
     const snap = reactive({ open: false, name: '' });
     let seq = 0;
 
+    const anyCloud = computed(() => props.configured || props.aliyun);
+    // Both clouds at once; one that fails says so and the other still shows.
+    let listSeq = 0;
     async function loadList(refresh) {
-      if (!props.configured) return;
+      if (!anyCloud.value) return;
+      const n = ++listSeq;
       loading.value = true; error.value = '';
-      try { list.value = await api('GET', '/api/tencent/servers' + (refresh ? '?refresh=1' : '')); }
-      catch (e) { error.value = e.message; } finally { loading.value = false; }
+      const q = refresh ? '?refresh=1' : '';
+      const clouds = [props.configured && 'tencent', props.aliyun && 'aliyun'].filter(Boolean);
+      const got = await Promise.allSettled(clouds.map(c => api('GET', `/api/${c}/servers${q}`)));
+      if (n !== listSeq) return; // a newer load, with other clouds, is on its way
+      const out = { servers: [], errors: [], fetchedAt: '' };
+      got.forEach((r, i) => {
+        const name = CLOUD_NAMES[clouds[i]];
+        if (r.status === 'rejected') { out.errors.push(name + '：' + r.reason.message); return; }
+        out.servers.push(...r.value.servers.map(x => ({ ...x, provider: clouds[i] })));
+        out.errors.push(...(r.value.errors || []).map(e => clouds.length > 1 ? name + '：' + e : e));
+        if (r.value.fetchedAt > out.fetchedAt) out.fetchedAt = r.value.fetchedAt;
+      });
+      if (!out.servers.length && got.every(r => r.status === 'rejected')) error.value = out.errors.join('；');
+      else list.value = out;
+      loading.value = false;
     }
     async function loadDetail() {
       const o = open.value;
@@ -2781,15 +2803,15 @@ const CloudPage = {
       const n = ++seq;
       dLoading.value = true; dError.value = '';
       try {
-        const d = await api('GET', `/api/tencent/servers/${encodeURIComponent(o.region)}/${encodeURIComponent(o.id)}`);
-        if (n === seq) detail.value = d;
+        const d = await api('GET', `/api/${o.provider}/servers/${encodeURIComponent(o.region)}/${encodeURIComponent(o.id)}`);
+        if (n === seq) detail.value = { ...d, instance: { ...d.instance, provider: o.provider } };
       } catch (e) { if (n === seq) dError.value = e.message; }
       finally { if (n === seq) dLoading.value = false; }
     }
-    function openOne(s) { open.value = { region: s.region, id: s.id }; detail.value = null; loadDetail(); }
+    function openOne(s) { open.value = { provider: s.provider || 'tencent', region: s.region, id: s.id }; detail.value = null; loadDetail(); }
     function back() { open.value = null; detail.value = null; loadList(); }
     watch(() => props.active, v => { if (v) { if (!list.value) loadList(); if (open.value) loadDetail(); } }, { immediate: true });
-    watch(() => props.configured, v => { if (v && props.active) loadList(); });
+    watch(() => [props.configured, props.aliyun], () => { if (props.active) loadList(); });
     watch(() => props.request, r => { if (r && r.id) openOne(r); }, { immediate: true });
 
     const servers = computed(() => (list.value && list.value.servers) || []);
@@ -2797,7 +2819,7 @@ const CloudPage = {
     const inst = computed(() => detail.value && detail.value.instance);
     const daysTo = t => t ? Math.floor((new Date(t) - Date.now()) / 86400000) : null;
     function expiry(s) {
-      if (!s.expiredTime) return { text: s.chargeType === 'POSTPAID_BY_HOUR' ? '按量计费' : '', level: '' };
+      if (!s.expiredTime) return { text: ['POSTPAID_BY_HOUR', 'POSTPAID'].includes(s.chargeType) ? '按量计费' : '', level: '' };
       const d = daysTo(s.expiredTime);
       const auto = s.renewFlag === 'NOTIFY_AND_AUTO_RENEW';
       const text = d < 0 ? '已过期' : `还剩 ${d} 天`;
@@ -2809,7 +2831,7 @@ const CloudPage = {
     async function propose(body) {
       planning.value = true; formError.value = '';
       try {
-        plan.value = await api('POST', '/api/tencent/servers/plan', { instance: open.value.id, region: open.value.region, ...body });
+        plan.value = await api('POST', `/api/${open.value.provider}/servers/plan`, { instance: open.value.id, region: open.value.region, ...body });
         fw.open = false; snap.open = false;
       } catch (e) { formError.value = e.message; if (!fw.open && !snap.open) notify(e.message, 'error'); }
       finally { planning.value = false; }
@@ -2842,26 +2864,29 @@ const CloudPage = {
     function planDone() { loadList(true); loadDetail(); }
     const loginPort = r => /^(22|3389)$/.test(String(r.port)) || /\bALL\b/i.test(String(r.port));
     const metricFormat = m => v => (Math.round(v * 10) / 10) + ' ' + (m.unit === '%' ? '%' : m.unit || '');
-    const snapState = s => ({ NORMAL: '可用', CREATING: '创建中', ROLLBACKING: '回滚中' }[s.state] || s.state);
+    const snapState = s => ({ NORMAL: '可用', CREATING: '创建中', ROLLBACKING: '回滚中', FAILED: '失败' }[s.state] || s.state);
+    const providerName = computed(() => CLOUD_NAMES[(open.value && open.value.provider) || 'tencent']);
     function ask() {
       const s = inst.value;
-      emit('ask', `帮我看看腾讯云${cloudKind(s.kind)}「${s.name || s.id}」（${s.id}，${s.regionName}）的状况：监控、防火墙和到期，有没有需要处理的？`);
+      emit('ask', `帮我看看${providerName.value}${cloudKind(s.kind)}「${s.name || s.id}」（${s.id}，${s.regionName}）的状况：监控、防火墙和到期，有没有需要处理的？`);
     }
+    const planServer = computed(() => plan.value && plan.value.serverId && serverOf(plan.value.serverId) ? serverOf(plan.value.serverId).name : providerName.value);
+    const both = computed(() => props.configured && props.aliyun);
     return { list, loading, error, open, detail, dLoading, dError, plan, planning, formError, fw, snap, servers, serverOf, inst,
       loadList, loadDetail, openOne, back, expiry, traffic, trafficLevel, power, openFirewall, submitFirewall, closeRule, openSnap, submitSnap,
-      closePlan, planDone, loginPort, metricFormat, snapState, ask, cloudState, cloudKind, fmtBytes };
+      closePlan, planDone, loginPort, metricFormat, snapState, ask, cloudState, cloudKind, cloudLight, fmtBytes, anyCloud, providerName, planServer, both, CLOUD_NAMES };
   },
   template: `
   <div class="cloud-page">
-    <div class="group" v-if="!configured">
+    <div class="group" v-if="!anyCloud">
       <div class="row"><ui-icon name="cloud" class="lg" style="color: var(--accent)"></ui-icon>
-        <div class="grow">还没有配置腾讯云密钥<span class="small secondary block">在「设置 → 腾讯云」填写 SecretId 和 SecretKey，就能在这里看到账号里的轻量应用服务器和云服务器。</span></div>
+        <div class="grow">还没有配置云账号的密钥<span class="small secondary block">在「设置」里填写腾讯云的 SecretId 和 SecretKey，或阿里云的 AccessKey，就能在这里看到账号里的轻量应用服务器和云服务器。</span></div>
         <button class="primary" @click="$emit('settings')">去设置</button></div>
     </div>
 
     <!-- The instances -->
     <template v-else-if="!open">
-      <div class="page-head"><p>腾讯云账号里的轻量应用服务器和云服务器 CVM：到期、流量包、监控、防火墙和快照。开关机、快照和防火墙的修改都会先生成一份清单，确认后才执行。</p></div>
+      <div class="page-head"><p>{{ both ? '腾讯云和阿里云' : aliyun ? '阿里云' : '腾讯云' }}账号里的轻量应用服务器和云服务器：到期、流量包、监控、防火墙和快照。开关机、快照和防火墙的修改都会先生成一份清单，确认后才执行。</p></div>
       <div class="stat-bar">
         <span class="small tertiary" v-if="list">{{ servers.length }} 台<span v-if="list.fetchedAt"> · 更新于 {{ new Date(list.fetchedAt).toLocaleTimeString('zh-CN', { hour12: false }) }}</span></span>
         <span class="grow"></span>
@@ -2876,8 +2901,8 @@ const CloudPage = {
           <table class="table cloud-table">
             <thead><tr><th>服务器</th><th>状态</th><th>配置</th><th>公网 IP</th><th>到期</th><th>流量包</th><th>Miao Panel</th></tr></thead>
             <tbody>
-              <tr v-for="s in servers" :key="s.id" class="site-row" @click="openOne(s)">
-                <td><div class="site-name">{{ s.name || s.id }}</div><div class="small tertiary">{{ cloudKind(s.kind) }} · {{ s.regionName }}</div></td>
+              <tr v-for="s in servers" :key="s.provider + s.id" class="site-row" @click="openOne(s)">
+                <td><div class="site-name">{{ s.name || s.id }}</div><div class="small tertiary"><template v-if="both">{{ CLOUD_NAMES[s.provider] }} · </template>{{ cloudKind(s.kind) }} · {{ s.regionName }}</div></td>
                 <td class="nowrap"><span class="sdot" :class="cloudState(s.state)[0]"></span>{{ cloudState(s.state)[1] }}</td>
                 <td class="nowrap">{{ s.cpu }} 核 · {{ s.memoryGB }} GB<div class="small tertiary">{{ s.diskGB }} GB 硬盘<span v-if="s.bandwidthMbps"> · {{ s.bandwidthMbps }} Mbps</span></div></td>
                 <td class="nowrap mono small">{{ (s.publicIPs || [])[0] || '—' }}</td>
@@ -2904,7 +2929,7 @@ const CloudPage = {
         <template v-if="inst">
           <div class="grow site-title">
             <h2>{{ inst.name || inst.id }}</h2>
-            <div class="small secondary"><span class="sdot" :class="cloudState(inst.state)[0]"></span>{{ cloudState(inst.state)[1] }} · {{ cloudKind(inst.kind) }} · {{ inst.regionName }} · {{ inst.id }}</div>
+            <div class="small secondary"><span class="sdot" :class="cloudState(inst.state)[0]"></span>{{ cloudState(inst.state)[1] }} · {{ providerName }} · {{ cloudKind(inst.kind) }} · {{ inst.regionName }} · {{ inst.id }}</div>
           </div>
           <div class="site-actions">
             <button v-if="inst.serverId && serverOf(inst.serverId)" @click="$emit('server', inst.serverId)"><ui-icon name="server"></ui-icon>服务器页</button>
@@ -2944,7 +2969,7 @@ const CloudPage = {
           </section>
         </div>
 
-        <div class="group-title cloud-title">{{ inst.kind === 'lighthouse' ? '防火墙' : '安全组' }}<span class="tertiary small" v-if="detail.group">{{ detail.group }}（同一安全组的服务器共用这些规则）</span>
+        <div class="group-title cloud-title">{{ cloudLight(inst.kind) ? '防火墙' : '安全组' }}<span class="tertiary small" v-if="detail.group">{{ detail.group }}（同一安全组的服务器共用这些规则）</span>
           <span class="grow"></span><button class="plain small" @click="openFirewall" :disabled="planning"><ui-icon name="plus"></ui-icon>放行端口</button></div>
         <div class="group">
           <div class="row" v-if="detail.firewallError"><ui-icon name="alert" class="st-crit"></ui-icon><span class="grow secondary">{{ detail.firewallError }}</span></div>
@@ -2967,10 +2992,10 @@ const CloudPage = {
         <div class="group-title cloud-title">系统盘快照<span class="grow"></span><button class="plain small" @click="openSnap" :disabled="planning"><ui-icon name="plus"></ui-icon>创建快照</button></div>
         <div class="group">
           <div class="row" v-if="detail.snapshotError"><ui-icon name="alert" class="st-crit"></ui-icon><span class="grow secondary">{{ detail.snapshotError }}</span></div>
-          <div class="row secondary" v-else-if="!detail.snapshots.length">还没有快照。大改之前做一个，出问题可以在腾讯云控制台回滚。</div>
+          <div class="row secondary" v-else-if="!detail.snapshots.length">还没有快照。大改之前做一个，出问题可以在{{ providerName }}控制台回滚。</div>
           <div class="row" v-for="sn in detail.snapshots" :key="sn.id">
             <div class="grow"><div>{{ sn.name || sn.id }}</div><div class="small tertiary">{{ sn.id }}<span v-if="sn.created"> · {{ new Date(sn.created).toLocaleString('zh-CN', { hour12: false }) }}</span><span v-if="sn.sizeGB"> · {{ sn.sizeGB }} GB</span></div></div>
-            <span class="small"><span class="sdot" :class="sn.state === 'NORMAL' ? 'good' : 'warn'"></span>{{ snapState(sn) }}<span v-if="sn.state === 'CREATING' && sn.percent"> {{ sn.percent }}%</span></span>
+            <span class="small"><span class="sdot" :class="sn.state === 'NORMAL' ? 'good' : sn.state === 'FAILED' ? 'crit' : 'warn'"></span>{{ snapState(sn) }}<span v-if="sn.state === 'CREATING' && sn.percent"> {{ sn.percent }}%</span></span>
           </div>
         </div>
       </template>
@@ -2980,7 +3005,7 @@ const CloudPage = {
     <div class="sheet-mask" v-if="fw.open" @click.self="fw.open = false">
       <div class="sheet" role="dialog" aria-label="放行端口">
         <h2>放行端口</h2>
-        <p>在{{ inst && inst.kind === 'lighthouse' ? '防火墙' : '安全组' }}里加一条允许访问的规则。只给自己用的端口（数据库、面板）最好只允许自己的 IP。</p>
+        <p>在{{ inst && cloudLight(inst.kind) ? '防火墙' : '安全组' }}里加一条允许访问的规则。只给自己用的端口（数据库、面板）最好只允许自己的 IP。<template v-if="inst && inst.provider === 'aliyun'">阿里云的一条规则只能是一个端口或一段范围。</template></p>
         <div class="group">
           <div class="row form"><span class="k">端口</span><span class="v"><input v-model="fw.port" placeholder="如 8080，或 8000-8100" aria-label="端口" autocomplete="off"></span></div>
           <div class="row form"><span class="k">协议</span><span class="v"><span class="segmented"><button :class="{on: fw.protocol === 'TCP'}" @click="fw.protocol = 'TCP'">TCP</button><button :class="{on: fw.protocol === 'UDP'}" @click="fw.protocol = 'UDP'">UDP</button></span></span></div>
@@ -2998,7 +3023,7 @@ const CloudPage = {
     <div class="sheet-mask" v-if="snap.open" @click.self="snap.open = false">
       <div class="sheet" role="dialog" aria-label="创建快照">
         <h2>创建快照</h2>
-        <p>给系统盘做一个整盘备份，不影响运行。{{ inst && inst.kind === 'cvm' ? '云服务器的快照按容量收费。' : '轻量应用服务器有免费的快照额度。' }}</p>
+        <p>给系统盘做一个整盘备份，不影响运行。{{ inst && !cloudLight(inst.kind) ? '云服务器的快照按容量收费。' : '轻量应用服务器有免费的快照额度。' }}</p>
         <div class="group"><div class="row form"><span class="k">名称</span><span class="v"><input v-model="snap.name" placeholder="不填自动生成，如 升级前" aria-label="快照名称" autocomplete="off"></span></div></div>
         <div class="notice" v-if="formError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ formError }}</div>
         <div class="sheet-actions"><button @click="snap.open = false">取消</button>
@@ -3011,7 +3036,7 @@ const CloudPage = {
       <div class="sheet plan-sheet" role="dialog" aria-label="确认清单">
         <h2>{{ plan.title }}</h2>
         <p>勾选后点「执行」，确认后才会生效。</p>
-        <plan-card :plan="plan" server-name="腾讯云" @done="planDone"></plan-card>
+        <plan-card :plan="plan" :server-name="planServer" @done="planDone"></plan-card>
         <div class="sheet-actions"><button @click="closePlan">关闭</button></div>
       </div>
     </div>
@@ -6589,6 +6614,7 @@ const app = createApp({
     let followChat = true;
     const op = reactive({ port: 0, host: '', apiKey: '', hasKey: false, info: '' });
     const tc = reactive({ configured: false, hint: '', secretId: '', secretKey: '', info: '' });
+    const ali = reactive({ configured: false, hint: '', id: '', secret: '', info: '' });
     const freeCmd = reactive({ enabled: false });
     async function loadFree() { Object.assign(freeCmd, await api('GET', '/api/settings/free-command')); }
     async function setFree(on) {
@@ -6687,6 +6713,26 @@ const app = createApp({
       if (!confirm('确定要清除保存的腾讯云密钥吗？')) return;
       await guarded('正在清除……', async () => { setTencent(await api('DELETE', '/api/settings/tencent')); });
     }
+    function setAliyun(v) { Object.assign(ali, { configured: v.configured, hint: v.accessKeyId || '', id: '', secret: '', info: '' }); }
+    async function loadAliyun() { setAliyun(await api('GET', '/api/settings/aliyun')); }
+    async function saveAliyun() {
+      await guarded('正在保存……', async () => {
+        setAliyun(await api('PUT', '/api/settings/aliyun', { accessKeyId: ali.id, accessKeySecret: ali.secret }));
+        notify('已保存，正在测试……');
+        await testAliyun();
+      });
+    }
+    async function testAliyun() {
+      await guarded('正在连接阿里云……', async () => {
+        const r = await api('POST', '/api/settings/aliyun/test');
+        ali.info = '连接成功：' + r.info;
+        notify('阿里云可以正常使用');
+      });
+    }
+    async function clearAliyun() {
+      if (!confirm('确定要清除保存的阿里云 AccessKey 吗？')) return;
+      await guarded('正在清除……', async () => { setAliyun(await api('DELETE', '/api/settings/aliyun')); });
+    }
     const seen = reactive({}); // pages opened at least once stay mounted
     const termRequest = ref(null);
     // The web edition's logged-in account.
@@ -6709,7 +6755,7 @@ const app = createApp({
     // ⌘J / Ctrl+J; a question asked there says which page it came from.
     const aiPanel = ref(false);
     const siteContext = ref('');
-    const PAGE_NAMES = { home: '总览', chat: 'AI 助手', inbox: '待处理', certs: '证书', dns: '解析', storage: '存储', terminal: '终端', files: '文件', logs: '记录', settings: '设置', sites: '网站管理', cloud: '腾讯云 · 云服务器', monitor: '监控' };
+    const PAGE_NAMES = { home: '总览', chat: 'AI 助手', inbox: '待处理', certs: '证书', dns: '解析', storage: '存储', terminal: '终端', files: '文件', logs: '记录', settings: '设置', sites: '网站管理', cloud: '云服务器', monitor: '监控' };
     const pageContext = computed(() => {
       const t = tab.value;
       if (t === 'servers') {
@@ -6764,6 +6810,11 @@ const app = createApp({
     // 添加 on the 云服务器 page: the add dialog, filled in from the instance.
     function addFromCloud(inst) {
       openAdd();
+      // 阿里云 has no Tencent automation agent: connect over SSH.
+      if (inst.provider === 'aliyun') {
+        Object.assign(addForm, { name: inst.name, host: inst.publicIPs[0], username: 'root', instanceId: '', region: '', authKind: 'password' });
+        return;
+      }
       if (!cloudList.value.some(x => x.id === inst.id)) cloudList.value = [...cloudList.value, inst];
       cloudPick.value = inst.id;
       pickCloud();
@@ -7156,10 +7207,10 @@ const app = createApp({
       }
       return out;
     });
-    // 腾讯云 › 云服务器, opened on one instance.
+    // 云服务 › 云服务器, opened on one instance.
     const cloudRequest = ref(null);
     function openCloud(c) { cloudRequest.value = { region: c.region, id: c.id }; go('cloud'); }
-    // 网站 › 访问统计 and 安全, 腾讯云 › EdgeOne: parts of the statistics page.
+    // 网站 › 访问统计 and 安全, 云服务 › EdgeOne: parts of the statistics page.
     const visitSection = ref(pref('miao.visitSection', 'overview'));
     const statsRequest = ref(null);
     function openStats(view, section) {
@@ -7172,7 +7223,7 @@ const app = createApp({
       try {
         info.value = await api('GET', '/api/info');
         presets.value = await api('GET', '/api/ai/presets');
-        await Promise.all([loadServers(), loadAI(), loadSpend(), loadConvs(), loadTencent(), loadFree(), loadUnread(), loadOverview()]);
+        await Promise.all([loadServers(), loadAI(), loadSpend(), loadConvs(), loadTencent(), loadAliyun().catch(() => {}), loadFree(), loadUnread(), loadOverview()]);
         if (convs.value.length) await openConv(convs.value[0].id);
         if (servers.value.length) await select(servers.value[0].id, tab.value !== 'servers');
       } catch (e) { notify(e.message, 'error'); }
@@ -7183,7 +7234,7 @@ const app = createApp({
       spendText, plans, audit, logView, logFocus, loadAudit, openLog, showAdd, addForm, messages, draft, chatBusy, msgBox, suggestions,
       select, openAdd, addServer, testConn, discover, removeServer, askAbout, send, onEnter, onChatScroll, newChat, applyPreset, saveAI, testAI,
       convs, showConvs, conversationId, openConv, deleteConv, relTime,
-      op, saveOnePanel, testOnePanel, tc, saveTencent, testTencent, clearTencent, freeCmd, setFree, seen, statsView, statsSeen, termRequest, openTerminal, filesRequest, openFiles, sitesRequest, openSite, newSite, unread, me, logout,
+      op, saveOnePanel, testOnePanel, tc, saveTencent, testTencent, clearTencent, ali, saveAliyun, testAliyun, clearAliyun, freeCmd, setFree, seen, statsView, statsSeen, termRequest, openTerminal, filesRequest, openFiles, sitesRequest, openSite, newSite, unread, me, logout,
       overview, loadOverview, inboxCount, inboxFocus, openInbox, aiPanel, toggleAI, pageContext, siteContext, palette, modKey, serverDot, serverMeta, visitSection, statsRequest, openStats,
       cloud, cloudList, cloudPick, pickCloud, askAI, daysTo, fmtBytes, securityForm, securityPlan, proposeSecurity, securityDone,
       monitorDown, SERVER_TABS, serverTab, seenServerSites, serverSitesRequest, openServerSite, serverStateText, serverFacts, cloudRequest, openCloud, addFromCloud,

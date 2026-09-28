@@ -128,6 +128,13 @@ func (s *Server) routes() {
 	api("GET /api/servers/{id}/cloud", s.serverCloud)
 	api("GET /api/tencent/servers/{region}/{instance}", s.cloudDetail)
 	api("POST /api/tencent/servers/plan", s.cloudPlan)
+	api("GET /api/settings/aliyun", s.getAliyun)
+	api("PUT /api/settings/aliyun", s.putAliyun)
+	api("DELETE /api/settings/aliyun", s.deleteAliyun)
+	api("POST /api/settings/aliyun/test", s.testAliyun)
+	api("GET /api/aliyun/servers", s.aliyunServers)
+	api("GET /api/aliyun/servers/{region}/{instance}", s.aliyunDetail)
+	api("POST /api/aliyun/servers/plan", s.aliyunPlan)
 	api("POST /api/servers/{id}/security/plan", s.serverSecurityPlan)
 	api("GET /api/visits/sources", s.visitSources)
 	api("GET /api/visits", s.getVisits)
@@ -826,6 +833,46 @@ func (s *Server) testTencent(_ http.ResponseWriter, r *http.Request) (any, error
 
 func (s *Server) tencentServers(_ http.ResponseWriter, r *http.Request) (any, error) {
 	return s.app.TencentServers(r.Context(), r.URL.Query().Get("refresh") == "1")
+}
+
+func (s *Server) getAliyun(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return s.app.Aliyun(), nil
+}
+
+func (s *Server) putAliyun(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req struct {
+		AccessKeyID     string `json:"accessKeyId"`
+		AccessKeySecret string `json:"accessKeySecret"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.SaveAliyun(req.AccessKeyID, req.AccessKeySecret)
+}
+
+func (s *Server) deleteAliyun(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return s.app.ClearAliyun(), nil
+}
+
+func (s *Server) testAliyun(_ http.ResponseWriter, r *http.Request) (any, error) {
+	info, err := s.app.TestAliyun(r.Context())
+	return map[string]string{"info": info}, err
+}
+
+func (s *Server) aliyunServers(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.AliyunServers(r.Context(), r.URL.Query().Get("refresh") == "1")
+}
+
+func (s *Server) aliyunDetail(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.AliyunDetail(r.Context(), r.PathValue("region"), r.PathValue("instance"))
+}
+
+func (s *Server) aliyunPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req app.CloudRequest
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.ProposeAliyun(r.Context(), req)
 }
 
 func (s *Server) serverCloud(_ http.ResponseWriter, r *http.Request) (any, error) {

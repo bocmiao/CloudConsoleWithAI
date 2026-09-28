@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bocmiao/CloudConsoleWithAI/internal/aliyun"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/onepanel"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/sshx"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/tencent"
@@ -32,6 +33,8 @@ type Env struct {
 	PanelApps []string
 	// Cloud is set when Tencent Cloud credentials are configured.
 	Cloud *tencent.Client
+	// Aliyun is set when 阿里云 credentials are configured.
+	Aliyun *aliyun.Client
 	// Reconnect replaces SSH after a dropped connection while waiting.
 	Reconnect func(ctx context.Context) (sshx.Conn, error)
 	// PollInterval defaults to one second.
