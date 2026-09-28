@@ -547,6 +547,45 @@ func TestChatIsSavedAndRestored(t *testing.T) {
 	}
 }
 
+func TestChatShowsSaveFailureWithoutLosingGeneratedAnswer(t *testing.T) {
+	a := newApp(t)
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = a.Store.Close() // storage becomes unavailable after the question was saved
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"回答已生成"}}],"usage":{"prompt_tokens":10,"completion_tokens":5}}`)
+	}))
+	defer model.Close()
+	s, err := a.AISettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.BaseURL = model.URL
+	if _, err := a.SaveAISettings(s, "sk-test"); err != nil {
+		t.Fatal(err)
+	}
+	r, err := a.Chat(context.Background(), "", "测试保存失败")
+	if err != nil || r.Reply.Text != "回答已生成" || !strings.Contains(r.Error, "保存记录失败") || !strings.Contains(r.Error, "费用统计") {
+		t.Fatalf("reply = %+v, err = %v", r, err)
+	}
+}
+
+func TestAIBaseURLValidation(t *testing.T) {
+	for address, want := range map[string]bool{
+		"https://api.example.com/v1":        true,
+		"http://localhost:1234/v1":          true,
+		"http://127.0.0.1:1234/v1":          true,
+		"http://[::1]:1234/v1":              true,
+		"http://localhost.evil.com/v1":      false,
+		"http://127.0.0.1.evil.com/v1":      false,
+		"https://name:pass@api.example.com": false,
+		"https://":                          false,
+		"ftp://localhost/v1":                false,
+	} {
+		if got := validBaseURL(address); got != want {
+			t.Errorf("validBaseURL(%q) = %v, want %v", address, got, want)
+		}
+	}
+}
+
 func TestTencentCloudPlanWithoutServer(t *testing.T) {
 	a := newApp(t)
 	f := tencenttest.Start(t)

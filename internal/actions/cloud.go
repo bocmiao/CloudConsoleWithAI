@@ -88,6 +88,8 @@ func applyCloud(ctx context.Context, env *Env, r Resolved, progress Progress) Ou
 			return applyFirewallOpen(ctx, env, r.Values, out, report)
 		case "firewall_close":
 			return applyFirewallClose(ctx, env, r.Values, out, report)
+		case "firewall_tighten":
+			return applyFirewallTighten(ctx, env, r.Values, out, report)
 		case "snapshot":
 			return applySnapshot(ctx, env, r.Values, out, report)
 		case "power_start", "power_stop", "power_reboot":
@@ -144,6 +146,8 @@ func undoCloud(ctx context.Context, env *Env, r Resolved, undo map[string]string
 			err = undoEODomain(ctx, env, undo)
 		case "firewall_open", "firewall_close":
 			err = undoFirewall(ctx, env.Cloud, undo)
+		case "firewall_tighten":
+			err = undoFirewallTighten(ctx, env.Cloud, undo)
 		case "power_start", "power_stop":
 			op := "StopInstances"
 			if r.Impl.Cloud == "power_stop" {

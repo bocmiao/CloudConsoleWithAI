@@ -197,6 +197,10 @@ input[type=checkbox]:focus-visible, input[type=radio]:focus-visible { outline: 2
 .row.form .k { min-width: 150px; }
 .row.form .v { flex: 1; max-width: 460px; text-align: left; }
 .row.stack { display: block; }
+.security-block > b, .security-block > .secondary { display: block; }
+.security-block > .secondary { line-height: 1.5; margin: 4px 0 8px; }
+.security-block > .row.form { padding: 8px 0; }
+.security-block > div:last-child { margin-top: 8px; }
 .two-col { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 22px; }
 
 /* Findings: icon + label + text, never color alone */

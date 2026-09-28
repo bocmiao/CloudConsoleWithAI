@@ -23,8 +23,9 @@ import (
 
 // Env is what running an action on one server needs.
 type Env struct {
-	SSH  sshx.Conn
-	User string // login user; others than root go through passwordless sudo
+	SSH      sshx.Conn
+	User     string // login user; others than root go through passwordless sudo
+	AuthKind string // password | key | tat; SSH hardening requires key
 	// OnePanel is set when the server's 1Panel API is configured.
 	OnePanel *onepanel.Client
 	// PanelApps is the 1Panel app list from discovery, e.g. "mysql/mysql".
@@ -70,6 +71,9 @@ type Progress func(log []string)
 
 // Apply runs a validated step.
 func Apply(ctx context.Context, env *Env, r Resolved, progress Progress) Outcome {
+	if r.Cap.Name == "ssh.harden" && (env.AuthKind != "key" || env.User == "root" || env.User != r.Values["login_user"] || env.Reconnect == nil) {
+		return Outcome{Status: StatusRefused, Log: []string{"SSH 加固只允许从非 root 密钥连接执行，并且必须能够重新连接验证"}}
+	}
 	switch {
 	case r.Impl.Script != "":
 		out := runScript(ctx, env, r, "apply", nil, progress)
@@ -89,8 +93,19 @@ func Apply(ctx context.Context, env *Env, r Resolved, progress Progress) Outcome
 func confirmGuard(ctx context.Context, env *Env, out *Outcome) {
 	guard, restore := out.Undo["guard"], out.Undo["restore"]
 	if !strings.HasSuffix(restore, "/restore.sh") {
+		out.Status = StatusFailed
 		out.logf("没有找到 5 分钟保险的记录，无法确认")
 		return
+	}
+	if env.Reconnect != nil {
+		fresh, err := env.Reconnect(ctx)
+		if err != nil {
+			out.Status = StatusFailed
+			out.logf("修改后无法重新连接（%v）：保留 5 分钟保险，服务器会自动恢复原状", err)
+			return
+		}
+		env.SSH.Close()
+		env.SSH = fresh
 	}
 	flag := shq(path.Dir(restore) + "/guard.cancelled")
 	cmd := "touch " + flag
@@ -301,8 +316,13 @@ func runScript(ctx context.Context, env *Env, r Resolved, mode string, undo map[
 			continue
 		}
 		_, _ = env.SSH.Run(ctx, cleanup, "", 1024)
-		code, _ := strconv.Atoi(rc)
-		parsed.Status = statusForExit(code)
+		status, parseErr := statusForExit(rc)
+		if parseErr != nil {
+			parsed.Status = StatusFailed
+			parsed.logf("远端脚本返回了无效退出码 %q，无法确认执行结果", rc)
+		} else {
+			parsed.Status = status
+		}
 		parsed.Commands, parsed.ScriptName, parsed.Script = out.Commands, out.ScriptName, out.Script
 		for k := range parsed.Undo {
 			if strings.HasPrefix(k, "backup:") {
@@ -360,16 +380,20 @@ func RetireRollbackFile(ctx context.Context, env *Env, path string) string {
 	return cmd
 }
 
-func statusForExit(code int) string {
+func statusForExit(raw string) (string, error) {
+	code, err := strconv.Atoi(raw)
+	if err != nil {
+		return StatusFailed, err
+	}
 	switch code {
 	case 0:
-		return StatusDone
+		return StatusDone, nil
 	case 10:
-		return StatusRefused
+		return StatusRefused, nil
 	case 20:
-		return StatusRolledBack
+		return StatusRolledBack, nil
 	}
-	return StatusFailed
+	return StatusFailed, nil
 }
 
 // parseProtocol reads the MIAO_* lines an action script prints. Other
@@ -1073,7 +1097,34 @@ func applyBackup(ctx context.Context, env *Env, v map[string]string, out *Outcom
 		for {
 			rec, found, err := c.FindBackup(ctx, j.kind, j.name, j.detail, task)
 			if err == nil && found && rec.Status == "Success" {
-				report("已备份%s：%s/%s", j.label, rec.FileDir, rec.FileName)
+				if strings.TrimSpace(rec.FileDir) == "" || strings.TrimSpace(rec.FileName) == "" {
+					out.Status = StatusFailed
+					out.logf("1Panel 报告备份%s成功，但没有返回备份文件位置；请在 1Panel「备份」里核对", j.label)
+					return *out
+				}
+				var size int64
+				var sizeErr error
+				for attempt := 0; attempt < 3; attempt++ {
+					size, sizeErr = c.BackupSize(ctx, j.kind, j.name, j.detail, rec.ID)
+					if sizeErr == nil && size > 0 {
+						break
+					}
+					if attempt < 2 {
+						select {
+						case <-ctx.Done():
+							out.Status = StatusFailed
+							out.logf("核对备份%s文件大小时连接中断", j.label)
+							return *out
+						case <-time.After(pollEvery(env)):
+						}
+					}
+				}
+				if sizeErr != nil || size <= 0 {
+					out.Status = StatusFailed
+					out.logf("1Panel 报告备份%s成功，但无法确认文件有内容（%s/%s）：大小 %d，错误 %v；请在 1Panel「备份」里核对", j.label, rec.FileDir, rec.FileName, size, sizeErr)
+					return *out
+				}
+				report("已备份%s：%s/%s（%d 字节）", j.label, rec.FileDir, rec.FileName, size)
 				break
 			}
 			if err == nil && found && rec.Status == "Failed" {

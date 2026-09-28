@@ -171,6 +171,7 @@ func TestClientIPBehindProxy(t *testing.T) {
 		{"127.0.0.1:1", map[string]string{"X-Forwarded-For": "6.6.6.6, 203.0.113.9", "X-Real-IP": "1.2.3.4"}, "203.0.113.9"},
 		{"127.0.0.1:1", map[string]string{"X-Real-IP": "203.0.113.7"}, "203.0.113.7"},
 		{"198.51.100.1:1", map[string]string{"X-Forwarded-For": "6.6.6.6", "X-Real-IP": "1.2.3.4"}, "198.51.100.1"},
+		{"192.168.1.7:1", map[string]string{"X-Forwarded-For": "6.6.6.6", "X-Real-IP": "1.2.3.4"}, "192.168.1.7"},
 	} {
 		r := httptest.NewRequest("GET", "/", nil)
 		r.RemoteAddr = c.remote
@@ -180,6 +181,25 @@ func TestClientIPBehindProxy(t *testing.T) {
 		if got := s.clientIP(r); got != c.want {
 			t.Errorf("%v %v: %s, want %s", c.remote, c.header, got, c.want)
 		}
+	}
+	untrusted := httptest.NewRequest("GET", "/", nil)
+	untrusted.RemoteAddr = "192.168.1.7:1"
+	untrusted.Header.Set("X-Forwarded-Proto", "https")
+	if s.https(untrusted) {
+		t.Fatal("direct private client forged HTTPS through a proxy header")
+	}
+	if err := s.SetTrustedProxies("192.168.1.7, 10.0.0.0/24"); err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest("GET", "/", nil)
+	r.RemoteAddr = "192.168.1.7:1"
+	r.Header.Set("X-Forwarded-For", "203.0.113.8")
+	r.Header.Set("X-Forwarded-Proto", "https")
+	if got := s.clientIP(r); got != "203.0.113.8" || !s.https(r) {
+		t.Fatalf("trusted proxy: IP %s, HTTPS %v", got, s.https(r))
+	}
+	if err := s.SetTrustedProxies("not-an-address"); err == nil {
+		t.Fatal("accepted an invalid trusted proxy address")
 	}
 }
 

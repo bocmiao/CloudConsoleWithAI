@@ -40,6 +40,7 @@ func envOr(k, def string) string {
 func serveMain(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	listen := fs.String("listen", envOr("MIAO_LISTEN", "127.0.0.1:18765"), "address to listen on (env MIAO_LISTEN); use 0.0.0.0:18765 to accept connections from other machines")
+	trustedProxies := fs.String("trusted-proxies", os.Getenv("MIAO_TRUSTED_PROXIES"), "comma-separated IPs or CIDRs of reverse proxies outside loopback (env MIAO_TRUSTED_PROXIES)")
 	dataDir := fs.String("data", os.Getenv("MIAO_DATA"), "data directory (env MIAO_DATA; default: the user config dir)")
 	cert := fs.String("tls-cert", os.Getenv("MIAO_TLS_CERT"), "certificate file for HTTPS (env MIAO_TLS_CERT)")
 	key := fs.String("tls-key", os.Getenv("MIAO_TLS_KEY"), "private key file for HTTPS (env MIAO_TLS_KEY)")
@@ -63,11 +64,15 @@ func serveMain(args []string) error {
 	au := auth.New(st, sec, dir)
 	api.ConnectSenders(a, au) // login codes go out by the app's mail and SMS settings
 
+	handler := api.NewServer(a, au, version)
+	if err := handler.SetTrustedProxies(*trustedProxies); err != nil {
+		return err
+	}
 	ln, err := net.Listen("tcp", *listen)
 	if err != nil {
 		return err
 	}
-	srv := &http.Server{Handler: api.NewServer(a, au, version), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
+	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
 	scheme := "http"
 	if *cert != "" {
 		scheme = "https"

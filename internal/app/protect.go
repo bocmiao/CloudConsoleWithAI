@@ -98,13 +98,26 @@ func (a *App) proposePlan(ctx context.Context, actor string, serverID int64, tit
 // engine crawlers are refused. IPs the automatic rule blocked for a while
 // become the user's own, kept until unblocked by hand.
 func (a *App) ProposeBlock(ctx context.Context, source string, ips []string) (PlanView, error) {
-	a.forgetAutoBlocked(ips)
 	return a.blockPlan(ctx, "user", source, ips, "", "根据访问日志：")
+}
+
+// ProposeBlockInZone lets a user place manually entered IPs in one named
+// EdgeOne site, instead of inferring a site from a missing visit-log row.
+func (a *App) ProposeBlockInZone(ctx context.Context, source, zone string, ips []string) (PlanView, error) {
+	zone = strings.ToLower(strings.TrimSpace(zone))
+	if zone == "" {
+		return PlanView{}, userErr("请先选择要封禁的网站")
+	}
+	return a.blockPlanForZone(ctx, "user", source, ips, "", "由你指定 EdgeOne 站点：", zone)
 }
 
 // blockPlan stores a block checklist proposed by actor; title is made up
 // when empty, lead starts the reason.
 func (a *App) blockPlan(ctx context.Context, actor, source string, ips []string, title, lead string) (PlanView, error) {
+	return a.blockPlanForZone(ctx, actor, source, ips, title, lead, "")
+}
+
+func (a *App) blockPlanForZone(ctx context.Context, actor, source string, ips []string, title, lead, targetZone string) (PlanView, error) {
 	c := a.tencentClient()
 	if c == nil {
 		return PlanView{}, userErr("封禁要通过 EdgeOne 进行，请先在「设置 → 腾讯云」填写密钥")
@@ -117,6 +130,12 @@ func (a *App) blockPlan(ctx context.Context, actor, source string, ips []string,
 	zones, err := c.Zones(ctx)
 	if err != nil {
 		return PlanView{}, err
+	}
+	if targetZone != "" {
+		z, ok := tencent.ZoneFor(zones, targetZone)
+		if !ok || z.Paused || z.Status == "initializing" {
+			return PlanView{}, userErr("EdgeOne 里没有可用的站点 %s", targetZone)
+		}
 	}
 	// Ask again now rather than trust the report, which may be older than
 	// the checks: EdgeOne's nodes and search engine crawlers are never
@@ -163,11 +182,15 @@ func (a *App) blockPlan(ctx context.Context, actor, source string, ips []string,
 			direct = append(direct, ip)
 		}
 		sites := []string{}
-		for _, s := range p.Sites {
-			sites = append(sites, s.Value)
-		}
-		if len(sites) == 0 {
-			sites = v.SiteNames()
+		if targetZone != "" {
+			sites = []string{targetZone}
+		} else {
+			for _, s := range p.Sites {
+				sites = append(sites, s.Value)
+			}
+			if len(sites) == 0 {
+				sites = v.SiteNames()
+			}
 		}
 		placed := false
 		for _, site := range sites {
@@ -222,7 +245,6 @@ func (a *App) blockPlan(ctx context.Context, actor, source string, ips []string,
 // ProposeUnblock makes a checklist that lifts Miao Panel's block on IPs
 // in an EdgeOne site.
 func (a *App) ProposeUnblock(ctx context.Context, zone string, ips []string) (PlanView, error) {
-	a.forgetAutoBlocked(ips)
 	return a.unblockPlan(ctx, "user", zone, ips, "由你在网站统计页选择解封")
 }
 

@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
     tags: ["v*"]
   pull_request:
   # Run by hand from the Actions tab to publish a release: the tag is made
@@ -17,16 +17,20 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' && github.event_name != 'workflow_dispatch' }}
+
 env:
   # The version being released: the tag pushed, or the one asked for by hand.
   RELEASE: ${{ github.ref_type == 'tag' && github.ref_name || inputs.version }}
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Check formatting
@@ -38,11 +42,15 @@ jobs:
       - name: Test
         run: go test ./...
       - name: Check discover.sh syntax
-        run: bash -n scripts/discover.sh && sh -n scripts/discover.sh
+        run: |
+          bash -n scripts/discover.sh && sh -n scripts/discover.sh
+          for script in scripts/actions/*.sh; do sh -n "$script"; done
 
   build:
+    # Cross-platform artifacts are needed for releases, not every push.
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         include:
@@ -53,8 +61,8 @@ jobs:
           - { goos: linux, goarch: amd64, ext: "" }
           - { goos: linux, goarch: arm64, ext: "" }
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Build
@@ -77,26 +85,49 @@ jobs:
   # The web edition's image builds (not pushed anywhere).
   docker:
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build the image
         run: docker build --build-arg VERSION="${RELEASE:-dev-${GITHUB_SHA::7}}" -t miaopanel:ci .
       - name: Start it and check the login page answers
         run: |
-          docker run -d --name miaopanel -p 127.0.0.1:18765:18765 miaopanel:ci
+          docker run -d --name miaopanel -p 127.0.0.1:18765:18765 -v miaopanel-ci-data:/data \
+            -e MIAO_TRUSTED_PROXIES=172.16.0.0/12 miaopanel:ci
           for i in $(seq 1 20); do curl -fsS -H 'X-Miao: 1' http://127.0.0.1:18765/api/auth/state && break; sleep 1; done
           docker logs miaopanel 2>&1 | grep -q '初始化码'
           curl -fsS -H 'X-Miao: 1' http://127.0.0.1:18765/api/auth/state | grep -q '"setup":true'
+          curl -fsS -H 'X-Miao: 1' -H 'X-Forwarded-Proto: https' \
+            http://127.0.0.1:18765/api/auth/state | grep -q '"https":true'
+      - name: Check browser setup and password login
+        run: python3 scripts/browser_smoke.py
+      - name: Restore a stopped data volume
+        run: |
+          docker stop miaopanel
+          mkdir -p /tmp/miaopanel-backup
+          docker run --rm --user 0 --volumes-from miaopanel -v /tmp/miaopanel-backup:/backup \
+            --entrypoint sh miaopanel:ci -c 'umask 077; tar -C /data -czf /backup/miaopanel.tar.gz .'
+          docker volume create miaopanel-ci-restored
+          docker run --rm --user 0 -v miaopanel-ci-restored:/data -v /tmp/miaopanel-backup:/backup:ro \
+            --entrypoint sh miaopanel:ci -c 'tar -C /data -xzf /backup/miaopanel.tar.gz'
+          docker rm miaopanel
+          docker run -d --name miaopanel-restored -p 127.0.0.1:18765:18765 \
+            -v miaopanel-ci-restored:/data -e MIAO_TRUSTED_PROXIES=172.16.0.0/12 miaopanel:ci
+          for i in $(seq 1 20); do
+            if curl -fsS -H 'X-Miao: 1' http://127.0.0.1:18765/api/auth/state | grep -q '"setup":false'; then exit 0; fi
+            sleep 1
+          done
+          docker logs miaopanel-restored
+          exit 1
 
   release:
     if: (github.ref_type == 'tag' && startsWith(github.ref_name, 'v')) || (github.event_name == 'workflow_dispatch' && startsWith(inputs.version, 'v'))
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           path: dist

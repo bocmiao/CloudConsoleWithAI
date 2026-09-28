@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -79,8 +80,21 @@ func (a *App) SaveAISettings(s AISettings, apiKey string) (AISettings, error) {
 
 // validBaseURL requires HTTPS, except for models running on this machine.
 func validBaseURL(u string) bool {
-	return strings.HasPrefix(u, "https://") ||
-		strings.HasPrefix(u, "http://127.0.0.1") || strings.HasPrefix(u, "http://localhost")
+	parsed, err := url.ParseRequestURI(u)
+	if err != nil || parsed.Host == "" || parsed.User != nil {
+		return false
+	}
+	if parsed.Scheme == "https" {
+		return true
+	}
+	if parsed.Scheme != "http" {
+		return false
+	}
+	switch strings.ToLower(parsed.Hostname()) {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
 }
 
 func (a *App) sessionConfig(tools []ai.ToolDef, system string) (ai.Config, AISettings, error) {
@@ -273,7 +287,9 @@ func (a *App) ChatStream(ctx context.Context, convID, text, page string, on func
 		delete(a.stops, convID)
 		a.mu.Unlock()
 	}()
-	_, _ = a.Store.AddChatMessage(convID, "user", text, "")
+	if _, err := a.Store.AddChatMessage(convID, "user", text, ""); err != nil {
+		return ChatReply{}, fmt.Errorf("保存问题失败：%w", err)
+	}
 	ask := text
 	if page = pageNote(page); page != "" {
 		ask = "（我现在在 Miao Panel 的「" + page + "」页面）\n" + text
@@ -289,11 +305,14 @@ func (a *App) ChatStream(ctx context.Context, convID, text, page string, on func
 	collector := &planCollector{}
 	reply, err := conv.agent.Ask(withOrigin(context.WithValue(ctx, planCollectorKey{}, collector), OriginAI), ask, onEvent)
 	cost := settings.Cost(reply.Usage)
+	var saveErrors []string
 	if reply.Usage.Input+reply.Usage.Output > 0 {
-		_ = a.Store.AddUsage(store.Usage{
+		if err := a.Store.AddUsage(store.Usage{
 			Model: settings.Model, InputTokens: reply.Usage.Input, CachedTokens: reply.Usage.CachedInput,
 			OutputTokens: reply.Usage.Output, Cost: cost, Currency: settings.Currency,
-		})
+		}); err != nil {
+			saveErrors = append(saveErrors, "费用统计："+err.Error())
+		}
 	}
 	out := ChatReply{ConversationID: convID, Reply: reply, Cost: cost, Currency: settings.Currency, Plans: []PlanView{}}
 	for _, id := range collector.ids {
@@ -314,13 +333,25 @@ func (a *App) ChatStream(ctx context.Context, convID, text, page string, on func
 		}
 		// Keep what it had said and looked up, and any checklist it made.
 		if reply.Text != "" || len(reply.Steps) > 0 || len(collector.ids) > 0 {
-			_, _ = a.Store.AddChatMessage(convID, "assistant", reply.Text, string(extra))
+			if _, err := a.Store.AddChatMessage(convID, "assistant", reply.Text, string(extra)); err != nil {
+				saveErrors = append(saveErrors, "回答："+err.Error())
+			}
 		}
-		_, _ = a.Store.AddChatMessage(convID, "error", out.Error, "")
-		return out, nil
+		if _, err := a.Store.AddChatMessage(convID, "error", out.Error, ""); err != nil {
+			saveErrors = append(saveErrors, "错误记录："+err.Error())
+		}
+	} else {
+		_ = a.Store.Audit("ai", "ai.chat", settings.Model, fmt.Sprintf("查询 %d 次", len(reply.Steps)))
+		if _, err := a.Store.AddChatMessage(convID, "assistant", reply.Text, string(extra)); err != nil {
+			saveErrors = append(saveErrors, "回答："+err.Error())
+		}
 	}
-	_ = a.Store.Audit("ai", "ai.chat", settings.Model, fmt.Sprintf("查询 %d 次", len(reply.Steps)))
-	_, _ = a.Store.AddChatMessage(convID, "assistant", reply.Text, string(extra))
+	if len(saveErrors) > 0 {
+		if out.Error != "" {
+			out.Error += "；"
+		}
+		out.Error += "保存记录失败（刷新后可能丢失，请复制当前回答）：" + strings.Join(saveErrors, "；")
+	}
 	return out, nil
 }
 

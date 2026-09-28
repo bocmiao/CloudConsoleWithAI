@@ -352,6 +352,13 @@ func TestJudgeAndBlock(t *testing.T) {
 	if _, err := a.ProposeBlock(ctx, "edgeone", []string{"66.249.66.1"}); err == nil || !strings.Contains(err.Error(), "没有可以封禁的 IP") {
 		t.Fatalf("only a crawler: %v", err)
 	}
+	manual, err := a.ProposeBlockInZone(ctx, "edgeone", "blog.example.com", []string{"31.57.65.120"})
+	if err != nil || len(manual.StepList) != 1 || manual.StepList[0].Params["domain"] != "example.com" || manual.StepList[0].Params["ips"] != "31.57.65.120" {
+		t.Fatalf("manual site block: %+v %v", manual, err)
+	}
+	if _, err := a.ProposeBlockInZone(ctx, "edgeone", "not-a-site.invalid", []string{"31.57.65.120"}); err == nil {
+		t.Fatal("accepted site outside EdgeOne")
+	}
 	// Nothing is blocked when EdgeOne cannot say which IPs are its nodes.
 	f.FailAction = "teo DescribeIPRegion"
 	if _, err := a.ProposeBlock(ctx, "edgeone", []string{"45.148.10.9"}); err == nil || !strings.Contains(err.Error(), "没能向 EdgeOne 核对") {
@@ -472,9 +479,17 @@ func TestAutoBlock(t *testing.T) {
 	if len(a.AutoBlock().Blocked) != 1 {
 		t.Fatal("not blocked again")
 	}
-	if _, err := a.ProposeBlock(ctx, "edgeone", []string{"45.148.10.2"}); err != nil {
+	manual, err := a.ProposeBlock(ctx, "edgeone", []string{"45.148.10.2"})
+	if err != nil {
 		t.Fatal(err)
 	}
+	if st := a.AutoBlock(); len(st.Blocked) != 1 {
+		t.Fatalf("proposal changed automatic block: %+v", st.Blocked)
+	}
+	if _, err := a.ExecutePlan(manual.ID, []int{0}); err != nil {
+		t.Fatal(err)
+	}
+	waitPlan(t, a, manual.ID)
 	if st := a.AutoBlock(); len(st.Blocked) != 0 {
 		t.Fatalf("still the rule's: %+v", st.Blocked)
 	}

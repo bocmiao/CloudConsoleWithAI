@@ -335,6 +335,8 @@ func (a *App) ProposeDNS(ctx context.Context, req DNSRequest) (PlanView, error) 
 		title, reason, steps, err = a.dnsEOPoint(ctx, c, req)
 	case "eo_off":
 		title, reason, steps, err = a.dnsEOOff(ctx, c, req)
+	case "eo_origin":
+		title, reason, steps, err = a.dnsEOOrigin(ctx, c, req)
 	default:
 		return PlanView{}, userErr("不支持的操作 %q", req.Op)
 	}
@@ -346,6 +348,44 @@ func (a *App) ProposeDNS(ctx context.Context, req DNSRequest) (PlanView, error) 
 		return PlanView{}, err
 	}
 	return a.Plan(p.ID)
+}
+
+// dnsEOOrigin changes only the protocol of an existing acceleration domain.
+// Fetching its current origin prevents a stale form from replacing the address.
+func (a *App) dnsEOOrigin(ctx context.Context, c *tencent.Client, req DNSRequest) (string, string, []core.Step, error) {
+	proto := strings.ToUpper(strings.TrimSpace(req.Protocol))
+	if proto != "HTTP" && proto != "HTTPS" {
+		return "", "", nil, userErr("请选择 HTTP 或 HTTPS 回源")
+	}
+	name := req.Domain
+	if req.Sub != "@" {
+		name = req.Sub + "." + req.Domain
+	}
+	zones, err := c.Zones(ctx)
+	if err != nil {
+		return "", "", nil, err
+	}
+	z, ok := tencent.ZoneFor(zones, name)
+	if !ok || z.Paused || z.Status == "initializing" {
+		return "", "", nil, userErr("%s 没有可用的 EdgeOne 站点", name)
+	}
+	d, found, err := c.AccelerationDomain(ctx, z.ZoneID, name)
+	if err != nil {
+		return "", "", nil, err
+	}
+	if !found || d.OriginDetail.Origin == "" {
+		return "", "", nil, userErr("%s 没有已配置源站的加速域名", name)
+	}
+	if strings.EqualFold(d.OriginProtocol, proto) {
+		return "", "", nil, userErr("%s 已经使用 %s 回源", name, proto)
+	}
+	reason := fmt.Sprintf("当前源站 %s，回源协议 %s。修改后请检查网站是否恢复正常。", d.OriginDetail.Origin, d.OriginProtocol)
+	if proto == "HTTP" {
+		reason += " EdgeOne 到源站将不再使用 TLS；建议在源站证书恢复后改回 HTTPS。"
+	}
+	step := core.Step{Capability: "eo.origin.set", Summary: fmt.Sprintf("%s 回源协议改为 %s（源站地址保持 %s）", name, proto, d.OriginDetail.Origin),
+		Params: map[string]any{"domain": name, "origin": d.OriginDetail.Origin, "origin_protocol": proto}}
+	return "调整 " + name + " 的 EdgeOne 回源协议", reason, []core.Step{step}, nil
 }
 
 func (a *App) lookupRecord(ctx context.Context, c *tencent.Client, domain string, id uint64) (tencent.Record, error) {

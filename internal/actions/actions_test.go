@@ -83,6 +83,20 @@ func TestParseProtocol(t *testing.T) {
 	}
 }
 
+func TestGuardAndRemoteExitCannotReportUnverifiedSuccess(t *testing.T) {
+	out := Outcome{Status: StatusDone, Undo: map[string]string{}}
+	confirmGuard(context.Background(), &Env{}, &out)
+	if out.Status != StatusFailed {
+		t.Fatalf("missing guard reported %q", out.Status)
+	}
+	for raw, want := range map[string]string{"0": StatusDone, "10": StatusRefused, "20": StatusRolledBack, "garbage": StatusFailed} {
+		got, err := statusForExit(raw)
+		if got != want || (raw == "garbage") != (err != nil) {
+			t.Errorf("exit %q: status=%q err=%v", raw, got, err)
+		}
+	}
+}
+
 // testScript stands in for a real action: it echoes its arguments and the
 // undo data it was given, and exits with the code passed in args.
 const testScript = `

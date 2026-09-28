@@ -129,6 +129,10 @@ func applyIPBlock(ctx context.Context, env *Env, block bool, v map[string]string
 		out.logf("%v", err)
 		return *out
 	}
+	if out.Result == nil {
+		out.Result = map[string]string{}
+	}
+	out.Result["zone"] = z.ZoneName
 	var current []string
 	if i := findRule(p.CustomRules, BlockRuleName); i >= 0 {
 		current = ruleIPs(p.CustomRules[i])

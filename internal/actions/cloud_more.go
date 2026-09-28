@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"sort"
 	"strconv"
@@ -213,6 +214,238 @@ func undoFirewall(ctx context.Context, c *tencent.Client, undo map[string]string
 	return nil
 }
 
+func publicSensitiveRule(r tencent.FirewallRule, sshPort int) bool {
+	if !strings.EqualFold(r.Action, "ACCEPT") || (r.CidrBlock != "0.0.0.0/0" && r.Ipv6 != "::/0") {
+		return false
+	}
+	for _, p := range []int{sshPort, 13940, 8090, 8080, 3306} {
+		if portCovers(r.Port, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func privateRuleSource(r tencent.FirewallRule) bool {
+	source := r.CidrBlock
+	if source == "" {
+		source = r.Ipv6
+	}
+	p, err := netip.ParsePrefix(source)
+	if err != nil {
+		return false
+	}
+	p = p.Masked()
+	for _, cidr := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16", "fc00::/7", "fe80::/10", "::1/128"} {
+		private := netip.MustParsePrefix(cidr)
+		if p.Addr().Is4() == private.Addr().Is4() && p.Bits() >= private.Bits() && private.Contains(p.Addr()) {
+			return true
+		}
+	}
+	return false
+}
+
+func unapprovedSensitiveRule(r tencent.FirewallRule, sshPort int, adminCIDR string) bool {
+	if !strings.EqualFold(r.Action, "ACCEPT") {
+		return false
+	}
+	if portCovers(r.Port, 3306) {
+		return !privateRuleSource(r)
+	}
+	for _, port := range []int{sshPort, 13940, 8090, 8080} {
+		if portCovers(r.Port, port) {
+			return !privateRuleSource(r) && r.CidrBlock != adminCIDR
+		}
+	}
+	return false
+}
+
+// FirewallTightenRules rejects ingress that would remain public after tightening.
+// Proposal and execution both use it so the checklist matches what can run.
+func FirewallTightenRules(rules []tencent.FirewallRule, sshPort int, adminCIDR string) ([]tencent.FirewallRule, error) {
+	var remove []tencent.FirewallRule
+	broad := 0
+	for _, r := range rules {
+		if strings.EqualFold(r.Action, "ACCEPT") && strings.EqualFold(r.Protocol, "ALL") && strings.EqualFold(r.Port, "ALL") && r.CidrBlock == "0.0.0.0/0" {
+			broad++
+			remove = append(remove, r)
+			continue
+		}
+		if !publicSensitiveRule(r, sshPort) {
+			if unapprovedSensitiveRule(r, sshPort, adminCIDR) {
+				return nil, fmt.Errorf("另有非管理来源可访问管理端口或 3306：%s，请先单独检查它", ruleText(r))
+			}
+			continue
+		}
+		allowedExact := false
+		for _, p := range []int{sshPort, 13940, 8090, 8080, 3306} {
+			if r.Port == strconv.Itoa(p) {
+				allowedExact = true
+				break
+			}
+		}
+		if !allowedExact {
+			return nil, fmt.Errorf("另有覆盖管理端口或 3306 的宽范围规则 %s，请先单独检查它", ruleText(r))
+		}
+		remove = append(remove, r)
+	}
+	if broad != 1 {
+		return nil, fmt.Errorf("需要恰好一条 ALL ALL 0.0.0.0/0 放行规则；当前有 %d 条", broad)
+	}
+	return remove, nil
+}
+
+// applyFirewallTighten is one atomic operation: allow known service ports
+// first, remove exactly one broad rule, and restore it if anything fails.
+func applyFirewallTighten(ctx context.Context, env *Env, v map[string]string, out *Outcome, report func(string, ...any)) Outcome {
+	c := env.Cloud
+	s, err := findInstance(ctx, c, v["region"], v["instance"])
+	if err != nil {
+		out.Status = StatusRefused
+		out.logf("%v", err)
+		return *out
+	}
+	if s.Kind != tencent.CVM || len(s.Groups) != 1 || s.Groups[0] != v["group"] {
+		out.Status = StatusRefused
+		out.logf("安全组绑定情况已变化，或实例绑定了多个安全组；请重新检查后生成清单")
+		return *out
+	}
+	ip, network, err := net.ParseCIDR(v["admin_cidr"])
+	if err != nil || ip.To4() == nil || network.String() == "0.0.0.0/0" {
+		out.Status = StatusRefused
+		out.logf("管理来源必须是明确的 IPv4 网段，例如 203.0.113.4/32")
+		return *out
+	}
+	sshPort, err := strconv.Atoi(v["ssh_port"])
+	if err != nil || sshPort < 1 || sshPort > 65535 {
+		out.Status = StatusRefused
+		out.logf("SSH 端口无效，请重新生成清单")
+		return *out
+	}
+	rules, err := c.SecurityGroupIngress(ctx, s.Region, v["group"])
+	if err != nil {
+		out.Status = StatusRefused
+		out.logf("读取安全组失败：%v", err)
+		return *out
+	}
+	remove, err := FirewallTightenRules(rules, sshPort, network.String())
+	if err != nil {
+		out.Status = StatusRefused
+		out.logf("安全组检查失败：%v", err)
+		return *out
+	}
+	var added, deleted []tencent.FirewallRule
+	broadIndex := int64(0)
+	for _, r := range remove {
+		if strings.EqualFold(r.Protocol, "ALL") && strings.EqualFold(r.Port, "ALL") && r.CidrBlock == "0.0.0.0/0" {
+			broadIndex = r.Index
+			break
+		}
+	}
+	restore := func() error {
+		var first error
+		sort.Slice(deleted, func(i, j int) bool { return deleted[i].Index < deleted[j].Index })
+		for _, r := range deleted {
+			if err := c.InsertSecurityGroupIngress(ctx, s.Region, v["group"], r); err != nil && first == nil {
+				first = err
+			}
+		}
+		for _, r := range added {
+			if err := c.DeleteSecurityGroupIngress(ctx, s.Region, v["group"], r); err != nil && first == nil {
+				first = err
+			}
+		}
+		return first
+	}
+	for _, spec := range []struct{ port, source string }{{"80", "0.0.0.0/0"}, {"443", "0.0.0.0/0"}, {strconv.Itoa(sshPort), network.String()}, {"13940", network.String()}, {"8090", network.String()}, {"8080", network.String()}} {
+		r := tencent.FirewallRule{Protocol: "TCP", Port: spec.port, CidrBlock: spec.source, Action: "ACCEPT", Description: "Miao Panel security tightening", Index: broadIndex}
+		found := false
+		for _, old := range rules {
+			if old.Same(r) {
+				found = true
+				break
+			}
+		}
+		if found {
+			continue
+		}
+		report("先放行 TCP %s 来源 %s", spec.port, spec.source)
+		if err := c.InsertSecurityGroupIngress(ctx, s.Region, v["group"], r); err != nil {
+			if backErr := restore(); backErr != nil {
+				out.Status = StatusFailed
+				out.logf("添加替代规则失败：%v；清理已添加规则也失败：%v", err, backErr)
+				return *out
+			}
+			out.Status = StatusRefused
+			out.logf("添加替代规则失败，原规则未删除：%v", err)
+			return *out
+		}
+		added = append(added, r)
+	}
+	for _, r := range remove {
+		report("删除 %s 的公开规则 %s", v["group"], ruleText(r))
+		if err := c.DeleteSecurityGroupIngress(ctx, s.Region, v["group"], r); err != nil {
+			if backErr := restore(); backErr != nil {
+				out.Status = StatusFailed
+				out.logf("删除规则失败：%v；恢复也失败：%v", err, backErr)
+				return *out
+			}
+			out.Status = StatusRolledBack
+			out.logf("删除规则失败：%v；已恢复原规则", err)
+			return *out
+		}
+		deleted = append(deleted, r)
+	}
+	after, err := c.SecurityGroupIngress(ctx, s.Region, v["group"])
+	if err == nil {
+		for _, r := range after {
+			if unapprovedSensitiveRule(r, sshPort, network.String()) {
+				err = fmt.Errorf("管理端口或 3306 仍可被非授权来源访问：%s", ruleText(r))
+				break
+			}
+		}
+	}
+	if err != nil {
+		if backErr := restore(); backErr != nil {
+			out.Status = StatusFailed
+			out.logf("复核失败：%v；恢复原规则也失败：%v", err, backErr)
+			return *out
+		}
+		out.Status = StatusRolledBack
+		out.logf("复核失败：%v；已恢复原规则", err)
+		return *out
+	}
+	b, _ := json.Marshal(deleted)
+	a, _ := json.Marshal(added)
+	out.Undo = map[string]string{"region": s.Region, "instance": s.ID, "group": v["group"], "removed": string(b), "added": string(a)}
+	out.Status = StatusDone
+	report("完成：3306 不再通过这条安全组规则对外开放")
+	return *out
+}
+
+func undoFirewallTighten(ctx context.Context, c *tencent.Client, undo map[string]string) error {
+	var removed []tencent.FirewallRule
+	var added []tencent.FirewallRule
+	if err := json.Unmarshal([]byte(undo["removed"]), &removed); err != nil {
+		return err
+	}
+	if err := json.Unmarshal([]byte(undo["added"]), &added); err != nil {
+		return err
+	}
+	sort.Slice(removed, func(i, j int) bool { return removed[i].Index < removed[j].Index })
+	for _, r := range removed {
+		if err := c.InsertSecurityGroupIngress(ctx, undo["region"], undo["group"], r); err != nil {
+			return err
+		}
+	}
+	for _, r := range added {
+		if err := c.DeleteSecurityGroupIngress(ctx, undo["region"], undo["group"], r); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func applySnapshot(ctx context.Context, env *Env, v map[string]string, out *Outcome, report func(string, ...any)) Outcome {
 	c := env.Cloud
 	s, err := findInstance(ctx, c, v["region"], v["instance"])
@@ -233,20 +466,25 @@ func applySnapshot(ctx context.Context, env *Env, v map[string]string, out *Outc
 		return *out
 	}
 	var last tencent.Snapshot
-	ok, _ := waitFor(ctx, env, 60, func() (bool, error) {
+	ok, waitErr := waitFor(ctx, env, 60, func() (bool, error) {
 		list, err := c.Snapshots(ctx, s.Region, s)
 		for _, sn := range list {
 			if sn.ID == id {
 				last = sn
 			}
 		}
-		return last.State == "NORMAL", err
+		return err == nil && last.State == "NORMAL", err
 	})
-	if ok {
-		report("完成：快照 %s（%s）已创建好，出问题时可以在腾讯云控制台用它回滚整台服务器", name, id)
-	} else {
-		report("快照 %s（%s）已提交，还在创建中（%d%%），大的磁盘需要十几分钟", name, id, last.Percent)
+	if !ok {
+		out.Status = StatusFailed
+		if waitErr != nil {
+			out.logf("快照 %s（%s）已提交，但查询可用状态失败：%v；请在腾讯云控制台确认", name, id, waitErr)
+		} else {
+			out.logf("快照 %s（%s）已提交，但尚未确认可用（状态 %s，进度 %d%%）；请在腾讯云控制台确认", name, id, last.State, last.Percent)
+		}
+		return *out
 	}
+	report("完成：快照 %s（%s）已创建好，出问题时可以在腾讯云控制台用它回滚整台服务器", name, id)
 	out.Status = StatusDone
 	out.Undo = map[string]string{}
 	return *out

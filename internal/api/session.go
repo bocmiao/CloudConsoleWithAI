@@ -2,8 +2,10 @@ package api
 
 import (
 	"crypto/subtle"
+	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 
 	"github.com/bocmiao/CloudConsoleWithAI/internal/app"
@@ -74,15 +76,48 @@ func (s *Server) loggedIn(r *http.Request) bool {
 	return ok
 }
 
-// proxied says whether the connection comes from this machine or a
-// private network, where a reverse proxy passes on who the visitor is.
-func proxied(r *http.Request) bool {
+// SetTrustedProxies adds reverse proxies outside loopback. Only addresses of
+// proxies you control belong here; direct clients must not set their own IP.
+func (s *Server) SetTrustedProxies(spec string) error {
+	var proxies []netip.Prefix
+	for _, raw := range strings.Split(spec, ",") {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		if ip, err := netip.ParseAddr(raw); err == nil {
+			proxies = append(proxies, netip.PrefixFrom(ip, ip.BitLen()))
+			continue
+		}
+		p, err := netip.ParsePrefix(raw)
+		if err != nil {
+			return fmt.Errorf("无效的反向代理地址 %q：%w", raw, err)
+		}
+		proxies = append(proxies, p.Masked())
+	}
+	s.trustedProxies = proxies
+	return nil
+}
+
+// proxied reports whether the immediate peer is a trusted reverse proxy.
+func (s *Server) proxied(r *http.Request) bool {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
 	}
-	ip := net.ParseIP(host)
-	return ip != nil && (ip.IsLoopback() || ip.IsPrivate())
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	if ip.IsLoopback() {
+		return true
+	}
+	for _, p := range s.trustedProxies {
+		if p.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // clientIP is the visitor's address: the connection's, or what a reverse
@@ -95,7 +130,7 @@ func (s *Server) clientIP(r *http.Request) string {
 	if err != nil {
 		host = r.RemoteAddr
 	}
-	if proxied(r) {
+	if s.proxied(r) {
 		if xff := r.Header.Values("X-Forwarded-For"); len(xff) > 0 {
 			parts := strings.Split(xff[len(xff)-1], ",")
 			if v := strings.TrimSpace(parts[len(parts)-1]); net.ParseIP(v) != nil {
@@ -112,7 +147,7 @@ func (s *Server) clientIP(r *http.Request) string {
 // https says whether the browser reached us over HTTPS, directly or
 // through a reverse proxy.
 func (s *Server) https(r *http.Request) bool {
-	return r.TLS != nil || (proxied(r) && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https"))
+	return r.TLS != nil || (s.proxied(r) && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https"))
 }
 
 func (s *Server) setSession(w http.ResponseWriter, r *http.Request, token string) {

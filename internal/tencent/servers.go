@@ -440,12 +440,19 @@ func groupRule(r FirewallRule) map[string]any {
 	return m
 }
 
-// AddSecurityGroupIngress adds an inbound rule at the top of a security
-// group, or at r.Index when set (putting a removed rule back where it was:
-// rules are checked in order, so the place matters).
+// AddSecurityGroupIngress appends an inbound rule unless r.Index is positive.
 func (c *Client) AddSecurityGroupIngress(ctx context.Context, region, group string, r FirewallRule) error {
+	return c.addSecurityGroupIngress(ctx, region, group, r, r.Index > 0)
+}
+
+// InsertSecurityGroupIngress inserts at r.Index, including index zero.
+func (c *Client) InsertSecurityGroupIngress(ctx context.Context, region, group string, r FirewallRule) error {
+	return c.addSecurityGroupIngress(ctx, region, group, r, true)
+}
+
+func (c *Client) addSecurityGroupIngress(ctx context.Context, region, group string, r FirewallRule, indexed bool) error {
 	m := groupRule(r)
-	if r.Index > 0 {
+	if indexed {
 		m["PolicyIndex"] = r.Index
 	}
 	return c.CallRegion(ctx, "vpc", vpcVersion, "CreateSecurityGroupPolicies", region, map[string]any{
