@@ -3263,7 +3263,8 @@ const REWRITE_TEMPLATES = ['default', 'wordpress', 'wp2', 'thinkphp', 'laravel5'
   'discuzx2', 'discuzx3', 'dedecms', 'phpcms', 'phpwind', 'ecshop', 'shopex', 'shopwind', 'niushop', 'crmeb', 'maccms', 'seacms', 'empirecms', 'edusoho',
   'sablog', 'dbshop', 'dabr', 'drupal', 'mvc'];
 const SITE_SECTIONS = [{ id: 'overview', text: '概览' }, { id: 'domains', text: '域名' }, { id: 'https', text: 'HTTPS' }, { id: 'proxy', text: '反向代理' },
-  { id: 'rewrite', text: '伪静态' }, { id: 'conf', text: '配置文件' }, { id: 'logs', text: '日志' }, { id: 'cache', text: 'EdgeOne 缓存' }];
+  { id: 'rewrite', text: '伪静态' }, { id: 'conf', text: '配置文件' }, { id: 'logs', text: '日志' }, { id: 'backups', text: '备份' }, { id: 'cache', text: 'EdgeOne 缓存' }];
+const BACKUP_KEEP = [3, 7, 14, 30];
 const siteMemo = new Map(); // "server/site" → detail, shown at once when coming back
 const certLeft = d => d == null ? '' : d > 0 ? `剩 ${d} 天` : d === 0 ? '今天到期' : '已过期';
 const certLevel = d => d == null ? 'off' : d < 0 ? 'crit' : d <= 15 ? 'warn' : 'good';
@@ -3368,6 +3369,8 @@ const SitePage = {
       Object.assign(conf, { content: '', base: '', hash: '' });
       Object.assign(domainForm, { domain: '', port: 80 });
       Object.assign(log, { text: '', path: '', error: '' });
+      Object.assign(bk, { data: null, error: '' });
+      sched.open = false;
       const memo = siteMemo.get(serverId + '/' + siteId);
       detail.value = memo || null;
       if (memo) fill(memo);
@@ -3385,6 +3388,7 @@ const SitePage = {
         siteMemo.set(o.serverId + '/' + o.siteId, d);
         detail.value = d; fill(d);
         if (section.value === 'logs') loadLog();
+        if (section.value === 'backups') loadBackups();
       } catch (e) { if (n === seq) dError.value = e.message; }
       finally { if (n === seq) dLoading.value = false; }
     }
@@ -3408,7 +3412,7 @@ const SitePage = {
     const site = computed(() => detail.value && detail.value.site);
     const sections = computed(() => SITE_SECTIONS.filter(s => s.id !== 'cache' || (detail.value && detail.value.edgeone)).filter(s =>
       !(site.value && site.value.type === 'stream' && ['proxy', 'rewrite'].includes(s.id))));
-    watch(section, v => { if (v === 'logs' && !log.text) loadLog(); });
+    watch(section, v => { if (v === 'logs' && !log.text) loadLog(); if (v === 'backups') loadBackups(); });
 
     async function propose(body) {
       planning.value = true; formError.value = '';
@@ -3554,6 +3558,57 @@ const SitePage = {
     }
     watch(() => [log.kind, log.lines], loadLog);
 
+    // Backups, kept by 1Panel.
+    const bk = reactive({ data: null, loading: false, error: '' });
+    async function loadBackups() {
+      const o = open.value;
+      if (!o) return;
+      bk.loading = true; bk.error = '';
+      try { bk.data = await api('GET', `/api/servers/${o.serverId}/websites/${o.siteId}/backups`); }
+      catch (e) { bk.error = e.message; } finally { bk.loading = false; }
+    }
+    const backupNow = () => propose({ op: 'backup' });
+    const sched = reactive({ open: false, time: '03:00', keep: 7, account: '' });
+    function openSchedule() {
+      const s = bk.data && bk.data.schedule;
+      const local = (bk.data ? bk.data.accounts : []).find(a => a.type === 'LOCAL');
+      let account = '';
+      if (s) {
+        const hit = bk.data.accounts.find(a => s.account.startsWith(a.name) && a.type !== 'LOCAL');
+        if (hit) account = hit.name;
+      }
+      Object.assign(sched, { open: true, time: (s && s.time) || '03:00', keep: (s && s.keep) || 7, account });
+      if (!local && !account && bk.data && bk.data.accounts.length) sched.account = bk.data.accounts[0].name;
+    }
+    const remoteAccounts = computed(() => bk.data ? bk.data.accounts.filter(a => a.type !== 'LOCAL') : []);
+    const saveSchedule = () => propose({ op: 'backup_schedule', time: sched.time, keep: Number(sched.keep) || 7, account: sched.account }).then(ok => { if (ok) sched.open = false; });
+    function unschedule() {
+      if (!confirm('取消这个网站的每日定时备份？已有的备份文件会保留。会先生成清单，确认后才执行，可以撤销。')) return;
+      propose({ op: 'backup_unschedule' });
+    }
+    const backupTime = b => b.createdAt ? new Date(b.createdAt).toLocaleString('zh-CN', { hour12: false }) : b.file;
+    function backupNote(b) {
+      if (b.note) return b.note.replace(/^Miao Panel\s*/, '');
+      return b.automatic ? '定时备份' : '';
+    }
+    function restore(b) {
+      if (!confirm(`把网站 ${site.value.domain} 恢复到 ${backupTime(b)} 的备份？网站目录和配置会换成备份里的，之后的改动会丢失（数据库不变）。恢复前会先把现在的网站备份一份。会先生成清单，确认后才执行。`)) return;
+      propose({ op: 'restore', backup: b.file, when: backupTime(b) + ' 的备份' });
+    }
+    const fetching = ref(0);
+    async function downloadBackup(b) {
+      const o = open.value;
+      fetching.value = b.id;
+      try {
+        const r = await api('POST', `/api/servers/${o.serverId}/websites/${o.siteId}/backups/${b.id}/fetch`);
+        const l = await api('POST', `/api/servers/${o.serverId}/files/link`, { path: r.path });
+        const a = document.createElement('a');
+        a.href = l.url; a.download = '';
+        document.body.appendChild(a); a.click(); a.remove();
+        notify('正在下载 ' + b.file);
+      } catch (e) { notify(e.message, 'error'); } finally { fetching.value = 0; }
+    }
+
     // A new site.
     const createForm = reactive({ open: false, serverId: 0, domain: '', type: 'proxy', proxy: 'http://127.0.0.1:' });
     function openCreate() {
@@ -3592,7 +3647,8 @@ const SitePage = {
       section, sections, site, plan, planning, formError, loadList, openSite, back, loadDetail, planDone, closePlan, planServerName, setRunning, removeSite, ask,
       domainForm, addDomain, removeDomain, httpsForm, certOptions, httpsChanged, saveHTTPS, certForm, certNames, openCert, toggleCertName, issueCert,
       proxyEd, openProxy, saveProxy, toggleProxy, removeProxy, rw, rwDirty, useTemplate, saveRewrite, conf, confDirty, saveConf, onConfKey,
-      log, loadLog, createForm, openCreate, create, visitURL, eoDomains, onCachePlan, modeText, modeHint, certLeft, certLevel };
+      log, loadLog, bk, loadBackups, backupNow, sched, openSchedule, remoteAccounts, saveSchedule, unschedule, backupTime, backupNote, restore, fetching, downloadBackup, BACKUP_KEEP,
+      createForm, openCreate, create, visitURL, eoDomains, onCachePlan, modeText, modeHint, certLeft, certLevel };
   },
   template: `
   <div class="site-page">
@@ -3808,6 +3864,59 @@ const SitePage = {
           <pre class="site-log" v-if="log.text">{{ log.text }}</pre>
           <div class="notice" v-else-if="!log.loading && !log.error"><ui-icon name="info"></ui-icon>日志是空的。</div>
           <div class="notice" v-if="log.loading && !log.text"><span class="spinner"></span>正在读取日志……</div>
+        </div>
+
+        <!-- Backups -->
+        <div v-if="section === 'backups'">
+          <div class="stat-bar site-bar">
+            <span class="grow small secondary">1Panel 把网站目录和 Nginx 配置打包备份；数据库不在网站备份里，要另外备份。</span>
+            <button class="plain icon-only" @click="loadBackups" :disabled="bk.loading" title="刷新" aria-label="刷新"><ui-icon name="refresh"></ui-icon></button>
+            <button class="primary" @click="backupNow" :disabled="planning">立即备份</button>
+          </div>
+          <div class="notice" v-if="bk.error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ bk.error }}</div>
+          <div class="notice" v-if="bk.loading && !bk.data"><span class="spinner"></span>正在读取备份……</div>
+          <template v-if="bk.data">
+            <div class="group-title">定时备份</div>
+            <div class="group">
+              <div class="row" v-if="bk.data.schedule">
+                <span class="grow"><b>每天 {{ bk.data.schedule.time || bk.data.schedule.spec }}</b><span class="small secondary"> · 保留最近 {{ bk.data.schedule.keep }} 份 · {{ bk.data.schedule.account }}</span>
+                  <span class="small tertiary block" v-if="bk.data.schedule.lastAt">上次 {{ bk.data.schedule.lastAt }}<span v-if="bk.data.schedule.lastStatus === 'Failed'" class="st-crit-text"> 失败</span></span>
+                  <span class="small tertiary block" v-if="!bk.data.schedule.enabled">在 1Panel 里被停用了</span></span>
+                <button class="plain small" @click="openSchedule" :disabled="planning">修改</button>
+                <button class="link small danger" @click="unschedule" :disabled="planning">取消</button>
+              </div>
+              <div class="row" v-else>
+                <span class="grow">还没有定时备份<span class="small secondary block">由 1Panel 的计划任务在服务器上运行，Miao Panel 关着也会备份。</span></span>
+                <button class="plain small" @click="openSchedule" :disabled="planning" v-if="!sched.open">设置</button>
+              </div>
+              <div class="row small secondary" v-for="o in bk.data.others" :key="o.name">
+                <ui-icon name="info"></ui-icon><span class="grow">1Panel 的计划任务「{{ o.name }}」也会备份这个网站（{{ o.time ? '每天 ' + o.time : o.spec }}，保留 {{ o.keep }} 份）</span></div>
+            </div>
+            <div class="group" v-if="sched.open">
+              <div class="row form"><span class="k">时间</span><span class="v"><input type="time" v-model="sched.time" aria-label="每天几点备份" step="60"><span class="small secondary block">服务器的时间，选访问少的时候</span></span></div>
+              <div class="row form"><span class="k">保留</span><span class="v"><select v-model.number="sched.keep" aria-label="保留几份"><option v-for="n in BACKUP_KEEP" :key="n" :value="n">最近 {{ n }} 份</option></select></span></div>
+              <div class="row form"><span class="k">放在</span><span class="v">
+                <select v-model="sched.account" aria-label="放在哪里"><option value="">服务器本机</option><option v-for="a in remoteAccounts" :key="a.id" :value="a.name">{{ a.name }}（{{ a.type }}）</option></select>
+                <span class="small secondary block" v-if="!sched.account">服务器坏了备份会一起丢。{{ remoteAccounts.length ? '' : '可以先在 1Panel「备份账号」里添加 COS 等存储，再回来选它。' }}</span></span></div>
+              <div class="row"><span class="grow"></span>
+                <button class="plain" @click="sched.open = false">取消</button>
+                <button class="primary" @click="saveSchedule" :disabled="planning || !sched.time">生成清单</button></div>
+            </div>
+
+            <div class="group-title">备份（{{ bk.data.backups.length }}）</div>
+            <div class="group">
+              <div class="row" v-for="b in bk.data.backups" :key="b.id">
+                <span class="grow"><b>{{ backupTime(b) }}</b> <span class="tag" v-if="backupNote(b)">{{ backupNote(b) }}</span>
+                  <span class="small tertiary block ellipsis" :title="b.file">{{ b.account }} · <span class="mono">{{ b.file }}</span></span>
+                  <span class="small block" v-if="b.status && b.status !== 'Success'"><span class="sdot" :class="b.status === 'Failed' ? 'crit' : 'off'"></span>{{ b.status === 'Failed' ? '失败：' + (b.message || '') : '进行中' }}</span></span>
+                <template v-if="!b.status || b.status === 'Success'">
+                  <button class="plain small" @click="downloadBackup(b)" :disabled="fetching === b.id">{{ fetching === b.id ? '准备中…' : '下载' }}</button>
+                  <button class="plain small" @click="restore(b)" :disabled="planning">恢复</button>
+                </template>
+              </div>
+              <div class="row small secondary" v-if="!bk.data.backups.length"><ui-icon name="info"></ui-icon><span class="grow">还没有备份。改网站之前建议先点「立即备份」。</span></div>
+            </div>
+          </template>
         </div>
 
         <!-- EdgeOne cache -->

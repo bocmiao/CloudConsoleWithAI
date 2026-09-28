@@ -42,6 +42,7 @@ type Site struct {
 	Conf     string
 	Created  time.Time
 	Backups  int
+	Restores int // backups put back
 	Deleted  bool
 	sslID    int
 	protocol string
@@ -72,6 +73,11 @@ type Fake struct {
 	Requests []string // "METHOD path" of every request
 	nextID   int
 	backups  []map[string]any
+	// Jobs are 1Panel's scheduled tasks.
+	Jobs []map[string]any
+	// FailRestore makes restoring a backup fail, as a damaged file does.
+	FailRestore bool
+	tasks       map[string]string // task id → Success or Failed
 	// HTTPPort and HTTPSPort are OpenResty's.
 	HTTPPort, HTTPSPort int
 }
@@ -144,6 +150,8 @@ func num(v any) int {
 	switch x := v.(type) {
 	case float64:
 		return int(x)
+	case int:
+		return x
 	case string:
 		n, _ := strconv.Atoi(x)
 		return n
@@ -507,13 +515,137 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for _, s := range f.Sites {
 			if s.Alias == str(body["detailName"]) && !s.Deleted {
 				s.Backups++
-				f.backups = append(f.backups, map[string]any{"taskID": body["taskID"], "status": "Success", "fileDir": "website/" + s.Alias,
-					"fileName": s.Alias + "_20260927.tar.gz", "name": s.Alias, "detailName": s.Alias})
+				f.backups = append([]map[string]any{{"id": f.id(), "createdAt": time.Now().Format(time.RFC3339), "taskID": body["taskID"],
+					"status": "Success", "fileDir": "website/" + s.Alias, "fileName": fmt.Sprintf("%s_%d.tar.gz", s.Alias, f.nextID),
+					"name": s.Alias, "detailName": s.Alias, "accountType": "LOCAL", "accountName": "localhost", "downloadAccountID": 1,
+					"description": body["description"]}}, f.backups...)
 				reply(nil)
 				return
 			}
 		}
 		bad("ErrRecordNotFound")
+	case p == "/backups/options":
+		reply([]map[string]any{{"id": 1, "name": "localhost", "type": "LOCAL"}, {"id": 2, "name": "cos-backup", "type": "COS"}})
+	case p == "/backups/record/download":
+		if num(body["downloadAccountID"]) == 0 {
+			bad("downloadAccountID is required")
+			return
+		}
+		for _, b := range f.backups {
+			if b["fileDir"] == body["fileDir"] && b["fileName"] == body["fileName"] {
+				reply("/opt/1panel/backup/" + str(body["fileDir"]) + "/" + str(body["fileName"]))
+				return
+			}
+		}
+		bad("ErrFileNotFound")
+	case p == "/backups/recover":
+		if num(body["downloadAccountID"]) == 0 || body["type"] != "website" {
+			bad("bad recover request")
+			return
+		}
+		file := str(body["file"])
+		if !strings.HasPrefix(file, "/opt/1panel/backup/website/") {
+			bad("ErrFileNotFound %s", file)
+			return
+		}
+		for _, s := range f.Sites {
+			if s.Alias == str(body["detailName"]) && !s.Deleted {
+				if f.tasks == nil {
+					f.tasks = map[string]string{}
+				}
+				f.tasks[str(body["taskID"])] = "Success"
+				if f.FailRestore {
+					f.tasks[str(body["taskID"])] = "Failed"
+				} else {
+					s.Restores++
+				}
+				reply(nil)
+				return
+			}
+		}
+		bad("ErrRecordNotFound")
+	case p == "/logs/tasks/search":
+		out := []map[string]any{}
+		if st, ok := f.tasks[str(body["taskID"])]; ok {
+			t := map[string]any{"id": body["taskID"], "status": st}
+			if st == "Failed" {
+				t["errorMsg"] = "decompress file failed"
+			}
+			out = append(out, t)
+		}
+		reply(map[string]any{"total": len(out), "items": out})
+	case p == "/backups/record/del":
+		ids := map[int]bool{}
+		for _, x := range body["ids"].([]any) {
+			ids[num(x)] = true
+		}
+		kept := f.backups[:0]
+		for _, b := range f.backups {
+			if !ids[num(b["id"])] {
+				kept = append(kept, b)
+			}
+		}
+		f.backups = kept
+		reply(nil)
+	case p == "/cronjobs/search":
+		out := []map[string]any{}
+		for _, j := range f.Jobs {
+			if strings.Contains(str(j["name"]), str(body["info"])) {
+				out = append(out, j)
+			}
+		}
+		reply(map[string]any{"total": len(out), "items": out})
+	case p == "/cronjobs" || p == "/cronjobs/update":
+		if str(body["name"]) == "" || str(body["type"]) == "" || str(body["spec"]) == "" || num(body["retainCopies"]) < 1 || num(body["timeout"]) < 1 {
+			bad("name, type, spec, retainCopies and timeout are required")
+			return
+		}
+		if len(strings.Fields(str(body["spec"]))) != 5 {
+			bad("bad spec %q", body["spec"])
+			return
+		}
+		if body["type"] == "website" && (str(body["website"]) == "" || str(body["sourceAccountIDs"]) == "" || num(body["downloadAccountID"]) == 0) {
+			bad("website, sourceAccountIDs and downloadAccountID are required")
+			return
+		}
+		if p == "/cronjobs" {
+			for _, j := range f.Jobs {
+				if j["name"] == body["name"] {
+					bad("ErrRecordExist")
+					return
+				}
+			}
+			body["id"], body["status"] = f.id(), "Enable"
+			f.Jobs = append(f.Jobs, body)
+			reply(nil)
+			return
+		}
+		for i, j := range f.Jobs {
+			if num(j["id"]) == num(body["id"]) {
+				body["status"] = j["status"]
+				f.Jobs[i] = body
+				reply(nil)
+				return
+			}
+		}
+		bad("ErrRecordNotFound")
+	case p == "/cronjobs/del":
+		if body["cleanData"] != false {
+			bad("would delete the backups too")
+			return
+		}
+		ids := map[int]bool{}
+		for _, x := range body["ids"].([]any) {
+			ids[num(x)] = true
+		}
+		kept := f.Jobs[:0]
+		for _, j := range f.Jobs {
+			if !ids[num(j["id"])] {
+				kept = append(kept, j)
+			}
+		}
+		f.Jobs = kept
+		reply(nil)
 	case p == "/backups/record/search":
 		var out []map[string]any
 		for _, b := range f.backups {

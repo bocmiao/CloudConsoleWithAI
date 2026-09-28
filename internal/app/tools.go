@@ -85,6 +85,9 @@ HTTPS 证书：先用 certificates 看现状。
 - 优先用具体的操作。只有它们做不到时（比如开 gzip、限制上传大小、加响应头、限制访问 IP）才用 site.conf.set：先用 panel_website 读出完整配置，在原文基础上只改需要的几行，
   content 写完整的新文件，保留 1Panel 生成的 include、listen、ssl 等内容。1Panel 会先用 nginx -t 检查，不通过自动恢复；
 - 1Panel 网站的配置不要用 free_command 改；宝塔和纯 Linux 服务器的网站还不能这样管理。
+- 备份：panel_backups 看一个网站有哪些备份和定时备份。site.backup 立即备份（大改动前建议先备份）；site.backup.schedule 设置每天几点自动备份、保留几份、放在哪个 1Panel 备份账号
+  （不填放服务器本机；本机备份和服务器一起丢，重要网站建议选 COS 等账号，没有账号时告诉用户先在 1Panel「备份账号」里添加）；site.backup.unschedule 取消；
+  site.restore 从备份恢复（会先备份现在的样子，网站目录和配置换成备份里的，数据库不在网站备份里），只在用户明确要求恢复时使用。
 
 AI 自由命令（free_command）：只有在没有合适的正式操作时才用，比如修改某个服务的配置文件、调整一个少见软件的参数。用户需要先在设置里开启。
 - 系统会先做静态检查，再在服务器上隔离试运行，再请另一个模型独立审查，都通过了才会显示给用户执行；执行前自动备份，失败自动恢复，还有 5 分钟保险；
@@ -222,6 +225,16 @@ func (a *App) tools() map[string]ai.Tool {
 				"log_lines": map[string]any{"type": "integer", "description": "日志看最后多少行，默认 30，最多 200"},
 			}, "server_id", "website"),
 		}, Run: a.toolPanelWebsite},
+		{Def: ai.ToolDef{
+			Name: "panel_backups",
+			Description: "查看 1Panel 上一个网站的备份（只读）：每份备份的文件名、时间、放在哪里（服务器本机或 COS 等备份账号）、是否成功、备注，" +
+				"Miao Panel 设置的每日定时备份（时间、保留几份），1Panel 里其他会备份这个网站的计划任务，以及可用的备份账号。" +
+				"备份用 site.backup，定时备份用 site.backup.schedule / site.backup.unschedule，恢复用 site.restore（backup 填这里的 file）。",
+			Schema: obj(map[string]any{
+				"server_id": serverIDProp,
+				"website":   map[string]any{"type": "string", "description": "网站主域名"},
+			}, "server_id", "website"),
+		}, Run: a.toolPanelBackups},
 		{Def: ai.ToolDef{
 			Name: "monitor_status",
 			Description: "Miao Panel 自己的监控（只读）：每个网站每分钟打开一次的结果（现在能不能打开、原因、响应时间、最近 24 小时可用率），" +

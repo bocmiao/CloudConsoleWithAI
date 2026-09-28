@@ -380,9 +380,13 @@ func (c *Client) Databases(ctx context.Context, app string) ([]string, error) {
 // kind is "app" (name = app key, detail = install name) or a database type
 // such as "mysql" (name = database app, detail = database name).
 func (c *Client) Backup(ctx context.Context, kind, name, detail, taskID string) error {
+	return c.BackupNote(ctx, kind, name, detail, taskID, "Miao Panel 修改前备份")
+}
+
+// BackupNote starts a backup with a note saying why it was made.
+func (c *Client) BackupNote(ctx context.Context, kind, name, detail, taskID, note string) error {
 	return c.do(ctx, http.MethodPost, "/backups/backup", map[string]any{
-		"type": kind, "name": name, "detailName": detail, "taskID": taskID,
-		"description": "Miao Panel 修改前备份",
+		"type": kind, "name": name, "detailName": detail, "taskID": taskID, "description": note,
 	}, nil)
 }
 

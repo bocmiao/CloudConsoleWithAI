@@ -141,6 +141,8 @@ func (s *Server) routes() {
 	api("GET /api/servers/{id}/websites/{sid}", s.website)
 	api("GET /api/servers/{id}/websites/{sid}/log", s.websiteLog)
 	api("GET /api/servers/{id}/websites/{sid}/rewrite", s.websiteRewrite)
+	api("GET /api/servers/{id}/websites/{sid}/backups", s.websiteBackups)
+	api("POST /api/servers/{id}/websites/{sid}/backups/{bid}/fetch", s.websiteBackupFetch)
 	big("POST /api/websites/plan", 1<<20, s.websitePlan)
 	api("POST /api/eo/cache/plan", s.eoCachePlan)
 	api("GET /api/dns/domains", s.dnsDomains)
@@ -356,6 +358,37 @@ func (s *Server) website(_ http.ResponseWriter, r *http.Request) (any, error) {
 		return nil, err
 	}
 	return s.app.Website(r.Context(), id, sid)
+}
+
+func (s *Server) websiteBackups(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	sid, err := siteID(r)
+	if err != nil {
+		return nil, err
+	}
+	return s.app.SiteBackups(r.Context(), id, sid)
+}
+
+// websiteBackupFetch gets a backup's file ready on the server and returns
+// its path, which the page then downloads like any file.
+func (s *Server) websiteBackupFetch(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	sid, err := siteID(r)
+	if err != nil {
+		return nil, err
+	}
+	bid, err := strconv.ParseUint(r.PathValue("bid"), 10, 64)
+	if err != nil {
+		return nil, &app.UserError{Msg: "备份编号不对"}
+	}
+	path, err := s.app.BackupPath(r.Context(), id, sid, uint(bid))
+	return map[string]string{"path": path}, err
 }
 
 func (s *Server) websiteLog(_ http.ResponseWriter, r *http.Request) (any, error) {

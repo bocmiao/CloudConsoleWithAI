@@ -565,6 +565,13 @@ type SiteRequest struct {
 	// For certificates.
 	OtherDomains []string `json:"otherDomains,omitempty"`
 	Email        string   `json:"email,omitempty"`
+	// For backups.
+	Note    string `json:"note,omitempty"`
+	Time    string `json:"time,omitempty"` // daily backup at, "03:00"
+	Keep    int    `json:"keep,omitempty"`
+	Account string `json:"account,omitempty"`
+	Backup  string `json:"backup,omitempty"` // the file to restore
+	When    string `json:"when,omitempty"`   // when that backup was made, in words
 }
 
 func switchOf(b *bool) string {
@@ -711,6 +718,43 @@ func (a *App) ProposeWebsite(ctx context.Context, req SiteRequest) (PlanView, er
 			summary = "清空网站 " + site + " 的伪静态规则"
 		}
 		reason = "1Panel 检查通过后重新加载 OpenResty（不中断访问）；检查不通过会自动恢复。可以一键恢复原来的规则。"
+	case "backup":
+		capability = "site.backup"
+		if n := strings.TrimSpace(req.Note); n != "" {
+			params["note"] = n
+		}
+		title, summary = "备份网站："+site, "在 1Panel 里备份网站 "+site+"（网站目录和配置）"
+		reason = "备份文件放在服务器上的 1Panel 备份目录，可以在「备份」里下载或用来恢复。不影响访问。"
+	case "backup_schedule":
+		if req.Keep == 0 {
+			req.Keep = 7
+		}
+		if req.Time == "" {
+			req.Time = "03:00"
+		}
+		capability, params["time"], params["keep"] = "site.backup.schedule", req.Time, req.Keep
+		where := "服务器上的 1Panel 备份目录"
+		if req.Account != "" {
+			params["account"] = req.Account
+			where = "备份账号 " + req.Account
+		}
+		title, summary = "定时备份："+site, fmt.Sprintf("网站 %s 每天 %s 自动备份，保留最近 %d 份，放在%s", site, req.Time, req.Keep, where)
+		reason = "由 1Panel 的计划任务在服务器上运行，Miao Panel 关着也会备份；超过份数的旧备份自动删除。可以一键撤销。"
+		if req.Account == "" {
+			reason += "\n备份放在服务器本机，服务器坏了会一起丢。重要的网站建议在 1Panel 里添加 COS 等备份账号，再选它。"
+		}
+	case "backup_unschedule":
+		capability = "site.backup.unschedule"
+		title, summary = "取消定时备份："+site, "取消网站 "+site+" 的每日定时备份"
+		reason = "以后不再自动备份，已有的备份文件保留。可以一键恢复原来的设置。"
+	case "restore":
+		capability, params["backup"] = "site.restore", req.Backup
+		when := req.When
+		if when == "" {
+			when = req.Backup
+		}
+		title, summary = "恢复网站："+site, fmt.Sprintf("把网站 %s 恢复到 %s", site, when)
+		reason = "网站目录和配置会换成备份里的，之后的改动会丢失（数据库不在网站备份里，不会变）。恢复前先把网站现在的样子备份一份，需要时可以用它再恢复回来；1Panel 恢复失败时会自动退回。恢复期间网站可能短暂打不开。"
 	case "delete":
 		capability = "site.delete"
 		title, summary = "删除网站："+site, "删除网站 "+site+"（先备份）"

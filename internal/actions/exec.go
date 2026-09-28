@@ -452,6 +452,14 @@ func applyPanel(ctx context.Context, env *Env, r Resolved, progress Progress) Ou
 			return applyCertAutoRenew(ctx, env, r.Values, out, report)
 		case "site_status":
 			return applySiteStatus(ctx, env, r.Values, out, report)
+		case "site_backup":
+			return applySiteBackup(ctx, env, r.Values, out, report)
+		case "backup_schedule":
+			return applyBackupSchedule(ctx, env, r.Values, out, report)
+		case "backup_unschedule":
+			return applyBackupUnschedule(ctx, env, r.Values, out, report)
+		case "site_restore":
+			return applySiteRestore(ctx, env, r.Values, out, report)
 		case "site_domain_add":
 			return applySiteDomainAdd(ctx, env, r.Values, out, report)
 		case "site_domain_remove":
@@ -658,6 +666,10 @@ func undoPanel(ctx context.Context, env *Env, r Resolved, undo map[string]string
 			err = undoCertAutoRenew(ctx, env.OnePanel, undo)
 		case "site_status":
 			err = undoSiteStatus(ctx, env.OnePanel, undo)
+		case "backup_schedule":
+			err = undoBackupSchedule(ctx, env.OnePanel, undo)
+		case "backup_unschedule":
+			err = undoBackupUnschedule(ctx, env.OnePanel, undo)
 		case "site_domain_add":
 			err = undoSiteDomainAdd(ctx, env.OnePanel, undo)
 		case "site_domain_remove":
