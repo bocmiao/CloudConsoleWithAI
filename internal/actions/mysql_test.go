@@ -2,6 +2,7 @@ package actions
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/bocmiao/CloudConsoleWithAI/internal/onepanel/onepaneltest"
@@ -25,6 +26,10 @@ func TestMySQLDatabases(t *testing.T) {
 	}
 
 	r, out := run(t, env, "mysql.db.create", map[string]any{"app": "mysql", "name": "shop"}, StatusDone)
+	// The random password is on the panel only, never in the record.
+	if cmds := strings.Join(out.Commands, "\n"); !strings.Contains(cmds, `"password":"（不记录）"`) || strings.Count(cmds, `"password":"`) != strings.Count(cmds, `"password":"（不记录）"`) {
+		t.Fatalf("commands = %s", cmds)
+	}
 	if got := names(); got["shop"] != "shop@%" {
 		t.Fatalf("databases = %v", got)
 	}

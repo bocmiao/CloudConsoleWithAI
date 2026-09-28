@@ -164,7 +164,7 @@
               </div>
               <div class="row stack security-block" v-if="cloud && cloud.kind === 'cvm' && cloud.securityGroups && cloud.securityGroups.length">
                 <b>收紧安全组 {{ cloud.securityGroups[0] }}</b>
-                <span class="small secondary">先补端口规则，再移除全端口放行。80/443 对外开放；SSH 端口 {{ current.server.port }}、13940、8090、8080 仅管理网段可访问；3306 不对外开放。若站点依赖其他端口，请先检查回源配置。</span>
+                <span class="small secondary">先补端口规则，再移除全端口放行。80/443 对外开放；SSH 端口 {{ current.server.port }}、面板端口和 13940、8090、8080 仅管理网段（/16 或更小）可访问；3306 不对外开放。若站点依赖其他端口，请先检查回源配置。</span>
                 <div class="row form"><label class="k" for="security-admin-cidr">管理网段</label><span class="v"><input id="security-admin-cidr" v-model="securityForm.adminCidr" placeholder="你的公网 IP/32，例如 203.0.113.4/32" autocomplete="off" spellcheck="false"></span></div>
                 <div><button @click="proposeSecurity('firewall')" :disabled="busy || !securityForm.adminCidr.trim()">生成安全组清单</button></div>
               </div>

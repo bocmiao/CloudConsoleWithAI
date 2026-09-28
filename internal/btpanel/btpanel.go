@@ -44,6 +44,10 @@ type Client struct {
 	now    func() time.Time
 	// Trace, when set, is told about every request (never the credentials).
 	Trace func(method, path string, body []byte)
+	// KeysHidden says the transport blanks private keys in the panel's
+	// answers (curl run by the automation agent, whose output Tencent
+	// Cloud keeps), so calls that hand a key back cannot work.
+	KeysHidden bool
 }
 
 // New creates a client for the panel listening on port. rt must carry

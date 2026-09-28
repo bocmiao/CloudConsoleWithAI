@@ -145,10 +145,13 @@ type monTarget struct {
 }
 
 type monitorState struct {
+	round     sync.Mutex // one round at a time: 立即检查 waits for the minute's
 	mu        sync.Mutex
 	targets   []monTarget
 	targetsAt time.Time
 	fails     map[string]int         // consecutive failures, by address
+	failAt    map[string]time.Time   // when the run of failures began
+	gap       time.Duration          // between two failures that make an outage; 45s when 0
 	conns     map[int64]sshx.Conn    // kept open between samples
 	prev      map[int64]serverTotals // the last sample's counters
 	misses    map[int64]int          // consecutive failed samples
@@ -261,27 +264,52 @@ func (a *App) Monitor(ctx context.Context) {
 		a.monitorRound(ctx, n%2 == 0)
 		select {
 		case <-ctx.Done():
-			a.mon.mu.Lock()
-			for id, c := range a.mon.conns {
-				c.Close()
-				delete(a.mon.conns, id)
-			}
-			a.mon.mu.Unlock()
+			a.dropMonitorConns(0)
 			return
 		case <-tick.C:
 		}
 	}
 }
 
+// serverKinds are the incidents of a server.
+var serverKinds = []string{"server", "disk", "mem", "cpu"}
+
+// dropMonitorConns closes the kept connection to a server, or to every
+// server when id is 0.
+func (a *App) dropMonitorConns(id int64) {
+	a.mon.mu.Lock()
+	defer a.mon.mu.Unlock()
+	for sid, c := range a.mon.conns {
+		if id == 0 || sid == id {
+			c.Close()
+			delete(a.mon.conns, sid)
+		}
+	}
+}
+
+// forgetServer stops watching a deleted server: its connection closes and
+// its open incidents end.
+func (a *App) forgetServer(id int64) {
+	a.dropMonitorConns(id)
+	for _, k := range serverKinds {
+		_, _ = a.Store.CloseIncident(k, strconv.FormatInt(id, 10))
+	}
+}
+
 // monitorRound checks every website, and samples the servers when asked.
 func (a *App) monitorRound(ctx context.Context, servers bool) {
+	a.mon.round.Lock()
+	defer a.mon.round.Unlock()
 	s := a.MonitorSettings()
+	if !s.Enabled || !s.Servers {
+		a.dropMonitorConns(0)
+	}
 	if !s.Enabled {
 		return
 	}
 	a.mon.mu.Lock()
 	if a.mon.fails == nil {
-		a.mon.fails, a.mon.conns, a.mon.prev, a.mon.misses, a.mon.hot = map[string]int{}, map[int64]sshx.Conn{}, map[int64]serverTotals{}, map[int64]int{}, map[string]int{}
+		a.mon.fails, a.mon.failAt, a.mon.conns, a.mon.prev, a.mon.misses, a.mon.hot = map[string]int{}, map[string]time.Time{}, map[int64]sshx.Conn{}, map[int64]serverTotals{}, map[int64]int{}, map[string]int{}
 	}
 	age := time.Since(a.mon.targetsAt)
 	stale := a.mon.targetsAt.IsZero() || age > 30*time.Minute || (len(a.mon.targets) == 0 && age > 5*time.Minute)
@@ -289,10 +317,20 @@ func (a *App) monitorRound(ctx context.Context, servers bool) {
 	if stale {
 		tctx, cancel := context.WithTimeout(ctx, time.Minute)
 		t := a.monitorTargets(tctx, s)
+		complete := tctx.Err() == nil
 		cancel()
 		a.mon.mu.Lock()
 		a.mon.targets, a.mon.targetsAt = t, time.Now()
 		a.mon.mu.Unlock()
+		if complete {
+			// Addresses no longer watched (skipped, moved to https, their
+			// server gone) end their outages here; they cannot recover.
+			keep := map[string]bool{}
+			for _, x := range t {
+				keep[x.URL] = true
+			}
+			_ = a.Store.EndIncidents("site", keep)
+		}
 	}
 	a.mon.mu.Lock()
 	targets := append([]monTarget(nil), a.mon.targets...)
@@ -428,13 +466,17 @@ func (a *App) checkSite(ctx context.Context, t monTarget) {
 	a.mon.mu.Lock()
 	if c.OK {
 		a.mon.fails[t.URL] = 0
-	} else {
-		a.mon.fails[t.URL]++
+	} else if a.mon.fails[t.URL]++; a.mon.fails[t.URL] == 1 {
+		a.mon.failAt[t.URL] = time.Now()
 	}
-	fails := a.mon.fails[t.URL]
+	fails, since, gap := a.mon.fails[t.URL], a.mon.failAt[t.URL], a.mon.gap
 	a.mon.mu.Unlock()
+	if gap == 0 {
+		gap = 45 * time.Second
+	}
 	switch {
-	case !c.OK && fails >= 2:
+	// Two failures a minute apart: 立即检查 right after one is not a second.
+	case !c.OK && fails >= 2 && time.Since(since) >= gap:
 		if _, opened, err := a.Store.OpenIncident("site", t.URL, t.Name, c.Error); err == nil && opened {
 			a.monitorAlert(ctx, "网站打不开："+t.Name, fmt.Sprintf("**%s** 连续两次打不开：%s。\n\n地址：%s（%s）\n\n可以在「监控」页看详情，或者让 AI 排查。", t.Name, c.Error, t.URL, t.Source))
 		}
@@ -510,14 +552,16 @@ func (a *App) sampleServer(ctx context.Context, sv store.Server, s MonitorSettin
 	if err == nil {
 		rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		var r sshx.Result
-		r, err = c.Run(rctx, sampleScript, "", 16<<10)
+		r, err = runBounded(rctx, c, sampleScript)
 		cancel()
 		out = r.Stdout
 		if err != nil {
 			// The connection is done for; the next sample opens another.
 			c.Close()
 			a.mon.mu.Lock()
-			delete(a.mon.conns, sv.ID)
+			if a.mon.conns[sv.ID] == c {
+				delete(a.mon.conns, sv.ID)
+			}
 			a.mon.mu.Unlock()
 		}
 	}
@@ -564,8 +608,9 @@ func (a *App) sampleServer(ctx context.Context, sv store.Server, s MonitorSettin
 	if in, e := a.Store.CloseIncident("server", id); e == nil && in.ID != 0 {
 		a.monitorAlert(ctx, "服务器恢复了："+sv.Name, fmt.Sprintf("**%s** 又能连上了，中断了 %s。", sv.Name, lasted(in)))
 	}
-	// A limit is alerted once when it is passed, and ends quietly.
-	over := func(kind string, now bool, need int, title, text string) {
+	// A limit is alerted once when it is passed, and ends quietly once
+	// clear of it.
+	over := func(kind string, now, clear bool, need int, title, text string) {
 		key := kind + ":" + id
 		a.mon.mu.Lock()
 		if now {
@@ -579,14 +624,38 @@ func (a *App) sampleServer(ctx context.Context, sv store.Server, s MonitorSettin
 			if _, opened, e := a.Store.OpenIncident(kind, id, sv.Name, text); e == nil && opened {
 				a.monitorAlert(ctx, title, text+"\n\n可以让 AI 看看是什么占用的、怎么处理。")
 			}
-		} else if !now {
+		} else if clear {
 			_, _ = a.Store.CloseIncident(kind, id)
 		}
 	}
-	over("disk", m.Disk >= float64(s.DiskPct), 1, "磁盘快满了："+sv.Name, fmt.Sprintf("**%s** 的系统盘已经用了 %.0f%%（提醒线 %d%%），满了网站和数据库会出错。", sv.Name, m.Disk, s.DiskPct))
-	over("mem", m.Mem >= float64(s.MemPct), 3, "内存快用完了："+sv.Name, fmt.Sprintf("**%s** 的内存已经连续 6 分钟用了 %.0f%% 以上（提醒线 %d%%），再多系统会杀掉进程。", sv.Name, m.Mem, s.MemPct))
+	// The disk alerts on one sample, so it ends three points below the line
+	// instead of opening and closing while it hovers there.
+	over("disk", m.Disk >= float64(s.DiskPct), m.Disk < float64(s.DiskPct-3), 1, "磁盘快满了："+sv.Name, fmt.Sprintf("**%s** 的系统盘已经用了 %.0f%%（提醒线 %d%%），满了网站和数据库会出错。", sv.Name, m.Disk, s.DiskPct))
+	over("mem", m.Mem >= float64(s.MemPct), m.Mem < float64(s.MemPct), 3, "内存快用完了："+sv.Name, fmt.Sprintf("**%s** 的内存已经连续 6 分钟用了 %.0f%% 以上（提醒线 %d%%），再多系统会杀掉进程。", sv.Name, m.Mem, s.MemPct))
 	if hasPrev {
-		over("cpu", m.CPU >= float64(s.CPUPct), 5, "CPU 一直很忙："+sv.Name, fmt.Sprintf("**%s** 的 CPU 已经连续 10 分钟用了 %.0f%% 以上（提醒线 %d%%），网站可能会变慢。", sv.Name, m.CPU, s.CPUPct))
+		over("cpu", m.CPU >= float64(s.CPUPct), m.CPU < float64(s.CPUPct), 5, "CPU 一直很忙："+sv.Name, fmt.Sprintf("**%s** 的 CPU 已经连续 10 分钟用了 %.0f%% 以上（提醒线 %d%%），网站可能会变慢。", sv.Name, m.CPU, s.CPUPct))
+	}
+}
+
+// runBounded runs a command on a kept connection, closing the connection
+// when ctx ends first: a server that went silent (powered off, no RST)
+// otherwise blocks the call until TCP gives up, a quarter of an hour.
+func runBounded(ctx context.Context, c sshx.Conn, cmd string) (sshx.Result, error) {
+	type result struct {
+		r   sshx.Result
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		r, err := c.Run(ctx, cmd, "", 16<<10)
+		done <- result{r, err}
+	}()
+	select {
+	case x := <-done:
+		return x.r, x.err
+	case <-ctx.Done():
+		c.Close()
+		return sshx.Result{}, errors.New("30 秒内没有回应")
 	}
 }
 

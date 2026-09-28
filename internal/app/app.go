@@ -260,6 +260,8 @@ func (a *App) DeleteServer(id int64) error {
 	if err := a.Store.DeleteServer(id); err != nil {
 		return err
 	}
+	a.forgetServer(id)
+	a.relistTargets()
 	_ = a.Store.Audit("user", "server.delete", sv.Name, sv.Host)
 	return nil
 }

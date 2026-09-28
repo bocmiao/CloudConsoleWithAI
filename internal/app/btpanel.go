@@ -112,7 +112,10 @@ func (a *App) btClient(id int64, c sshx.Conn) (*btpanel.Client, error) {
 		}
 		rt = onepanel.ShellTransport(shell, s.Port, "宝塔", btRedact)
 	}
-	return btpanel.New(rt, s.Port, key, s.Scheme), nil
+	b := btpanel.New(rt, s.Port, key, s.Scheme)
+	_, tunnel := rt.(*http.Transport)
+	b.KeysHidden = !tunnel // btRedact blanks them in curl's output
+	return b, nil
 }
 
 // isBT says whether a server's panel is 宝塔.

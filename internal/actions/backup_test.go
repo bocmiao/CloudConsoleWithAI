@@ -61,6 +61,19 @@ func TestBackupSchedule(t *testing.T) {
 		t.Fatalf("the same schedule again should change nothing: %+v", again)
 	}
 
+	// Switched off in 1Panel, the same schedule turns it back on; undo
+	// switches it off again.
+	f.Jobs[0]["status"] = "Disable"
+	rOn, outOn := run(t, env, "site.backup.schedule", map[string]any{"website": "blog.example.com", "time": "04:30", "keep": 5}, StatusDone)
+	if j, _, _ := BackupJob(ctx, env.OnePanel, "blog.example.com"); j.Status != "Enable" {
+		t.Fatalf("still off: %+v", j)
+	}
+	undo(t, env, rOn, outOn)
+	if j, _, _ := BackupJob(ctx, env.OnePanel, "blog.example.com"); j.Status != "Disable" {
+		t.Fatalf("undo left it on: %+v", j)
+	}
+	f.Jobs[0]["status"] = "Enable"
+
 	// Changing it to COS, then undoing, puts the old one back.
 	r2, out2 := run(t, env, "site.backup.schedule", map[string]any{"website": "blog.example.com", "time": "02:00", "keep": 14, "account": "COS"}, StatusDone)
 	j, _, _ = BackupJob(ctx, env.OnePanel, "blog.example.com")

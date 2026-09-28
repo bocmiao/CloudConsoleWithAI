@@ -52,12 +52,20 @@ func TestMonitorSites(t *testing.T) {
 		t.Fatalf("sites = %+v", v.Sites)
 	}
 
-	// One failure is not an outage yet; two are.
+	// One failure is not an outage yet; two are, when they are apart
+	// (立即检查 right after a failure is not a second one).
 	down.Store(true)
 	a.monitorRound(ctx, false)
 	if len(noticeTitles(a)) != 0 {
 		t.Fatalf("alerted after one failure: %v", noticeTitles(a))
 	}
+	a.monitorRound(ctx, false)
+	if len(noticeTitles(a)) != 0 {
+		t.Fatalf("alerted on two failures a moment apart: %v", noticeTitles(a))
+	}
+	a.mon.mu.Lock()
+	a.mon.gap = time.Nanosecond
+	a.mon.mu.Unlock()
 	a.monitorRound(ctx, false)
 	titles := noticeTitles(a)
 	if len(titles) != 1 || !strings.HasPrefix(titles[0], "网站打不开") {
@@ -71,7 +79,7 @@ func TestMonitorSites(t *testing.T) {
 		t.Fatalf("alerted again: %v", noticeTitles(a))
 	}
 	v, _ = a.MonitorPage(ctx)
-	if sm := v.Sites[0]; *sm.Up || sm.Since == "" || sm.Status != 502 || *sm.Uptime != 25 || len(sm.Recent) != 4 || sm.Recent[3] != -1 {
+	if sm := v.Sites[0]; *sm.Up || sm.Since == "" || sm.Status != 502 || *sm.Uptime != 20 || len(sm.Recent) != 5 || sm.Recent[4] != -1 {
 		t.Fatalf("down site = %+v", sm)
 	}
 	if len(v.Incidents) != 1 || v.Incidents[0].EndedAt != "" || v.Incidents[0].Kind != "site" {
@@ -96,8 +104,25 @@ func TestMonitorSites(t *testing.T) {
 	for _, p := range hist {
 		n, fails = n+p.N, fails+p.Fails
 	}
-	if n != 5 || fails != 3 {
+	if n != 6 || fails != 4 {
 		t.Errorf("history counts %d checks, %d failures", n, fails)
+	}
+
+	// Down again, then set aside: the outage ends, since it cannot recover.
+	down.Store(true)
+	a.monitorRound(ctx, false)
+	a.monitorRound(ctx, false)
+	s.Skip = []string{site.URL}
+	if _, err := a.SaveMonitorSettings(s); err != nil {
+		t.Fatal(err)
+	}
+	if v, err = a.CheckNow(ctx); err != nil || len(v.Sites) != 0 {
+		t.Fatalf("after skipping: %+v %v", v.Sites, err)
+	}
+	for _, in := range v.Incidents {
+		if in.EndedAt == "" {
+			t.Fatalf("still open: %+v", in)
+		}
 	}
 
 	// A closed port says so.

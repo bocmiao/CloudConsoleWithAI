@@ -157,6 +157,11 @@ func (c *Client) SaveCronjob(ctx context.Context, j Cronjob) error {
 	return c.do(ctx, http.MethodPost, path, j, nil)
 }
 
+// SetCronjobStatus switches a scheduled task on (Enable) or off (Disable).
+func (c *Client) SetCronjobStatus(ctx context.Context, id uint, status string) error {
+	return c.do(ctx, http.MethodPost, "/cronjobs/status", map[string]any{"id": id, "status": status}, nil)
+}
+
 // DeleteCronjob removes a scheduled task, keeping the backups it made.
 func (c *Client) DeleteCronjob(ctx context.Context, id uint) error {
 	return c.do(ctx, http.MethodPost, "/cronjobs/del", map[string]any{"ids": []uint{id}, "cleanData": false, "cleanRemoteData": false}, nil)

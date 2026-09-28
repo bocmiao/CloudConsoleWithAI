@@ -432,6 +432,7 @@ func init() {
 		"site/CloseToHttps":       (*Fake).closeToHTTPS,
 		"site/CloseSSLConf":       (*Fake).closeSSL,
 		"acme/apply_cert_api":     (*Fake).applyCert,
+		"site/SetPHPVersion":      (*Fake).phpSet,
 		"site/GetProxyList":       (*Fake).proxyList,
 		"site/CreateProxy":        (*Fake).proxyCreate,
 		"site/ModifyProxy":        (*Fake).proxyModify,
@@ -1328,6 +1329,25 @@ func (f *Fake) proxyCreate(a *args) any {
 		}
 	}
 	return msg(true, "添加成功")
+}
+
+// phpSet is SetPHPVersion: the site's PHP, 00 for none.
+func (f *Fake) phpSet(a *args) any {
+	if !a.need("siteName", "version") {
+		return nil
+	}
+	s := f.siteByName(a.get("siteName"))
+	if s == nil {
+		a.missing = "siteName (no such site)"
+		return nil
+	}
+	v := a.get("version")
+	if v != "00" && !slices.Contains(f.PHPVersions, v) {
+		return msg(false, "指定PHP版本不存在!")
+	}
+	f.write(vhostPath(s.Name), strings.Replace(f.Files[vhostPath(s.Name)], "enable-php-"+s.PHP+".conf", "enable-php-"+v+".conf", 1))
+	s.PHP = v
+	return msg(true, "切换成功")
 }
 
 func (f *Fake) proxyModify(a *args) any {

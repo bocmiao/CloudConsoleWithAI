@@ -87,13 +87,38 @@ func backupAccount(ctx context.Context, c *onepanel.Client, want string) (onepan
 	return onepanel.BackupAccount{}, fmt.Errorf("1Panel 里没有备份账号 %s（有的是：%s）", want, strings.Join(names, "、"))
 }
 
-// waitBackup waits until the backup started with task is written.
+// checkBackup makes sure a backup 1Panel calls done is a file with
+// something in it, before anything is deleted or overwritten on its word.
+func checkBackup(ctx context.Context, env *Env, kind, name, detail string, rec onepanel.BackupRecord) (int64, error) {
+	if strings.TrimSpace(rec.FileDir) == "" || strings.TrimSpace(rec.FileName) == "" {
+		return 0, errors.New("1Panel 报告备份成功，但没有返回备份文件位置；请在 1Panel「备份」里核对")
+	}
+	var size int64
+	var err error
+	for attempt := 0; ; attempt++ {
+		if size, err = env.OnePanel.BackupSize(ctx, kind, name, detail, rec.ID); err == nil && size > 0 {
+			return size, nil
+		}
+		if attempt == 2 {
+			return 0, fmt.Errorf("1Panel 报告备份成功，但无法确认文件有内容（%s/%s）：大小 %d，错误 %v；请在 1Panel「备份」里核对", rec.FileDir, rec.FileName, size, err)
+		}
+		select {
+		case <-ctx.Done():
+			return 0, errors.New("核对备份文件大小时连接中断")
+		case <-time.After(pollEvery(env)):
+		}
+	}
+}
+
+// waitBackup waits until the backup started with task is written, and
+// checks the file is there.
 func waitBackup(ctx context.Context, env *Env, kind, name, detail, task string) (onepanel.BackupRecord, error) {
 	deadline := time.Now().Add(backupTimeout)
 	for {
 		rec, found, err := env.OnePanel.FindBackup(ctx, kind, name, detail, task)
 		if err == nil && found && rec.Status == "Success" {
-			return rec, nil
+			_, err := checkBackup(ctx, env, kind, name, detail, rec)
+			return rec, err
 		}
 		if err == nil && found && rec.Status == "Failed" {
 			return rec, errors.New(rec.Message)
@@ -206,7 +231,7 @@ func applyBackupSchedule(ctx context.Context, env *Env, v map[string]string, out
 	}
 	if found {
 		if old.Spec == job.Spec && old.Website == job.Website && old.RetainCopies == keep &&
-			old.SourceAccountIDs == job.SourceAccountIDs && old.DownloadAccountID == acc.ID {
+			old.SourceAccountIDs == job.SourceAccountIDs && old.DownloadAccountID == acc.ID && old.Status != "Disable" {
 			report("网站 %s 已经是每天 %s 备份、保留 %d 份，不需要修改", site.PrimaryDomain, clock, keep)
 			out.Status, out.Undo = StatusDone, map[string]string{}
 			return *out
@@ -223,6 +248,15 @@ func applyBackupSchedule(ctx context.Context, env *Env, v map[string]string, out
 	if found {
 		b, _ := json.Marshal(old)
 		out.Undo["job"] = string(b)
+		if old.Status == "Disable" {
+			// Switched off in 1Panel: a daily backup that never runs is none.
+			if err := c.SetCronjobStatus(ctx, old.ID, "Enable"); err != nil {
+				out.Status = StatusDone
+				report("设置已保存，但这个计划任务在 1Panel 里是停用的，启用失败：%v。请在 1Panel「计划任务」里启用它", err)
+				return *out
+			}
+			report("这个计划任务原来在 1Panel 里停用了，已重新启用")
+		}
 	} else {
 		out.Undo["created"] = "true"
 	}
@@ -250,11 +284,18 @@ func undoBackupSchedule(ctx context.Context, c *onepanel.Client, undo map[string
 	if err != nil {
 		return err
 	}
-	old.ID = 0
+	status := old.Status
+	old.ID, old.Status = 0, ""
 	if found {
 		old.ID = cur.ID
 	}
-	return c.SaveCronjob(ctx, old)
+	if err := c.SaveCronjob(ctx, old); err != nil {
+		return err
+	}
+	if status == "Disable" && found {
+		return c.SetCronjobStatus(ctx, cur.ID, "Disable")
+	}
+	return nil
 }
 
 func applyBackupUnschedule(ctx context.Context, env *Env, v map[string]string, out *Outcome, report func(string, ...any)) Outcome {
@@ -354,7 +395,11 @@ func applySiteRestore(ctx context.Context, env *Env, v map[string]string, out *O
 	}
 	if err := waitTask(ctx, env, task); err != nil {
 		out.Status = StatusFailed
-		out.logf("恢复失败：%v。1Panel 会退回到恢复前的样子；另外还有恢复前的备份 %s", err, now.FileName)
+		if ctx.Err() != nil {
+			out.logf("恢复还在 1Panel 里进行，Miao Panel 等不及了：请在 1Panel「任务」里看结果，不要再点一次恢复。恢复前的备份是 %s", now.FileName)
+		} else {
+			out.logf("恢复失败：%v。1Panel 会退回到恢复前的样子；另外还有恢复前的备份 %s", err, now.FileName)
+		}
 		return *out
 	}
 	report("完成：网站 %s 已恢复到 %s。想退回去，可以用恢复前的备份 %s 再恢复一次", site.PrimaryDomain, backupWhen(from), now.FileName)

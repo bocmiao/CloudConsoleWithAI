@@ -109,7 +109,13 @@ func (t *curlTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.URL.RawQuery != "" {
 		u += "?" + req.URL.RawQuery
 	}
-	cmd := []string{"curl", "-sS", "-k", "--noproxy", "'*'", "-m", "170", "-X", req.Method, "-o", "-", "-w", shq(statusMark + "%{http_code}"), "-H", shq("Host: " + req.Host)}
+	// As long as the caller waits (宝塔's backups and certificate orders
+	// run inside the call), at least the usual 170 seconds.
+	maxTime := 170
+	if d, ok := req.Context().Deadline(); ok {
+		maxTime = max(maxTime, int(time.Until(d).Seconds())-5)
+	}
+	cmd := []string{"curl", "-sS", "-k", "--noproxy", "'*'", "-m", strconv.Itoa(maxTime), "-X", req.Method, "-o", "-", "-w", shq(statusMark + "%{http_code}"), "-H", shq("Host: " + req.Host)}
 	for k, vs := range req.Header {
 		for _, v := range vs {
 			cmd = append(cmd, "-H", shq(k+": "+v))

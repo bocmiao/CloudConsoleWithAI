@@ -548,6 +548,21 @@ func bit(b bool) string {
 	return "0"
 }
 
+// PHPCode is the version SetPHPVersion takes for what a site's row shows:
+// 8.2 is 82, a static site (静态, Static) is 00.
+func PHPCode(shown string) string {
+	if v := strings.ReplaceAll(shown, ".", ""); v != "" && strings.Trim(v, "0123456789") == "" {
+		return v
+	}
+	return "00"
+}
+
+// SetPHPVersion switches a site's PHP to version (82, or 00 for none).
+func (c *Client) SetPHPVersion(ctx context.Context, s Site, version string) error {
+	_, err := c.call(ctx, "site", "SetPHPVersion", url.Values{"siteName": {s.Name}, "version": {version}})
+	return err
+}
+
 // CreateProxy adds a reverse proxy, switched on. Proxying "/" also
 // switches the site's PHP off (the panel sets it to static).
 func (c *Client) CreateProxy(ctx context.Context, s Site, p Proxy) error {

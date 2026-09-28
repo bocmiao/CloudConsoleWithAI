@@ -183,3 +183,73 @@ func TestBTConfAndRewrite(t *testing.T) {
 	}
 	btUndo(t, env, r, out)
 }
+
+func TestBTUndoCorners(t *testing.T) {
+	env, f := btEnv(t)
+	f.AddSite("blog.example.com")
+	ctx := context.Background()
+	site := func() btpanel.Site {
+		s, err := env.BT.Site(ctx, "blog.example.com")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	proxy := func(name string) *btpanel.Proxy {
+		list, err := env.BT.Proxies(ctx, site())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range list {
+			if list[i].Name == name {
+				return &list[i]
+			}
+		}
+		return nil
+	}
+
+	// A whole-site proxy turns PHP off; undo turns it back on.
+	r, out := btRun(t, env, "site.proxy.set", map[string]any{"website": "blog.example.com", "name": "app", "path": "/", "target": "http://127.0.0.1:3000"}, StatusDone)
+	if site().PHPVersion != "静态" {
+		t.Fatalf("php = %q", site().PHPVersion)
+	}
+	btUndo(t, env, r, out)
+	if proxy("app") != nil || site().PHPVersion != "8.2" {
+		t.Fatalf("after undo: proxy %+v php %q", proxy("app"), site().PHPVersion)
+	}
+
+	// A paused proxy stays paused through undoing a removal, and gets its
+	// old target back through undoing a change.
+	btRun(t, env, "site.proxy.set", map[string]any{"website": "blog.example.com", "name": "api", "path": "/api", "target": "http://127.0.0.1:9000"}, StatusDone)
+	btRun(t, env, "site.proxy.status", map[string]any{"website": "blog.example.com", "name": "api", "enabled": "off"}, StatusDone)
+	r, out = btRun(t, env, "site.proxy.remove", map[string]any{"website": "blog.example.com", "name": "api"}, StatusDone)
+	btUndo(t, env, r, out)
+	if p := proxy("api"); p == nil || p.Enabled || p.Target != "http://127.0.0.1:9000" {
+		t.Fatalf("after undoing the removal: %+v", p)
+	}
+	r, out = btRun(t, env, "site.proxy.set", map[string]any{"website": "blog.example.com", "name": "api", "path": "/api", "target": "http://127.0.0.1:7777"}, StatusDone)
+	btUndo(t, env, r, out)
+	if p := proxy("api"); p == nil || p.Enabled || p.Target != "http://127.0.0.1:9000" {
+		t.Fatalf("after undoing the change: %+v", p)
+	}
+
+	// The last domain is not removed.
+	btRun(t, env, "site.domain.remove", map[string]any{"website": "blog.example.com", "domain": "blog.example.com"}, StatusRefused)
+
+	// Certificates: what 宝塔 cannot do is refused before ordering one.
+	for _, p := range []map[string]any{
+		{"domain": "blog.example.com", "http_mode": "HTTPSOnly"},
+		{"domain": "blog.example.com", "apply": "no"},
+	} {
+		btRun(t, env, "cert.issue", p, StatusRefused)
+	}
+	env.BT.KeysHidden = true
+	btRun(t, env, "cert.issue", map[string]any{"domain": "blog.example.com"}, StatusRefused)
+	env.BT.KeysHidden = false
+	btRun(t, env, "cert.issue", map[string]any{"domain": "blog.example.com"}, StatusDone)
+	// A second order replaces a certificate undo cannot bring back, and says so.
+	r, out = btRun(t, env, "cert.issue", map[string]any{"domain": "blog.example.com"}, StatusDone)
+	if u := Undo(ctx, env, r, out.Undo); u.Status != StatusFailed || !strings.Contains(strings.Join(u.Log, ""), "证书") {
+		t.Fatalf("undo of a replaced certificate: %+v", u)
+	}
+}

@@ -227,6 +227,7 @@ func init() {
 			{Name: "group", Kind: "name", Required: true},
 			{Name: "admin_cidr", Kind: "cidr", Required: true, Desc: "管理者当前可达的公网 IP/32 或固定网段，不能是全网"},
 			{Name: "ssh_port", Kind: "int", Min: 1, Max: 65535, Required: true},
+			{Name: "panel_port", Kind: "int", Min: 1, Max: 65535, Desc: "面板（1Panel、宝塔）自己的端口，识别环境时读到的"},
 		},
 		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "firewall_tighten", Downtime: "只保留 80/443 全网可达，SSH 和管理端口仅管理网段可达；其他服务可能中断",
 			Undo: "恢复原来的全端口放行规则并删除本次新增的规则"}},

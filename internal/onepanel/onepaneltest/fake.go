@@ -694,6 +694,19 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		bad("ErrRecordNotFound")
+	case p == "/cronjobs/status":
+		if st := str(body["status"]); st != "Enable" && st != "Disable" {
+			bad("bad status %q", body["status"])
+			return
+		}
+		for _, j := range f.Jobs {
+			if num(j["id"]) == num(body["id"]) {
+				j["status"] = body["status"]
+				reply(nil)
+				return
+			}
+		}
+		bad("ErrRecordNotFound")
 	case p == "/cronjobs/del":
 		if body["cleanData"] != false {
 			bad("would delete the backups too")

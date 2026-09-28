@@ -128,19 +128,37 @@ func applyBT(ctx context.Context, env *Env, r Resolved, progress Progress) Outco
 				return refused(out, "读取网站的域名失败：%v", err)
 			}
 			want, _ := strconv.Atoi(v["port"])
-			var gone []string
+			var match []btpanel.Domain
 			for _, d := range ds {
-				if !strings.EqualFold(d.Name, v["domain"]) || (want != 0 && d.Port != want) {
-					continue
+				if strings.EqualFold(d.Name, v["domain"]) && (want == 0 || d.Port == want) {
+					match = append(match, d)
 				}
+			}
+			if len(match) == 0 {
+				return nothing("网站 %s 没有域名 %s，不需要修改", s.Name, v["domain"])
+			}
+			if len(match) == len(ds) {
+				return refused(out, "%s 是网站 %s 最后的域名，宝塔不允许删掉网站的所有域名", v["domain"], s.Name)
+			}
+			var gone []string
+			for _, d := range match {
 				report("正在删除网站 %s 的域名 %s:%d", s.Name, d.Name, d.Port)
 				if err := b.DeleteDomain(ctx, s, d); err != nil {
-					return refused(out, "删除失败：%v", err)
+					if len(gone) == 0 {
+						return refused(out, "删除失败：%v", err)
+					}
+					// Put back the ones already gone, so it is all or nothing.
+					out.Undo = map[string]string{}
+					if err2 := undoBTStep(ctx, b, s, "bt_domain_remove", map[string]string{"removed": strings.Join(gone, ",")}); err2 != nil {
+						out.Status = StatusFailed
+						out.logf("删除 %s:%d 失败：%v；已经删掉的 %s 也没能加回来（%v），请在宝塔里加回", d.Name, d.Port, err, strings.Join(gone, "、"), err2)
+						return *out
+					}
+					out.Status = StatusRolledBack
+					out.logf("删除 %s:%d 失败：%v；已把前面删掉的加回来，网站和原来一样", d.Name, d.Port, err)
+					return *out
 				}
 				gone = append(gone, d.Name+":"+strconv.Itoa(d.Port))
-			}
-			if len(gone) == 0 {
-				return nothing("网站 %s 没有域名 %s，不需要修改", s.Name, v["domain"])
 			}
 			out.Undo["removed"] = strings.Join(gone, ",")
 			return done("完成")
@@ -168,8 +186,17 @@ func applyBT(ctx context.Context, env *Env, r Resolved, progress Progress) Outco
 			return done("完成")
 
 		case "bt_cert_issue":
-			if v["method"] == "dns" {
+			switch {
+			case v["method"] == "dns":
 				return refused(out, "宝塔网站在这里只能用 HTTP 验证申请证书；泛域名证书请在宝塔面板里用 DNS 验证申请")
+			case v["apply"] == "no":
+				return refused(out, "宝塔申请的证书会直接装到网站上，不能只申请不启用")
+			case v["http_mode"] == "HTTPSOnly":
+				return refused(out, "宝塔网站只能选「HTTP 和 HTTPS 都能访问」或「HTTP 跳转到 HTTPS」")
+			case b.KeysHidden:
+				// The order's answer carries the key, which the automation
+				// agent's transport blanks so Tencent Cloud does not keep it.
+				return refused(out, "用自动化助手连接的服务器不能在这里申请宝塔证书（证书私钥会留在腾讯云的执行记录里）。请在宝塔面板里申请，或改用 SSH 连接")
 			}
 			before, err := b.SSL(ctx, s)
 			if err != nil {
@@ -190,8 +217,10 @@ func applyBT(ctx context.Context, env *Env, r Resolved, progress Progress) Outco
 				out.Undo["was_off"] = "true"
 			} else {
 				// The certificate it replaced cannot be put back: its key is
-				// not readable through the API.
-				out.Undo = map[string]string{}
+				// not readable through the API. Undo says so, after putting
+				// the redirect back.
+				out.Undo["replaced"] = "true"
+				out.Undo["force"] = strconv.FormatBool(before.ForceHTTPS)
 				report("注意：网站原来就开着 HTTPS，原来的证书不能通过接口恢复，这一步不能一键撤销")
 			}
 			exp := ""
@@ -235,6 +264,10 @@ func applyBT(ctx context.Context, env *Env, r Resolved, progress Progress) Outco
 					report("正在给网站 %s 添加反向代理 %s：%s → %s", s.Name, p.Name, p.Dir, p.Target)
 					err = b.CreateProxy(ctx, s, p)
 					out.Undo["created"] = p.Name
+					if p.Dir == "/" {
+						// 宝塔 turns PHP off for a whole-site proxy; undo turns it back on.
+						out.Undo["php"] = btpanel.PHPCode(s.PHPVersion)
+					}
 				}
 				if err != nil {
 					return refused(out, "设置失败：%v", err)
@@ -297,17 +330,29 @@ func applyBT(ctx context.Context, env *Env, r Resolved, progress Progress) Outco
 			if err != nil {
 				return refused(out, "没有修改：%v", err)
 			}
+			out.Undo["content"] = cur.Content
 			if err := b.TestNginx(ctx); err != nil {
-				if rewrite {
-					_ = b.SetRewrite(ctx, s, cur.Content, "")
-				} else {
-					_ = b.SetNginxConf(ctx, s, cur.Content, "")
+				var be *btpanel.Error
+				if !errors.As(err, &be) || be.Reason != btpanel.ReasonConfigInvalid {
+					// Written and accepted by the panel's own check; only the
+					// second look failed. Keep it, and let undo put it back.
+					return done("已写入（宝塔保存时检查通过），但复查 nginx 配置时出错：%v。请确认网站正常，需要的话撤销这一步", err)
 				}
+				if rewrite {
+					err = b.SetRewrite(ctx, s, cur.Content, "")
+				} else {
+					err = b.SetNginxConf(ctx, s, cur.Content, "")
+				}
+				if err != nil {
+					out.Status = StatusFailed
+					out.logf("nginx 检查不通过（%v），恢复原来的内容也失败了：%v。请在宝塔里检查这个文件", be, err)
+					return *out
+				}
+				out.Undo = map[string]string{}
 				out.Status = StatusRolledBack
-				out.logf("nginx 检查不通过，已恢复原来的内容：%v", err)
+				out.logf("nginx 检查不通过，已恢复原来的内容：%v", be)
 				return *out
 			}
-			out.Undo["content"] = cur.Content
 			return done("完成：检查通过，已生效")
 
 		case "bt_backup":
@@ -385,17 +430,39 @@ func undoBTStep(ctx context.Context, b *btpanel.Client, s btpanel.Site, op strin
 		if undo["was_off"] == "true" {
 			return b.CloseSSL(ctx, s)
 		}
-		return errors.New("原来的证书不能通过接口恢复")
+		if f := undo["force"]; f != "" {
+			if ssl, err := b.SSL(ctx, s); err == nil && ssl.ForceHTTPS != (f == "true") {
+				_ = b.SetForceHTTPS(ctx, s, f == "true")
+			}
+		}
+		return errors.New("原来的证书不能通过接口恢复，新证书保留着；需要换回原来的证书请在宝塔面板里操作")
 	case "bt_proxy_set", "bt_proxy_remove", "bt_proxy_status":
 		if name := undo["created"]; name != "" {
-			return b.RemoveProxy(ctx, s, name)
+			if err := b.RemoveProxy(ctx, s, name); err != nil {
+				return err
+			}
+			if php := undo["php"]; php != "" && php != "00" {
+				return b.SetPHPVersion(ctx, s, php)
+			}
+			return nil
 		}
 		var old btpanel.Proxy
 		if err := json.Unmarshal([]byte(undo["old"]), &old); err != nil {
 			return err
 		}
 		if op == "bt_proxy_remove" {
-			return b.CreateProxy(ctx, s, old)
+			if err := b.CreateProxy(ctx, s, old); err != nil || old.Enabled {
+				return err
+			}
+			return b.ModifyProxy(ctx, s, old) // it comes back switched on
+		}
+		if !old.Enabled && op == "bt_proxy_set" {
+			// A paused proxy's other fields only change while it is on.
+			on := old
+			on.Enabled = true
+			if err := b.ModifyProxy(ctx, s, on); err != nil {
+				return err
+			}
 		}
 		return b.ModifyProxy(ctx, s, old)
 	case "bt_conf":

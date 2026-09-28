@@ -176,6 +176,37 @@ func (s *Store) CloseIncident(kind, target string) (Incident, error) {
 	return in, err
 }
 
+// EndIncidents ends the open incidents of kind whose target is not in
+// keep: what is no longer watched cannot recover.
+func (s *Store) EndIncidents(kind string, keep map[string]bool) error {
+	rows, err := s.db.Query(`SELECT id, target FROM incidents WHERE kind = ? AND ended_at = ''`, kind)
+	if err != nil {
+		return err
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		var target string
+		if err := rows.Scan(&id, &target); err != nil {
+			rows.Close()
+			return err
+		}
+		if !keep[target] {
+			ids = append(ids, id)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if _, err := s.db.Exec(`UPDATE incidents SET ended_at = ? WHERE id = ?`, now(), id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Incidents returns the incidents that started since a time, or are still
 // open, newest first.
 func (s *Store) Incidents(since string, limit int) ([]Incident, error) {
