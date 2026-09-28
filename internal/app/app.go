@@ -24,6 +24,7 @@ import (
 	"github.com/bocmiao/CloudConsoleWithAI/internal/sshx"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/store"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/tatx"
+	"github.com/bocmiao/CloudConsoleWithAI/internal/update"
 	"github.com/bocmiao/CloudConsoleWithAI/scripts"
 )
 
@@ -35,6 +36,15 @@ type App struct {
 	Dial func(ctx context.Context, t sshx.Target) (*sshx.Client, error)
 	// TencentEndpoint overrides Tencent Cloud API addresses; tests set it.
 	TencentEndpoint func(service string) string
+	// Version is the running Miao Panel's version.
+	Version string
+	// Restart starts the program again (after an update); nil where it
+	// cannot restart itself.
+	Restart func() error
+	// Updater finds and fetches new releases; tests point it elsewhere.
+	Updater *update.Checker
+	// UpdateExe is the program file an update replaces; tests set it.
+	UpdateExe string
 	// AliyunCloudEndpoint overrides 阿里云 API addresses for servers, DNS
 	// and CDN; tests set it.
 	AliyunCloudEndpoint func(product, region string) string
@@ -61,6 +71,7 @@ type App struct {
 	locks     serverLocks
 	cloud     cloudCache
 	aliCloud  aliCache
+	upd       updateState
 	certs     certCache
 	visits    snapshots[VisitsView]
 	ipf       ipFacts

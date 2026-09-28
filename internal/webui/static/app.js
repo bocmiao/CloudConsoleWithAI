@@ -2395,6 +2395,7 @@ const HomePage = {
       else if (t.kind === 'security') emit('stats', 'logs', 'security');
       else if (t.kind === 'notice') emit('go', 'inbox');
       else if (t.kind === 'monitor') emit('ask', `${t.title}（${t.meta}）。帮我排查原因，能修的话给我一份清单。`);
+      else if (t.kind === 'update') emit('go', 'settings');
       else if (t.kind === 'server') {
         const s = ov.value.servers.find(x => x.id === t.id);
         emit('ask', `服务器 ${s ? s.name : ''} 提示「${s ? s.note : ''}」，帮我看看是怎么回事，要不要处理，怎么处理？`);
@@ -6744,6 +6745,48 @@ const app = createApp({
     let followChat = true;
     const op = reactive({ port: 0, host: '', apiKey: '', hasKey: false, info: '' });
     const bt = reactive({ port: 0, apiKey: '', hasKey: false, info: '' }); // 宝塔's API
+    // Updates and the diagnostics bundle.
+    const upd = reactive({ current: '', os: '', latest: null, newer: false, enabled: true, canApply: false, why: '', error: '', checkedAt: '' });
+    const updApplying = ref('');
+    // The release notes as plain lines: no Markdown marks, no blank runs.
+    const updNotes = computed(() => {
+      if (!upd.latest) return '';
+      const out = [];
+      for (let l of upd.latest.notes.split('\n')) {
+        l = l.trim().replace(/^#+\s*/, '').replace(/^[-*]\s+/, '· ').replace(/\*\*|`/g, '');
+        if (l || (out.length && out[out.length - 1])) out.push(l);
+      }
+      return out.slice(0, 12).join('\n').trim();
+    });
+    async function loadUpdate() { try { Object.assign(upd, await api('GET', '/api/update')); } catch { /* shown when checked */ } }
+    async function checkUpdate() {
+      await guarded('正在检查更新……', async () => {
+        try { Object.assign(upd, await api('POST', '/api/update/check')); }
+        finally { await loadUpdate(); }
+        notify(upd.newer ? '有新版本 ' + upd.latest.version : '已经是最新版本');
+      });
+    }
+    async function setUpdateCheck(on) { await guarded('', async () => { Object.assign(upd, await api('PUT', '/api/update/settings', { enabled: on })); }); }
+    async function applyUpdate() {
+      if (!confirm(`更新到 ${upd.latest.version}？会下载新版本、核对校验值后替换现在的程序，然后自动重新启动（大约几秒钟）。正在执行的清单请等它执行完。`)) return;
+      await guarded('正在下载新版本……', async () => {
+        await api('POST', '/api/update/apply');
+        updApplying.value = window.MIAO_MODE === 'server' ? '新版本已装好，正在重新启动，稍等几秒页面会自动刷新……' : '新版本已装好，Miao Panel 正在重新启动，会打开新的窗口，这个页面可以关掉。';
+      });
+      if (window.MIAO_MODE !== 'server' || !updApplying.value) return;
+      for (let i = 0; i < 60; i++) {
+        await new Promise(r => setTimeout(r, 2000));
+        try { const v = await api('GET', '/api/update'); if (v.current !== upd.current) { location.reload(); return; } } catch { /* restarting */ }
+      }
+    }
+    async function downloadDiagnostics() {
+      await guarded('正在准备诊断包……', async () => {
+        const r = await api('POST', '/api/diagnostics/link');
+        const a = document.createElement('a');
+        a.href = r.url; a.download = '';
+        document.body.appendChild(a); a.click(); a.remove();
+      });
+    }
     const tc = reactive({ configured: false, hint: '', secretId: '', secretKey: '', info: '' });
     const ali = reactive({ configured: false, hint: '', id: '', secret: '', info: '' });
     const freeCmd = reactive({ enabled: false });
@@ -6931,7 +6974,7 @@ const app = createApp({
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); palette.value = !palette.value; }
       if (e.key === 'Escape' && aiPanel.value && !document.querySelector('.sheet-mask')) aiPanel.value = false;
     });
-    watch(tab, t => { if (t === 'chat') aiPanel.value = false; });
+    watch(tab, t => { if (t === 'chat') aiPanel.value = false; if (t === 'settings') loadUpdate(); });
 
     // 建议 and 通知 are parts of 待处理 now.
     const inboxFocus = ref(null);
@@ -7385,7 +7428,7 @@ const app = createApp({
       spendText, plans, audit, logView, logFocus, loadAudit, openLog, showAdd, addForm, messages, draft, chatBusy, msgBox, suggestions,
       select, openAdd, addServer, testConn, discover, removeServer, askAbout, send, onEnter, onChatScroll, newChat, applyPreset, saveAI, testAI,
       convs, showConvs, conversationId, openConv, deleteConv, relTime,
-      op, saveOnePanel, testOnePanel, bt, saveBT, testBT, tc, saveTencent, testTencent, clearTencent, ali, saveAliyun, testAliyun, clearAliyun, freeCmd, setFree, seen, statsView, statsSeen, termRequest, openTerminal, filesRequest, openFiles, sitesRequest, openSite, newSite, unread, me, logout,
+      op, saveOnePanel, testOnePanel, bt, saveBT, testBT, upd, updApplying, updNotes, checkUpdate, setUpdateCheck, applyUpdate, downloadDiagnostics, tc, saveTencent, testTencent, clearTencent, ali, saveAliyun, testAliyun, clearAliyun, freeCmd, setFree, seen, statsView, statsSeen, termRequest, openTerminal, filesRequest, openFiles, sitesRequest, openSite, newSite, unread, me, logout,
       overview, loadOverview, inboxCount, inboxFocus, openInbox, aiPanel, toggleAI, pageContext, siteContext, palette, modKey, serverDot, serverMeta, visitSection, statsRequest, openStats,
       cloud, cloudList, cloudPick, pickCloud, askAI, daysTo, fmtBytes, securityForm, securityPlan, proposeSecurity, securityDone,
       monitorDown, SERVER_TABS, serverTab, seenServerSites, serverSitesRequest, openServerSite, serverStateText, serverFacts, cloudRequest, openCloud, addFromCloud,

@@ -27,6 +27,7 @@ import (
 	"github.com/bocmiao/CloudConsoleWithAI/internal/config"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/secrets"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/store"
+	"github.com/bocmiao/CloudConsoleWithAI/internal/update"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -111,8 +112,11 @@ func run(port int, dataDir string, openBrowser, window bool) error {
 	token := hex.EncodeToString(tok)
 	a := app.New(st, sec)
 	a.CacheDir = filepath.Join(dir, "cache")
+	a.Version, a.Restart = version, restartSelf
+	update.CleanUp()
 	warmCtx, stopWarm := context.WithCancel(context.Background())
 	defer stopWarm()
+	go a.UpdateLoop(warmCtx)
 	go a.KeepWarm(warmCtx, 20*time.Minute) // statistics ready before the pages open
 	go a.Monitor(warmCtx)                  // websites every minute, servers every two
 	srv := &http.Server{

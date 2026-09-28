@@ -1,0 +1,139 @@
+package app
+
+import (
+	"archive/zip"
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/bocmiao/CloudConsoleWithAI/internal/store"
+	"github.com/bocmiao/CloudConsoleWithAI/internal/update"
+)
+
+func TestUpdates(t *testing.T) {
+	if update.InDocker() {
+		t.Skip("updates are by image in Docker")
+	}
+	program := []byte("new program")
+	sum := sha256.Sum256(program)
+	name := update.AssetName(runtime.GOOS, runtime.GOARCH)
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/latest":
+			fmt.Fprintf(w, `{"tag_name":"v0.3.0","html_url":"https://example.com/v0.3.0","body":"## 新功能\n\n- 监控和备份\n- 更多","assets":[
+				{"name":%q,"browser_download_url":"%s/f"},{"name":"SHA256SUMS.txt","browser_download_url":"%s/sums"}]}`, name, srv.URL, srv.URL)
+		case "/f":
+			_, _ = w.Write(program)
+		case "/sums":
+			fmt.Fprintf(w, "%s  %s\n", hex.EncodeToString(sum[:]), name)
+		}
+	}))
+	defer srv.Close()
+	a := newApp(t)
+	a.Updater = &update.Checker{URL: srv.URL + "/latest"}
+	ctx := context.Background()
+
+	a.Version = "dev"
+	if v := a.UpdateStatus(); v.CanApply || v.Why == "" {
+		t.Fatalf("dev = %+v", v)
+	}
+	a.Version = "v0.2.0"
+	v, err := a.CheckUpdate(ctx)
+	if err != nil || !v.Newer || v.Latest.Version != "v0.3.0" || v.CanApply {
+		t.Fatalf("check = %+v, %v", v, err) // no way to restart: not appliable
+	}
+	ov, _ := a.Overview(ctx)
+	found := false
+	for _, it := range ov.Todo {
+		if it.Kind == "update" && it.Title == "有新版本 v0.3.0" && it.Meta == "监控和备份" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("overview todo = %+v", ov.Todo)
+	}
+
+	dir := t.TempDir()
+	a.UpdateExe = filepath.Join(dir, "miaopanel")
+	_ = os.WriteFile(a.UpdateExe, []byte("old program"), 0o755)
+	var restarted atomic.Int32
+	a.Restart = func() error { restarted.Add(1); return nil }
+	a.locks.try(7) // a checklist running on some server
+	if _, err := a.ApplyUpdate(ctx); err == nil || !strings.Contains(err.Error(), "清单") {
+		t.Fatalf("updated while a checklist runs: %v", err)
+	}
+	a.locks.release(7)
+	if _, err := a.ApplyUpdate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(a.UpdateExe); !bytes.Equal(b, program) {
+		t.Fatalf("installed %q", b)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for restarted.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if restarted.Load() != 1 {
+		t.Error("did not restart")
+	}
+
+	if v, _ := a.SetUpdateCheck(false); v.Enabled {
+		t.Error("still on")
+	}
+	a.Version = "v0.3.0"
+	if _, err := a.ApplyUpdate(ctx); err == nil {
+		t.Error("updated to the same version")
+	}
+}
+
+func TestDiagnostics(t *testing.T) {
+	a := newApp(t)
+	a.Version = "v0.2.0"
+	sv, _ := a.Store.AddServer(store.Server{Name: "web", Host: "203.0.113.45", Port: 22, Username: "root", AuthKind: "password"})
+	_ = a.Secrets.Set(secretKey(sv.ID, "password"), "hunter2-secret")
+	if _, err := a.SaveTencent("AKIDabcdefghijklmnop1234", "secretkeysecretkey1234"); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := a.Diagnostics(&buf); err != nil {
+		t.Fatal(err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var all strings.Builder
+	names := []string{}
+	for _, f := range zr.File {
+		names = append(names, f.Name)
+		rc, _ := f.Open()
+		b, _ := io.ReadAll(rc)
+		rc.Close()
+		all.Write(b)
+	}
+	text := all.String()
+	if strings.Join(names, ",") != "miaopanel.json,recent-activity.json,incidents.json,README.txt" {
+		t.Errorf("files = %v", names)
+	}
+	for _, secret := range []string{"hunter2-secret", "secretkeysecretkey1234", "AKIDabcdefghijklmnop1234", "203.0.113.45"} {
+		if strings.Contains(text, secret) {
+			t.Errorf("the bundle has %q", secret)
+		}
+	}
+	if !strings.Contains(text, `"host": "203.0.*.*"`) || !strings.Contains(text, `"tencent": true`) || !strings.Contains(text, `"version": "v0.2.0"`) {
+		t.Errorf("bundle = %s", text)
+	}
+}

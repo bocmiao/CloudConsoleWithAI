@@ -44,6 +44,13 @@ func (l *serverLocks) release(id int64) {
 	delete(l.busy, id)
 }
 
+// anyBusy says whether some checklist is running or being undone.
+func (l *serverLocks) anyBusy() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.busy) > 0
+}
+
 // prepareSteps fills in, for each step, whether it can run on the server
 // and how. Risk always comes from policy, never from the AI.
 func prepareSteps(steps []core.Step, adapter string) []core.Step {

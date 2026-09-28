@@ -569,7 +569,25 @@
         <div class="group">
           <div class="row"><span class="k">密码和 API Key</span><span class="v">{{ info.secretsKind === 'keychain' ? '保存在系统钥匙串（Windows 凭据管理器）' : info.mode === 'server' ? '保存在服务器上数据目录的 secrets.json（只有运行 Miao Panel 的用户可读），不会发给 AI' : '保存在数据目录的 secrets.json（仅当前用户可读）' }}</span></div>
           <div class="row"><span class="k">访问范围</span><span class="v">{{ info.mode === 'server' ? 'Web 版：登录后才能访问，可以开启两步验证' : '只在本机打开（127.0.0.1），不会发给 AI' }}</span></div>
-          <div class="row"><span class="k">版本</span><span class="v">{{ info.version }}</span></div>
+        </div>
+
+        <div class="group-title">版本和诊断</div>
+        <div class="group">
+          <div class="row"><span class="k">当前版本</span><span class="v">{{ upd.current || info.version }}<span class="small tertiary"> · {{ upd.os }}</span></span></div>
+          <div class="row" v-if="upd.latest"><span class="k">最新版本</span><span class="v">
+            <template v-if="upd.newer"><span class="sdot warn"></span>{{ upd.latest.version }} 可以更新</template>
+            <template v-else>{{ upd.latest.version }}，已经是最新</template>
+            <a class="small" :href="upd.latest.url" target="_blank" rel="noopener"> 更新说明</a></span></div>
+          <div class="row stack small secondary" v-if="upd.newer && upd.latest.notes"><pre class="upd-notes">{{ updNotes }}</pre></div>
+          <div class="row small secondary" v-if="upd.error"><ui-icon name="warn" class="st-warn"></ui-icon><span class="grow">{{ upd.error }}</span></div>
+          <div class="row small secondary" v-if="upd.newer && !upd.canApply && upd.why"><ui-icon name="info"></ui-icon><span class="grow">{{ upd.why }}</span></div>
+          <div class="row" v-if="updApplying"><span class="spinner"></span><span class="grow">{{ updApplying }}</span></div>
+          <div class="row"><span class="grow small secondary">每天自动检查一次（只问 GitHub 最新的版本号，不发送任何数据）<template v-if="upd.checkedAt"> · 上次 {{ fmtTime(upd.checkedAt) }}</template></span>
+            <span class="segmented"><button :class="{on: !upd.enabled}" @click="setUpdateCheck(false)" :disabled="busy">关闭</button><button :class="{on: upd.enabled}" @click="setUpdateCheck(true)" :disabled="busy">开启</button></span></div>
+          <div class="row"><span class="grow small secondary">遇到问题时下载诊断包附在反馈里：版本、系统、哪些功能配置了、最近的操作记录和故障（没有密钥、密码和对话内容，服务器地址只保留前两段）。</span>
+            <button @click="downloadDiagnostics" :disabled="busy">下载诊断包</button>
+            <button @click="checkUpdate" :disabled="busy">检查更新</button>
+            <button class="primary" v-if="upd.newer && upd.canApply" @click="applyUpdate" :disabled="busy || !!updApplying">更新到 {{ upd.latest.version }}</button></div>
         </div>
       </div>
     </template>

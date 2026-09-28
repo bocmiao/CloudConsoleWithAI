@@ -24,6 +24,7 @@ import (
 	"github.com/bocmiao/CloudConsoleWithAI/internal/config"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/secrets"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/store"
+	"github.com/bocmiao/CloudConsoleWithAI/internal/update"
 )
 
 // The web edition: "miaopanel serve" runs Miao Panel on a server, reached
@@ -61,6 +62,8 @@ func serveMain(args []string) error {
 	sec := secrets.OpenFile(dir) // a server has no desktop keychain
 	a := app.New(st, sec)
 	a.CacheDir = filepath.Join(dir, "cache")
+	a.Version, a.Restart = version, restartSelf
+	update.CleanUp()
 	au := auth.New(st, sec, dir)
 	api.ConnectSenders(a, au) // login codes go out by the app's mail and SMS settings
 
@@ -93,6 +96,7 @@ func serveMain(args []string) error {
 	defer stop()
 	go a.KeepWarm(ctx, 20*time.Minute)
 	go a.Monitor(ctx)
+	go a.UpdateLoop(ctx)
 	go func() {
 		t := time.NewTicker(time.Hour)
 		defer t.Stop()

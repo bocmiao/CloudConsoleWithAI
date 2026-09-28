@@ -1552,3 +1552,10 @@ Web 版除了「用户名 + 密码」，可以用邮箱或手机收到的验证�
 - 服务器的「应用」标签不再只读：每个 Docker 容器旁边有「重启」，系统服务可以选一个重启（`container.restart`、`service.restart`，SSH、防火墙、面板这类关键服务仍然不允许），都先生成清单（`POST /api/servers/{id}/apps/plan`）。
 - 1Panel 服务器多一个「数据库」：列出每个 MySQL/MariaDB 应用里的数据库（用户、谁能连接、备注），可以新建（数据库和同名用户，utf8mb4，密码随机生成、不经过 Miao Panel 也不记下来，在 1Panel 里查看；撤销时先备份再删除）、备份（`backup.create` 加 `database`）和删除（`mysql.db.delete`，R3，先备份再删，不能撤销）。
 - AI 也能用 `mysql.db.create`、`mysql.db.delete`；提示词告诉它看不到也不要问数据库密码。
+
+### 检查更新、一键更新和诊断包（已完成）
+
+- **检查**（`internal/update`）：问 GitHub 最新的发布（`releases/latest`，只是一个 GET，不带任何数据），发布版（`vX.Y.Z`）启动一分钟后查一次，之后每天一次；「设置 → 版本和诊断」可以关掉（设置项 `update_check`），也能手动「检查更新」。有新版本时总览的「需要你处理」多一条，设置里显示发布说明的前几行。自己编译的开发版不检查。
+- **一键更新**：下载这个系统的程序（`MiaoPanel-<系统>-<架构>`），和发布里的 `SHA256SUMS.txt` 核对，不对就丢掉；新文件先写在程序旁边，再改名换上（Windows 上正在运行的程序只能改名，旧的变成 `.old`，下次启动删掉）。然后回答页面，1.5 秒后重启进新程序：Linux 和 macOS 直接 `exec`，Windows 启动新程序再退出（新程序等旧窗口关掉再拿单实例锁）。Web 版页面一直问版本，变了就刷新。
+- **不能一键更新的**：Docker 版（在项目目录 `git pull && docker compose up -d --build`）、程序目录不能写的（systemd 服务文件用了 `ProtectSystem=strict`，按部署文档用 `sudo install` 替换）、开发版。页面上写明原因。
+- **诊断包**：「下载诊断包」生成一个 zip：`miaopanel.json`（版本、系统、哪些功能配置了——只有是否配置，服务器列表的地址只留前两段）、`recent-activity.json`（最近 200 条查看和修改记录的标题和结果，失败的附上最后 1500 个字符的输出，IPv4 地址部分隐藏）、`incidents.json`（7 天的监控故障）和说明。不含密钥、密码、对话内容和访问日志。下载走一次性链接（`POST /api/diagnostics/link`）。

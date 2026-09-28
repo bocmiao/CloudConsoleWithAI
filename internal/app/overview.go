@@ -294,6 +294,10 @@ func (a *App) Overview(ctx context.Context) (OverviewView, error) {
 		}
 	}
 
+	if t := a.updateTodo(); t != nil {
+		v.Todo = append(v.Todo, *t)
+	}
+
 	// Checklists proposed but not run, newest first.
 	if plans, err := a.Store.ListPlans(50); err == nil {
 		for _, p := range plans {

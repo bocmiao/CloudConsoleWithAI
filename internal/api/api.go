@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
@@ -57,6 +58,7 @@ type Server struct {
 type download struct {
 	server  int64
 	path    string
+	diag    bool // the diagnostics bundle, not a server's file
 	expires time.Time
 }
 
@@ -137,6 +139,11 @@ func (s *Server) routes() {
 	api("POST /api/aliyun/servers/plan", s.aliyunPlan)
 	api("POST /api/servers/{id}/security/plan", s.serverSecurityPlan)
 	api("GET /api/servers/{id}/databases", s.serverDatabases)
+	api("GET /api/update", s.updateStatus)
+	api("POST /api/update/check", s.updateCheck)
+	api("PUT /api/update/settings", s.updateSettings)
+	api("POST /api/update/apply", s.updateApply)
+	api("POST /api/diagnostics/link", s.diagnosticsLink)
 	api("POST /api/servers/{id}/apps/plan", s.serverAppsPlan)
 	api("GET /api/visits/sources", s.visitSources)
 	api("GET /api/visits", s.getVisits)
@@ -906,6 +913,46 @@ func (s *Server) cloudPlan(_ http.ResponseWriter, r *http.Request) (any, error) 
 	return s.app.ProposeCloud(r.Context(), req)
 }
 
+func (s *Server) updateStatus(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return s.app.UpdateStatus(), nil
+}
+
+func (s *Server) updateCheck(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.CheckUpdate(r.Context())
+}
+
+func (s *Server) updateSettings(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.SetUpdateCheck(req.Enabled)
+}
+
+func (s *Server) updateApply(_ http.ResponseWriter, r *http.Request) (any, error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Minute)
+	defer cancel()
+	return s.app.ApplyUpdate(ctx)
+}
+
+// diagnosticsLink hands out a one-time link to the diagnostics bundle.
+func (s *Server) diagnosticsLink(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	b := make([]byte, 18)
+	if _, err := rand.Read(b); err != nil {
+		return nil, err
+	}
+	tok := base64.RawURLEncoding.EncodeToString(b)
+	s.dlMu.Lock()
+	if s.dl == nil {
+		s.dl = map[string]download{}
+	}
+	s.dl[tok] = download{diag: true, expires: time.Now().Add(2 * time.Minute)}
+	s.dlMu.Unlock()
+	return map[string]string{"url": "/dl/" + tok}, nil
+}
+
 func (s *Server) serverDatabases(_ http.ResponseWriter, r *http.Request) (any, error) {
 	id, err := pathID(r)
 	if err != nil {
@@ -1373,6 +1420,15 @@ func (s *Server) downloadFile(w http.ResponseWriter, r *http.Request) {
 	s.dlMu.Unlock()
 	if !ok || time.Now().After(d.expires) {
 		http.Error(w, "下载链接已失效，请回到 Miao Panel 重新点下载。", http.StatusForbidden)
+		return
+	}
+	if d.diag {
+		w.Header().Set("Content-Type", "application/zip")
+		w.Header().Set("Content-Disposition", "attachment; filename=miaopanel-diagnostics-"+time.Now().Format("20060102-1504")+".zip")
+		w.Header().Set("Cache-Control", "no-store")
+		if err := s.app.Diagnostics(w); err != nil {
+			log.Println("diagnostics:", err)
+		}
 		return
 	}
 	started := false
