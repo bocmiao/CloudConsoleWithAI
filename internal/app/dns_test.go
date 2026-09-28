@@ -39,7 +39,7 @@ func TestDNSPage(t *testing.T) {
 	if err != nil || len(ds.Domains) != 1 || ds.Domains[0].Name != "example.com" || ds.Domains[0].EdgeOne == nil || ds.Domains[0].EdgeOne.Type != "partial" {
 		t.Fatalf("domains = %+v %v", ds, err)
 	}
-	if lines, _ := a.DNSLines(ctx, "example.com"); len(lines) < 3 || lines[0] != tencent.DefaultLine || !strings.Contains(strings.Join(lines, ","), "电信") {
+	if lines, _ := a.DNSLines(ctx, "example.com", ""); len(lines) < 3 || lines[0] != tencent.DefaultLine || !strings.Contains(strings.Join(lines, ","), "电信") {
 		t.Fatalf("lines = %v", lines)
 	}
 
@@ -84,7 +84,7 @@ func TestDNSPage(t *testing.T) {
 	if r := f.Lookup("example.com", "blog"); len(r) != 1 || r[0].Type != "CNAME" || d == nil || r[0].Value != d.Cname || d.Origin != "81.68.79.253" || d.CertMode != "eofreecert" {
 		t.Fatalf("blog = %+v domain=%+v", r, d)
 	}
-	recs, err := a.DNSRecords(ctx, "example.com")
+	recs, err := a.DNSRecords(ctx, "example.com", "")
 	var blog DNSRecordView
 	for _, r := range recs.Records {
 		if r.Name == "blog" {
@@ -110,7 +110,7 @@ func TestDNSPage(t *testing.T) {
 		t.Fatalf("after eo_off: %+v", r)
 	}
 	// Now EdgeOne has a domain the DNS does not send anyone to.
-	recs, _ = a.DNSRecords(ctx, "example.com")
+	recs, _ = a.DNSRecords(ctx, "example.com", "")
 	if len(recs.Pending) != 1 || recs.Pending[0].Sub != "blog" || recs.Pending[0].Current != "A 81.68.79.253" {
 		t.Fatalf("pending = %+v", recs.Pending)
 	}
@@ -119,7 +119,7 @@ func TestDNSPage(t *testing.T) {
 		t.Fatalf("eo_point = %+v %v", v, err)
 	}
 	run(v)
-	if recs, _ = a.DNSRecords(ctx, "example.com"); len(recs.Pending) != 0 {
+	if recs, _ = a.DNSRecords(ctx, "example.com", ""); len(recs.Pending) != 0 {
 		t.Fatalf("still pending: %+v", recs.Pending)
 	}
 

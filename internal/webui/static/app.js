@@ -1936,7 +1936,8 @@ const EO_AREAS = [{ id: 'mainland', text: '中国大陆（域名要已备案）'
 const dnsMemo = new Map();
 
 const DnsPage = {
-  props: { configured: Boolean, active: Boolean, servers: { type: Array, default: () => [] } },
+  // configured: Tencent Cloud's keys (DNSPod); aliyun: 阿里云's (云解析).
+  props: { configured: Boolean, aliyun: Boolean, active: Boolean, servers: { type: Array, default: () => [] } },
   emits: ['settings'],
   setup(props) {
     const domains = ref([]);
@@ -1957,11 +1958,15 @@ const DnsPage = {
     watch(domain, v => { if (v) setPref('miao.dnsDomain', v); load(); });
 
     const domainsLoaded = ref(false);
+    const anyCloud = computed(() => props.configured || props.aliyun);
+    const both = computed(() => props.configured && props.aliyun);
+    const listErrors = ref([]); // a provider whose domains could not be read
     async function loadDomains() {
-      if (!props.configured) return;
+      if (!anyCloud.value) return;
       try {
         const r = await api('GET', '/api/dns/domains');
         domains.value = r.domains; eoListError.value = r.eoError || '';
+        listErrors.value = [r.dnspodError && 'DNSPod：' + r.dnspodError, r.aliError && '阿里云云解析：' + r.aliError].filter(Boolean);
         if (!r.domains.some(d => d.name === domain.value)) domain.value = r.domains.length ? r.domains[0].name : '';
         else load();
       } catch (e) { error.value = e.message; } finally { domainsLoaded.value = true; }
@@ -1974,7 +1979,7 @@ const DnsPage = {
       if (memo && !fresh) data.value = memo; else if (!memo) data.value = null;
       loading.value = true; error.value = '';
       try {
-        const r = await api('GET', '/api/dns/records?domain=' + encodeURIComponent(d));
+        const r = await api('GET', '/api/dns/records?domain=' + encodeURIComponent(d) + '&provider=' + provider.value);
         if (n !== seq) return;
         dnsMemo.set(d, r); data.value = r;
       } catch (e) { if (n === seq) error.value = e.message; }
@@ -1982,9 +1987,11 @@ const DnsPage = {
     }
     // Coming back to the page shows what it had at once, then refreshes.
     watch(() => props.active, v => { if (v) domains.value.length ? load() : loadDomains(); }, { immediate: true });
-    watch(() => props.configured, v => { if (v) loadDomains(); });
+    watch(() => [props.configured, props.aliyun], () => { if (anyCloud.value) loadDomains(); });
 
     const current = computed(() => domains.value.find(d => d.name === domain.value) || null);
+    const provider = computed(() => (current.value && current.value.provider) || 'dnspod');
+    const providerName = computed(() => provider.value === 'alidns' ? '阿里云云解析' : 'DNSPod');
     const zone = computed(() => data.value && data.value.edgeone);
     const eoUsable = computed(() => !eoError.value && !(zone.value && (zone.value.type === 'full' || zone.value.paused)));
     const shown = computed(() => {
@@ -1997,7 +2004,7 @@ const DnsPage = {
     async function propose(body) {
       planning.value = true; formError.value = '';
       try {
-        plan.value = await api('POST', '/api/dns/plan', { domain: domain.value, ...body });
+        plan.value = await api('POST', '/api/dns/plan', { domain: domain.value, provider: provider.value, ...body });
         editor.open = false; quick.open = false; originEdit.open = false;
         return true;
       } catch (e) {
@@ -2023,21 +2030,21 @@ const DnsPage = {
     }
 
     // Adding or changing one record.
-    const editor = reactive({ open: false, id: 0, sub: '', type: 'A', value: '', line: '默认', ttl: 600, mx: 10, remark: '' });
+    const editor = reactive({ open: false, id: 0, rid: '', sub: '', type: 'A', value: '', line: '默认', ttl: 600, mx: 10, remark: '' });
     async function loadLines() {
-      try { lines.value = await api('GET', '/api/dns/lines?domain=' + encodeURIComponent(domain.value)); }
+      try { lines.value = await api('GET', '/api/dns/lines?domain=' + encodeURIComponent(domain.value) + '&provider=' + provider.value); }
       catch { lines.value = ['默认']; }
     }
     function openEditor(r) {
       formError.value = '';
       Object.assign(editor, r
-        ? { open: true, id: r.id, sub: r.name, type: r.type, value: r.value, line: r.line, ttl: r.ttl, mx: r.mx || 10, remark: r.remark || '' }
-        : { open: true, id: 0, sub: '', type: 'A', value: '', line: '默认', ttl: 600, mx: 10, remark: '' });
+        ? { open: true, id: r.id, rid: r.rid || '', sub: r.name, type: r.type, value: r.value, line: r.line, ttl: r.ttl, mx: r.mx || 10, remark: r.remark || '' }
+        : { open: true, id: 0, rid: '', sub: '', type: 'A', value: '', line: '默认', ttl: 600, mx: 10, remark: '' });
       loadLines();
     }
     const editorTTLs = computed(() => TTLS.includes(editor.ttl) ? TTLS : [...TTLS, editor.ttl].sort((a, b) => a - b));
     function submitEditor() {
-      const body = { op: editor.id ? 'modify' : 'add', id: editor.id, sub: editor.sub.trim() || '@', type: editor.type, value: editor.value.trim(),
+      const body = { op: editor.id || editor.rid ? 'modify' : 'add', id: editor.id, rid: editor.rid, sub: editor.sub.trim() || '@', type: editor.type, value: editor.value.trim(),
         line: editor.line, ttl: editor.ttl, remark: editor.remark.trim() };
       if (editor.type === 'MX') body.mx = editor.mx;
       propose(body);
@@ -2062,28 +2069,28 @@ const DnsPage = {
     watch(() => JSON.stringify([editor, quick, originEdit]), () => { if (!planning.value) formError.value = ''; });
     const quickName = computed(() => ((quick.sub.trim() || '@') === '@' ? '' : quick.sub.trim() + '.') + domain.value);
 
-    const del = r => propose({ op: 'delete', id: r.id });
-    const toggle = r => propose({ op: 'status', id: r.id, status: r.enabled ? 'disable' : 'enable' });
+    const del = r => propose({ op: 'delete', id: r.id, rid: r.rid });
+    const toggle = r => propose({ op: 'status', id: r.id, rid: r.rid, status: r.enabled ? 'disable' : 'enable' });
     const eoPoint = sub => propose({ op: 'eo_point', sub });
     const eoOff = r => propose({ op: 'eo_off', id: r.id });
     const eoOn = r => openQuick({ sub: r.name, target: r.type === 'CNAME' ? 'host' : 'ip', value: r.value, edgeone: true });
     const canEO = r => r.enabled && !r.edgeone && !r.system && ['A', 'AAAA', 'CNAME'].includes(r.type) && zone.value && zone.value.type === 'partial' && eoUsable.value && !/\.eo\.dnse|\.edgeone\.app/.test(r.value);
-    const planServerName = computed(() => '腾讯云');
+    const planServerName = computed(() => provider.value === 'alidns' ? '阿里云' : '腾讯云');
 
     return { RECORD_TYPES, EO_AREAS, VALUE_HINT, domains, domainsLoaded, eoError, domain, data, loading, error, q, typeFilter, plan, planning, lines, formError,
       current, zone, eoUsable, shown, load, planDone, closePlan, editor, openEditor, editorTTLs, submitEditor, quick, openQuick, submitQuick, quickName, originEdit, openOrigin, submitOrigin,
-      del, toggle, eoPoint, eoOff, eoOn, canEO, ttlText, planServerName };
+      del, toggle, eoPoint, eoOff, eoOn, canEO, ttlText, planServerName, anyCloud, both, listErrors, provider, providerName };
   },
   template: `
   <div>
-    <div class="group" v-if="!configured">
-      <div class="row"><ui-icon name="info" class="lg" style="color: var(--accent)"></ui-icon><div class="grow">域名解析在腾讯云 DNSPod，需要先填写腾讯云密钥。</div><button @click="$emit('settings')">去设置</button></div>
+    <div class="group" v-if="!anyCloud">
+      <div class="row"><ui-icon name="info" class="lg" style="color: var(--accent)"></ui-icon><div class="grow">域名解析在腾讯云 DNSPod 或阿里云云解析，需要先在设置里填写对应的密钥。</div><button @click="$emit('settings')">去设置</button></div>
     </div>
     <template v-else>
-      <div class="page-head"><p>DNSPod 里的域名解析。每次修改都会先生成一份清单，确认后才执行，执行后可以撤销；经过 EdgeOne 的网站会标出来。</p></div>
+      <div class="page-head"><p>{{ both ? 'DNSPod 和阿里云云解析' : aliyun ? '阿里云云解析' : 'DNSPod' }}里的域名解析。每次修改都会先生成一份清单，确认后才执行，执行后可以撤销<template v-if="configured">；经过 EdgeOne 的网站会标出来</template>。</p></div>
       <div class="stat-bar dns-bar">
         <label class="field"><span>域名</span>
-          <select v-model="domain" aria-label="域名" :disabled="!domains.length"><option v-for="d in domains" :key="d.name" :value="d.name">{{ d.name }}</option></select></label>
+          <select v-model="domain" aria-label="域名" :disabled="!domains.length"><option v-for="d in domains" :key="d.name" :value="d.name">{{ d.name }}{{ both ? (d.provider === 'alidns' ? '（阿里云）' : '（DNSPod）') : '' }}</option></select></label>
         <label class="field dns-search"><span>搜索</span>
           <input type="search" v-model="q" placeholder="主机记录、记录值或备注" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" @keydown.esc="q = ''"></label>
         <label class="field"><span>类型</span>
@@ -2095,7 +2102,8 @@ const DnsPage = {
       </div>
 
       <div class="notice" v-if="error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ error }}</div>
-      <div class="group" v-if="domainsLoaded && !domains.length && !error && !loading"><div class="row secondary">DNSPod 里还没有域名。</div></div>
+      <div class="notice" v-for="e in listErrors" :key="e"><ui-icon name="warn" class="st-warn"></ui-icon>{{ e }}</div>
+      <div class="group" v-if="domainsLoaded && !domains.length && !error && !loading"><div class="row secondary">{{ both ? 'DNSPod 和阿里云云解析' : aliyun ? '阿里云云解析' : 'DNSPod' }}里还没有域名。</div></div>
       <div class="notice" v-if="!domainsLoaded && !error"><span class="spinner"></span>正在读取域名……</div>
       <div class="notice" v-if="loading && !data"><span class="spinner"></span>正在读取解析记录……</div>
 
@@ -2117,14 +2125,15 @@ const DnsPage = {
         <div class="dns-sum small secondary">
           <span>{{ data.records.length }} 条记录<template v-if="shown.length !== data.records.length">，显示 {{ shown.length }} 条</template></span>
           <span v-if="zone && zone.type === 'partial'"><ui-icon name="cloud"></ui-icon>已接入 EdgeOne（CNAME 方式）</span>
-          <span v-else-if="!zone && !eoError">没有接入 EdgeOne</span>
+          <span v-else-if="!zone && !eoError && provider === 'dnspod'">没有接入 EdgeOne</span>
+          <span v-if="provider === 'alidns'">阿里云云解析</span>
           <span v-if="loading"><span class="spinner inline"></span>正在更新</span>
         </div>
         <div class="table-wrap">
           <table class="table dns-table">
             <thead><tr><th>主机记录</th><th>类型</th><th>线路</th><th>记录值</th><th>TTL</th><th>状态</th><th><span class="sr-only">操作</span></th></tr></thead>
             <tbody>
-              <tr v-for="r in shown" :key="r.id" :class="{ off: !r.enabled }">
+              <tr v-for="r in shown" :key="r.rid || r.id" :class="{ off: !r.enabled }">
                 <td class="c-name"><div class="dns-name">{{ r.name }}</div><div class="small tertiary">{{ r.full }}</div></td>
                 <td class="c-type"><span class="tag">{{ r.type }}</span></td>
                 <td class="c-line nowrap">{{ r.line }}</td>
@@ -2186,7 +2195,7 @@ const DnsPage = {
             <input v-model="quick.value" :placeholder="quick.target === 'ip' ? '例如 1.2.3.4' : '例如 example.github.io'" :aria-label="quick.target === 'ip' ? 'IP 地址' : '域名'" autocapitalize="off" spellcheck="false"></span></div>
         </div>
         <div class="group">
-          <label class="row form dns-check"><input type="checkbox" v-model="quick.edgeone" :disabled="!eoUsable">
+          <label class="row form dns-check" v-if="provider === 'dnspod'"><input type="checkbox" v-model="quick.edgeone" :disabled="!eoUsable">
             <span class="grow"><b>经过 EdgeOne</b><span class="small secondary block">访客先到 EdgeOne 节点：加速、防护、隐藏服务器 IP，还能用免费 HTTPS 证书。{{ !eoUsable ? (zone && zone.type === 'full' ? '这个域名用 NS 方式接入 EdgeOne，请在 EdgeOne 里管理解析。' : '现在读不到 EdgeOne。') : '' }}</span></span></label>
           <template v-if="quick.edgeone">
             <div class="row form" v-if="!zone"><span class="k">加速区域</span><span class="v">

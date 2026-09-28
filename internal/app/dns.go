@@ -34,6 +34,8 @@ type DNSDomainView struct {
 	Grade   string      `json:"grade"`   // DNSPod plan
 	Records uint64      `json:"records"` // number of records
 	EdgeOne *EOZoneView `json:"edgeone"` // its EdgeOne site, if any
+	// Provider is where it is hosted: dnspod (Tencent Cloud) or alidns.
+	Provider string `json:"provider"`
 }
 
 // DNSDomainsView lists the domains; EOError says why EdgeOne could not be
@@ -41,6 +43,9 @@ type DNSDomainView struct {
 type DNSDomainsView struct {
 	Domains []DNSDomainView `json:"domains"`
 	EOError string          `json:"eoError,omitempty"`
+	// DNSPodError and AliError say why a provider's domains are missing.
+	DNSPodError string `json:"dnspodError,omitempty"`
+	AliError    string `json:"aliError,omitempty"`
 }
 
 // EORecordView is what EdgeOne does for a record's name.
@@ -56,6 +61,7 @@ type EORecordView struct {
 // DNSRecordView is one record.
 type DNSRecordView struct {
 	ID        uint64        `json:"id"`
+	RID       string        `json:"rid,omitempty"` // Alidns: its ID, too long for a JavaScript number
 	Name      string        `json:"name"`
 	Full      string        `json:"full"`
 	Type      string        `json:"type"`
@@ -84,11 +90,12 @@ type EOPendingView struct {
 
 // DNSRecordsView is one domain's records.
 type DNSRecordsView struct {
-	Domain  string          `json:"domain"`
-	Records []DNSRecordView `json:"records"`
-	EdgeOne *EOZoneView     `json:"edgeone"`
-	Pending []EOPendingView `json:"pending"`
-	EOError string          `json:"eoError,omitempty"`
+	Domain   string          `json:"domain"`
+	Provider string          `json:"provider"`
+	Records  []DNSRecordView `json:"records"`
+	EdgeOne  *EOZoneView     `json:"edgeone"`
+	Pending  []EOPendingView `json:"pending"`
+	EOError  string          `json:"eoError,omitempty"`
 }
 
 func needTencent(a *App) (*tencent.Client, error) {
@@ -103,30 +110,49 @@ func zoneView(z tencent.Zone) *EOZoneView {
 	return &EOZoneView{ID: z.ZoneID, Name: z.ZoneName, Type: z.Type, Status: z.Status, Paused: z.Paused}
 }
 
-// DNSDomains lists the DNSPod domains and their EdgeOne sites.
+// DNSDomains lists the DNSPod domains and their EdgeOne sites, and the
+// 阿里云 云解析 domains.
 func (a *App) DNSDomains(ctx context.Context) (DNSDomainsView, error) {
-	c, err := needTencent(a)
-	if err != nil {
-		return DNSDomainsView{}, err
-	}
-	ds, err := c.Domains(ctx)
-	if err != nil {
-		return DNSDomainsView{}, err
+	c, ali := a.tencentClient(), a.aliyunClient()
+	if c == nil && ali == nil {
+		return DNSDomainsView{}, userErr("请先在「设置」填写腾讯云或阿里云的密钥")
 	}
 	out := DNSDomainsView{Domains: []DNSDomainView{}}
+	if c != nil {
+		if err := a.dnspodDomains(ctx, c, &out); err != nil {
+			if ali == nil {
+				return DNSDomainsView{}, err
+			}
+			out.DNSPodError = err.Error()
+		}
+	}
+	if ali != nil {
+		a.aliDomains(ctx, ali, &out)
+		if out.AliError != "" && c == nil {
+			return DNSDomainsView{}, userErr("%s", out.AliError)
+		}
+	}
+	sort.SliceStable(out.Domains, func(i, j int) bool { return out.Domains[i].Name < out.Domains[j].Name })
+	return out, nil
+}
+
+func (a *App) dnspodDomains(ctx context.Context, c *tencent.Client, out *DNSDomainsView) error {
+	ds, err := c.Domains(ctx)
+	if err != nil {
+		return err
+	}
 	zones, zerr := c.Zones(ctx)
 	if zerr != nil {
 		out.EOError = zerr.Error()
 	}
 	for _, d := range ds {
-		v := DNSDomainView{Name: d.Name, Status: d.Status, DNSOK: d.DNSStatus != "DNSERROR", Grade: d.Grade, Records: d.RecordCount}
+		v := DNSDomainView{Name: d.Name, Status: d.Status, DNSOK: d.DNSStatus != "DNSERROR", Grade: d.Grade, Records: d.RecordCount, Provider: "dnspod"}
 		if z, ok := tencent.ZoneFor(zones, d.Name); ok && strings.EqualFold(z.ZoneName, d.Name) {
 			v.EdgeOne = zoneView(z)
 		}
 		out.Domains = append(out.Domains, v)
 	}
-	sort.Slice(out.Domains, func(i, j int) bool { return out.Domains[i].Name < out.Domains[j].Name })
-	return out, nil
+	return nil
 }
 
 func isEOCname(v string) bool {
@@ -135,7 +161,10 @@ func isEOCname(v string) bool {
 }
 
 // DNSRecords lists a domain's records, marking the names EdgeOne serves.
-func (a *App) DNSRecords(ctx context.Context, domain string) (DNSRecordsView, error) {
+func (a *App) DNSRecords(ctx context.Context, domain, provider string) (DNSRecordsView, error) {
+	if provider == "alidns" {
+		return a.aliRecords(ctx, domain)
+	}
 	c, err := needTencent(a)
 	if err != nil {
 		return DNSRecordsView{}, err
@@ -145,7 +174,7 @@ func (a *App) DNSRecords(ctx context.Context, domain string) (DNSRecordsView, er
 	if err != nil {
 		return DNSRecordsView{}, err
 	}
-	out := DNSRecordsView{Domain: domain, Records: []DNSRecordView{}, Pending: []EOPendingView{}}
+	out := DNSRecordsView{Domain: domain, Provider: "dnspod", Records: []DNSRecordView{}, Pending: []EOPendingView{}}
 	eo := map[string]tencent.AccelerationDomain{}
 	if zones, err := c.Zones(ctx); err != nil {
 		out.EOError = err.Error()
@@ -234,7 +263,10 @@ type dnsLines struct {
 }
 
 // DNSLines lists the resolution lines a domain's DNSPod plan offers.
-func (a *App) DNSLines(ctx context.Context, domain string) ([]string, error) {
+func (a *App) DNSLines(ctx context.Context, domain, provider string) ([]string, error) {
+	if provider == "alidns" {
+		return a.aliLines(ctx, domain), nil
+	}
 	c, err := needTencent(a)
 	if err != nil {
 		return nil, err
@@ -291,6 +323,11 @@ type DNSRequest struct {
 	HTTPS    bool   `json:"https"`    // quick with EdgeOne: a free certificate
 	Protocol string `json:"protocol"` // quick with EdgeOne: HTTP or HTTPS to the origin
 	Area     string `json:"area"`     // quick with EdgeOne, new site: mainland, overseas, global
+
+	// Provider is where the domain is hosted: dnspod (the default) or
+	// alidns, whose record IDs come as RID.
+	Provider string `json:"provider"`
+	RID      string `json:"rid"`
 }
 
 func recordText(typ, value string, mx int) string {
@@ -309,6 +346,9 @@ func lineText(line string) string {
 
 // ProposeDNS turns a change on the 解析 page into a checklist.
 func (a *App) ProposeDNS(ctx context.Context, req DNSRequest) (PlanView, error) {
+	if req.Provider == "alidns" {
+		return a.proposeAliDNS(ctx, req)
+	}
 	c, err := needTencent(a)
 	if err != nil {
 		return PlanView{}, err

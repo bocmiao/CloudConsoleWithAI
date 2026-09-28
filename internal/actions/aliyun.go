@@ -79,6 +79,12 @@ func applyAliyun(ctx context.Context, env *Env, r Resolved, progress Progress) O
 		case "ali_firewall_close":
 			return aliFirewallClose(ctx, env, v, out, report)
 		}
+		if strings.HasPrefix(r.Impl.Cloud, "ali_dns_") {
+			return aliDNSApply(ctx, env, r.Impl.Cloud, v, out, report)
+		}
+		if strings.HasPrefix(r.Impl.Cloud, "ali_cdn_") {
+			return aliCDNApply(ctx, env, r.Impl.Cloud, v, out, report)
+		}
 		out.Status = StatusFailed
 		out.logf("未知的阿里云操作 %s", r.Impl.Cloud)
 		return *out
@@ -107,6 +113,8 @@ func undoAliyun(ctx context.Context, env *Env, r Resolved, undo map[string]strin
 			err = c.Power(ctx, undo["region"], undo["instance"], "start")
 		case "ali_firewall_open", "ali_firewall_close":
 			err = aliUndoFirewall(ctx, c, undo)
+		case "ali_dns_add", "ali_dns_modify", "ali_dns_delete", "ali_dns_status", "ali_dns_set":
+			err = aliDNSUndo(ctx, c, r.Impl.Cloud, undo)
 		default:
 			err = fmt.Errorf("未知的阿里云操作 %s", r.Impl.Cloud)
 		}

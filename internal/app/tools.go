@@ -57,6 +57,11 @@ const systemPrompt = `你是 Miao Panel 里的服务器运维助手。用户可�
   aliyun.server.reboot / stop / start。清单的 server_id 填对应的 Miao Panel 服务器编号，没有就填 0；
 - 按量付费的 ECS 关机后仍然计费（保留公网 IP），关机前告诉用户；其他提醒和腾讯云服务器一样。
 
+阿里云云解析：aliyun_dns 看域名和记录。能执行 aliyun.dns.record.set（让一个名字解析到 IP 或域名，替换它默认线路的 A、AAAA、CNAME）、
+aliyun.dns.record.add / modify / delete / status（record_id 用 aliyun_dns 返回的 id，线路写中文名：默认、电信、联通、移动、教育网、境外）。
+EdgeOne 是腾讯云的，阿里云云解析里的域名要接 EdgeOne 得先把域名的 DNS 换到 DNSPod，或者在 EdgeOne 用 NS 接入。
+阿里云 CDN：aliyun_cdn 看加速域名；网站改了静态文件访客还看到旧的，用 aliyun.cdn.purge 刷新（url 指定网址，dir 整个目录），大文件发布前可以 aliyun.cdn.prefetch 预热。
+
 网站访问量（PV、UV、独立 IP、地区、访问的页面和目录、来源、爬虫、状态码、设备）和可疑 IP：用 site_visits，可以看全部网站合计，也可以用 site 只看一个网站。
 - 经过 EdgeOne 的网站用 source=edgeone（EdgeOne 离线日志：每个请求都在，访客 IP 真实）；没有经过 EdgeOne 的网站给 server_id 看服务器日志。
   服务器日志里访客 IP 是 EdgeOne 节点时（结果里会提示），那台服务器的 UV、IP、地区和风险 IP 都不准，不要据此封禁；
@@ -254,6 +259,18 @@ func (a *App) tools() map[string]ai.Tool {
 				"轻量服务器本月流量包用量、CVM 安全组，以及对应的 Miao Panel 服务器编号。结果缓存 5 分钟，refresh=true 强制刷新。",
 			Schema: obj(map[string]any{"refresh": map[string]any{"type": "boolean"}}),
 		}, Run: a.toolTencentServers},
+		{Def: ai.ToolDef{
+			Name:        "aliyun_dns",
+			Description: "阿里云云解析 DNS（只读）。不带参数：列出域名；带 domain：这个域名的所有解析记录（id、主机记录、类型、值、线路、TTL、状态、备注）。",
+			Schema: obj(map[string]any{
+				"domain": map[string]any{"type": "string", "description": "主域名，例如 example.com；不填列出所有域名"},
+			}),
+		}, Run: a.toolAliyunDNS},
+		{Def: ai.ToolDef{
+			Name:        "aliyun_cdn",
+			Description: "阿里云 CDN 的加速域名（只读）：状态、CNAME、源站、是否开了 HTTPS。刷新缓存用 aliyun.cdn.purge，预热用 aliyun.cdn.prefetch。",
+			Schema:      obj(map[string]any{}),
+		}, Run: a.toolAliyunCDN},
 		{Def: ai.ToolDef{
 			Name: "aliyun_servers",
 			Description: "阿里云的轻量应用服务器和云服务器 ECS（只读）。不带参数：所有地域的实例 id、地域、状态、配置、公网 IP、计费方式、到期和剩余天数、自动续费、" +

@@ -751,11 +751,11 @@ func (s *Server) dnsDomains(_ http.ResponseWriter, r *http.Request) (any, error)
 }
 
 func (s *Server) dnsRecords(_ http.ResponseWriter, r *http.Request) (any, error) {
-	return s.app.DNSRecords(r.Context(), r.URL.Query().Get("domain"))
+	return s.app.DNSRecords(r.Context(), r.URL.Query().Get("domain"), r.URL.Query().Get("provider"))
 }
 
 func (s *Server) dnsLines(_ http.ResponseWriter, r *http.Request) (any, error) {
-	return s.app.DNSLines(r.Context(), r.URL.Query().Get("domain"))
+	return s.app.DNSLines(r.Context(), r.URL.Query().Get("domain"), r.URL.Query().Get("provider"))
 }
 
 func (s *Server) dnsPlan(_ http.ResponseWriter, r *http.Request) (any, error) {

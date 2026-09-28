@@ -420,7 +420,7 @@
     <div class="tab-pane" v-if="seen.dns" v-show="tab === 'dns'">
       <header class="toolbar"><h1>解析</h1></header>
       <div class="page wide">
-        <dns-page :configured="tc.configured" :active="tab === 'dns'" :servers="servers" @settings="go('settings')"></dns-page>
+        <dns-page :configured="tc.configured" :aliyun="ali.configured" :active="tab === 'dns'" :servers="servers" @settings="go('settings')"></dns-page>
       </div>
     </div>
 

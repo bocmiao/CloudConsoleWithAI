@@ -1531,4 +1531,10 @@ Web 版除了「用户名 + 密码」，可以用邮箱或手机收到的验证�
 - **清单**：`aliyun.server.start / stop / reboot`、`aliyun.snapshot.create`、`aliyun.firewall.open / close`，和 `cloud.*` 一样的规则（22、3389 不允许关，数据库端口对所有人放行是 R3）；阿里云一条规则只能是一个端口或一段范围。按量付费的 ECS 关机用「继续计费」模式，保证公网 IP 不变、一定能再开机，清单里写明。没有对应 Miao Panel 服务器的清单，记录里记在「阿里云」名下。
 - **添加服务器**：从阿里云实例「添加」时带上名称和公网 IP，用 SSH 连接（阿里云没有腾讯云的自动化助手）。
 - **AI**：`aliyun_servers`，不带参数列出全部，带实例看详情。
-- 下一步：阿里云云解析接入「解析」页，CDN 的刷新和预热。
+
+### 阿里云：云解析和 CDN（已完成）
+
+- **解析页**：域名列表同时读 DNSPod 和阿里云云解析（`DNSDomains` 各自出错只报那一家；同一个域名两边都有时列 DNSPod 的）。记录、线路和清单都带 `provider`；阿里云的记录编号可能超过 JavaScript 能精确表示的整数，所以单独用字符串 `rid` 传。线路在页面上用中文名（默认、电信……），执行时换成阿里云的代码（default、telecom……）。EdgeOne 相关的按钮和选项对阿里云的域名不显示。
+- **清单**：`aliyun.dns.record.add / modify / delete / status` 和 `aliyun.dns.record.set`（一键解析：替换这个名字默认线路的 A、AAAA、CNAME，失败时把删掉的加回去），都能撤销。
+- **CDN**：`aliyun.cdn.purge`（网址或目录）和 `aliyun.cdn.prefetch`，执行前核对每个网址都是这个账号的加速域名，提交后等任务完成或报出失败的网址。
+- **AI**：`aliyun_dns`、`aliyun_cdn`。
