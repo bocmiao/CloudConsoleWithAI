@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -136,8 +137,9 @@ func TestCheckMySQL(t *testing.T) {
 	}
 	made.drop = fresh.Database
 	made.Close()
-	if !strings.Contains(st.Where(), "MySQL") || strings.Contains(st.Where(), m.Password) {
-		t.Errorf("where = %q", st.Where())
+	// Where says where, never the password.
+	if want := fmt.Sprintf("MySQL：%s@%s:%d/%s", m.User, m.Host, m.Port, m.Database); st.Where() != want {
+		t.Errorf("where = %q, want %q", st.Where(), want)
 	}
 }
 

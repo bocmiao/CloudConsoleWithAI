@@ -41,7 +41,7 @@ if [ -f "$MARK" ]; then
 	read -r fw p <"$MARK" || true
 	case $fw in
 	ufw) ufw delete allow "$p/tcp" >/dev/null 2>&1 || true ;;
-	firewalld) firewall-cmd --permanent --remove-port="$p/tcp" >/dev/null 2>&1 && firewall-cmd --reload >/dev/null 2>&1 || true ;;
+	firewalld) { firewall-cmd --permanent --remove-port="$p/tcp" && firewall-cmd --reload; } >/dev/null 2>&1 || true ;;
 	esac
 	rm -f "$MARK"
 fi

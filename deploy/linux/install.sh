@@ -86,7 +86,7 @@ fi
 [ -n "$port" ] || port=18765
 [ -n "$host" ] || host=0.0.0.0
 case $port in '' | *[!0-9]*) die "端口 $port 不对，要是 1 到 65535 之间的数字" ;; esac
-[ "$port" -ge 1 ] && [ "$port" -le 65535 ] || die "端口 $port 不对，要是 1 到 65535 之间的数字"
+if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then die "端口 $port 不对，要是 1 到 65535 之间的数字"; fi
 
 if [ -n "$src" ]; then say "正在安装 Miao Panel $new ……"; else say "正在修改 Miao Panel 的设置……"; fi
 
@@ -159,7 +159,7 @@ close_port() {
 	read -r fw p <"$MARK" || true
 	case $fw in
 	ufw) ufw delete allow "$p/tcp" >/dev/null 2>&1 || true ;;
-	firewalld) firewall-cmd --permanent --remove-port="$p/tcp" >/dev/null 2>&1 && firewall-cmd --reload >/dev/null 2>&1 || true ;;
+	firewalld) { firewall-cmd --permanent --remove-port="$p/tcp" && firewall-cmd --reload; } >/dev/null 2>&1 || true ;;
 	esac
 	rm -f "$MARK"
 }

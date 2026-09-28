@@ -137,7 +137,9 @@ func TestInstallWizardMySQL(t *testing.T) {
 	}
 	// The password is in the secret store, not database.json.
 	raw, _ := os.ReadFile(filepath.Join(dir, "database.json"))
-	if strings.Contains(string(raw), cfg.Passwd) || !strings.Contains(string(raw), `"mysql"`) {
+	var saved dbconf.Choice
+	if err := json.Unmarshal(raw, &saved); err != nil || saved.Kind != "mysql" || saved.MySQL == nil ||
+		saved.MySQL.Database != db || saved.MySQL.Password != "" || strings.Contains(string(raw), "password") {
 		t.Fatalf("database.json = %s", raw)
 	}
 	st, err := dbconf.Open(dir, secrets.OpenFile(dir))
