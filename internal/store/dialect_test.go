@@ -1,0 +1,137 @@
+package store
+
+import (
+	"context"
+	"os"
+	"strings"
+	"testing"
+	"time"
+)
+
+// These run on SQLite, and on MySQL too when MIAO_TEST_MYSQL is set.
+func TestUpsertsAndExactText(t *testing.T) {
+	st, err := OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	// Settings replace, and "key" (a reserved word in MySQL) works.
+	for _, v := range []string{"a", "b"} {
+		if err := st.SetSetting("theme", v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if v, _ := st.Setting("theme"); v != "b" {
+		t.Fatalf("setting = %q", v)
+	}
+	if v, _ := st.Setting("THEME"); v != "" {
+		t.Fatalf("keys compare exactly, got %q", v)
+	}
+
+	sv, err := st.AddServer(Server{Name: "blog", Host: "203.0.113.5", Port: 22, Username: "root", AuthKind: "password"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{"one", "two"} {
+		if err := st.SaveProfile(sv.ID, raw, "linux"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if raw, _, err := st.GetProfile(sv.ID); err != nil || raw != "two" {
+		t.Fatalf("profile = %q %v", raw, err)
+	}
+
+	// Long text survives whole; undo (reserved in MySQL) is read back.
+	long := strings.Repeat("输出", 100000)
+	e, err := st.AddExec(ExecLog{ServerID: sv.ID, ServerName: "blog", Origin: "plan", Kind: ExecChange, Title: "x", Status: ExecRunning, Output: long, Undo: map[string]string{"a": "b"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := st.GetExec(e.ID); err != nil || got.Output != long || got.Undo["a"] != "b" {
+		t.Fatalf("exec = %d chars, undo %v, %v", len(got.Output), got.Undo, err)
+	}
+
+	// Account names are exact, and an email or phone belongs to one
+	// account at most, while many accounts may have none.
+	a, err := st.AddUser("admin", "h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := st.AddUser("Admin", "h")
+	if err != nil {
+		t.Fatalf("names differing in case: %v", err)
+	}
+	if _, err := st.AddUser("admin", "h"); err == nil {
+		t.Fatal("the same name twice")
+	}
+	if err := st.SetContact(a.ID, "email", "me@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetContact(b.ID, "email", "me@example.com"); err == nil {
+		t.Fatal("one email on two accounts")
+	}
+	if u, err := st.UserByEmail("me@example.com"); err != nil || u.ID != a.ID {
+		t.Fatalf("by email = %+v %v", u, err)
+	}
+
+	// Deleting a server takes its profile with it.
+	if err := st.DeleteServer(sv.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.GetProfile(sv.ID); err == nil {
+		t.Fatal("profile left behind")
+	}
+}
+
+func TestCheckMySQL(t *testing.T) {
+	if checkVersion("5.6.51") == nil || checkVersion("10.2.44-MariaDB") == nil {
+		t.Error("old servers accepted")
+	}
+	for _, v := range []string{"5.7.44-log", "8.0.39", "10.11.14-MariaDB-0ubuntu0.24.04.1", "11.4.2-MariaDB"} {
+		if err := checkVersion(v); err != nil {
+			t.Errorf("%s: %v", v, err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if _, err := CheckMySQL(ctx, MySQL{Host: "127.0.0.1", Port: 1, Database: "x", User: "x"}); err == nil || !strings.Contains(err.Error(), "拒绝") {
+		t.Errorf("nothing listening: %v", err)
+	}
+	dsn := os.Getenv("MIAO_TEST_MYSQL")
+	if dsn == "" {
+		t.Skip("MIAO_TEST_MYSQL not set")
+	}
+	st, err := openTestMySQL(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	m := testMySQL(t, dsn, st.drop)
+	if v, err := CheckMySQL(ctx, m); err != nil || v == "" {
+		t.Fatalf("check = %q %v", v, err)
+	}
+	bad := m
+	bad.Password += "x"
+	if _, err := CheckMySQL(ctx, bad); err == nil || !strings.Contains(err.Error(), "密码") {
+		t.Errorf("wrong password: %v", err)
+	}
+	bad = m
+	bad.Database = "miaotest_none"
+	if _, err := CheckMySQL(ctx, bad); err == nil || !strings.Contains(err.Error(), "没有这个数据库") {
+		t.Errorf("no database: %v", err)
+	}
+	if !strings.Contains(st.Where(), "MySQL") || strings.Contains(st.Where(), m.Password) {
+		t.Errorf("where = %q", st.Where())
+	}
+}
+
+func testMySQL(t *testing.T, dsn, db string) MySQL {
+	t.Helper()
+	c, err := mysqlDSN(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Database = db
+	return c
+}

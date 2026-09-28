@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.75.0
+	github.com/go-sql-driver/mysql v1.10.1
 	github.com/jchv/go-webview2 v0.0.0-20260205173254-56598839c808
 	github.com/pkg/sftp v1.13.11
 	github.com/ulikunitz/xz v0.5.17
@@ -18,6 +19,7 @@ require (
 )
 
 require (
+	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/danieljoos/wincred v1.2.3 // indirect

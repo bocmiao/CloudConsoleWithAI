@@ -1,5 +1,6 @@
-// Package store keeps Miao Panel's local state in a SQLite file. Secrets
-// never go here; see package secrets.
+// Package store keeps Miao Panel's state: in a SQLite file in the data
+// directory, or, for the web edition, in a MySQL (or MariaDB) database.
+// Secrets never go here; see package secrets.
 package store
 
 import (
@@ -7,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -17,10 +19,27 @@ import (
 // ErrNotFound is returned when a row does not exist.
 var ErrNotFound = errors.New("not found")
 
-// Store wraps the SQLite database.
+// Store wraps the database.
 type Store struct {
-	db *sql.DB
+	db    *sql.DB
+	mysql bool   // MySQL or MariaDB rather than SQLite
+	info  string // where the data is, in words
+	drop  string // a test database to drop on Close
 }
+
+// pick is the statement for this database: SQLite's or MySQL's.
+func (s *Store) pick(sqlite, mysql string) string {
+	if s.mysql {
+		return mysql
+	}
+	return sqlite
+}
+
+// Where says where the data is kept, for the settings page.
+func (s *Store) Where() string { return s.info }
+
+// IsMySQL says whether the data is in MySQL.
+func (s *Store) IsMySQL() bool { return s.mysql }
 
 const schema = `
 CREATE TABLE IF NOT EXISTS servers (
@@ -135,10 +154,17 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 `
 
-// Open opens (and migrates) the database in dir.
+// DBFile is the SQLite database's file name in the data directory.
+const DBFile = "miaopanel.db"
+
+// Open opens (and migrates) the SQLite database in dir.
 func Open(dir string) (*Store, error) {
-	return open(fileURI(filepath.Join(dir, "miaopanel.db")) +
-		"?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	path := filepath.Join(dir, DBFile)
+	st, err := open(fileURI(path) + "?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	if st != nil {
+		st.info = "内置数据库（SQLite）：" + path
+	}
+	return st, err
 }
 
 // fileURI turns an absolute path into an SQLite URI: file:///home/u/x.db
@@ -154,8 +180,13 @@ func fileURI(path string) string {
 	return "file://" + p
 }
 
-// OpenMemory opens a throwaway in-memory database, for tests.
+// OpenMemory opens a throwaway database, for tests: an in-memory SQLite
+// one, or, when MIAO_TEST_MYSQL names a MySQL server
+// (user:password@tcp(host:port)/), a new database there that Close drops.
 func OpenMemory() (*Store, error) {
+	if dsn := os.Getenv("MIAO_TEST_MYSQL"); dsn != "" {
+		return openTestMySQL(dsn)
+	}
 	return open("file::memory:?_pragma=foreign_keys(1)")
 }
 
@@ -167,10 +198,27 @@ func open(dsn string) (*Store, error) {
 	// SQLite handles one writer at a time; a single connection also keeps
 	// in-memory databases alive across calls.
 	db.SetMaxOpenConns(1)
+	s := &Store{db: db}
+	if err := s.migrate(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+// migrate creates the tables, and adds what older versions lack.
+func (s *Store) migrate() error {
+	if s.mysql {
+		for _, q := range mysqlSchema {
+			if _, err := s.db.Exec(q + " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin"); err != nil {
+				return fmt.Errorf("migrate: %w", err)
+			}
+		}
+		return nil
+	}
 	for _, q := range []string{schema, monitorSchema} {
-		if _, err := db.Exec(q); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("migrate: %w", err)
+		if _, err := s.db.Exec(q); err != nil {
+			return fmt.Errorf("migrate: %w", err)
 		}
 	}
 	for _, c := range [][3]string{
@@ -180,9 +228,8 @@ func open(dsn string) (*Store, error) {
 		{"users", "email", "TEXT NOT NULL DEFAULT ''"},
 		{"users", "phone", "TEXT NOT NULL DEFAULT ''"},
 	} {
-		if err := addColumn(db, c[0], c[1], c[2]); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("migrate: %w", err)
+		if err := addColumn(s.db, c[0], c[1], c[2]); err != nil {
+			return fmt.Errorf("migrate: %w", err)
 		}
 	}
 	// An email or a phone number belongs to one account at most.
@@ -190,15 +237,14 @@ func open(dsn string) (*Store, error) {
 		`CREATE UNIQUE INDEX IF NOT EXISTS users_email ON users(email) WHERE email != ''`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS users_phone ON users(phone) WHERE phone != ''`,
 	} {
-		if _, err := db.Exec(q); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("migrate: %w", err)
+		if _, err := s.db.Exec(q); err != nil {
+			return fmt.Errorf("migrate: %w", err)
 		}
 	}
-	return &Store{db: db}, nil
+	return nil
 }
 
-// addColumn adds a column to databases created by older versions.
+// addColumn adds a column to SQLite databases created by older versions.
 func addColumn(db *sql.DB, table, column, decl string) error {
 	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, table)
 	if err != nil {
@@ -223,7 +269,12 @@ func addColumn(db *sql.DB, table, column, decl string) error {
 }
 
 // Close closes the database.
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	if s.drop != "" {
+		_, _ = s.db.Exec("DROP DATABASE IF EXISTS `" + s.drop + "`")
+	}
+	return s.db.Close()
+}
 
 func now() string { return time.Now().UTC().Format(time.RFC3339) }
 
@@ -317,8 +368,10 @@ func (s *Store) SaveProfile(id int64, raw, adapter string) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`INSERT INTO host_profiles (server_id, raw, collected_at) VALUES (?, ?, ?)
+	if _, err := tx.Exec(s.pick(`INSERT INTO host_profiles (server_id, raw, collected_at) VALUES (?, ?, ?)
 		ON CONFLICT(server_id) DO UPDATE SET raw = excluded.raw, collected_at = excluded.collected_at`,
+		`INSERT INTO host_profiles (server_id, raw, collected_at) VALUES (?, ?, ?)
+		ON DUPLICATE KEY UPDATE raw = VALUES(raw), collected_at = VALUES(collected_at)`),
 		id, raw, now()); err != nil {
 		return err
 	}
@@ -352,8 +405,8 @@ type Plan struct {
 // AddPlan records a proposed plan.
 func (s *Store) AddPlan(p Plan) (Plan, error) {
 	p.CreatedAt = now()
-	res, err := s.db.Exec(`INSERT INTO plans (server_id, title, reason, steps, status, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		p.ServerID, p.Title, p.Reason, p.Steps, p.Status, p.CreatedAt)
+	res, err := s.db.Exec(`INSERT INTO plans (server_id, title, reason, steps, status, result, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		p.ServerID, p.Title, p.Reason, p.Steps, p.Status, p.Result, p.CreatedAt)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -525,7 +578,7 @@ func (s *Store) AddExec(e ExecLog) (ExecLog, error) {
 		e.StartedAt = now()
 	}
 	res, err := s.db.Exec(`INSERT INTO exec_logs (started_at, finished_at, server_id, server_name, adapter, origin, kind,
-		title, note, capability, params, via, commands, script_name, script, status, output, undo, reversible,
+		title, note, capability, params, via, commands, script_name, script, status, output, `+"`undo`"+`, reversible,
 		backup_dir, rollback_file, plan_id, step_idx, undo_of, undone_by)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		e.StartedAt, e.FinishedAt, e.ServerID, e.ServerName, e.Adapter, e.Origin, e.Kind,
@@ -541,14 +594,14 @@ func (s *Store) AddExec(e ExecLog) (ExecLog, error) {
 // UpdateExec saves an entry's outcome.
 func (s *Store) UpdateExec(e ExecLog) error {
 	_, err := s.db.Exec(`UPDATE exec_logs SET finished_at = ?, commands = ?, script_name = ?, script = ?, status = ?,
-		output = ?, undo = ?, backup_dir = ?, rollback_file = ?, undone_by = ? WHERE id = ?`,
+		output = ?, `+"`undo`"+` = ?, backup_dir = ?, rollback_file = ?, undone_by = ? WHERE id = ?`,
 		e.FinishedAt, e.Commands, e.ScriptName, e.Script, e.Status, e.Output, jsonText(e.Undo),
 		e.BackupDir, e.RollbackFile, e.UndoneBy, e.ID)
 	return err
 }
 
 const execCols = `id, started_at, finished_at, server_id, server_name, adapter, origin, kind, title, note, capability,
-	params, via, commands, script_name, %s, status, %s, undo, reversible, backup_dir, rollback_file, plan_id, step_idx,
+	params, via, commands, script_name, %s, status, %s, ` + "`undo`" + `, reversible, backup_dir, rollback_file, plan_id, step_idx,
 	undo_of, undone_by`
 
 func scanExec(row interface{ Scan(...any) error }) (ExecLog, error) {
@@ -661,7 +714,9 @@ func (s *Store) GetConversation(id string) (Conversation, error) {
 
 // ListConversations returns conversations, most recently used first.
 func (s *Store) ListConversations(limit int) ([]Conversation, error) {
-	rows, err := s.db.Query(`SELECT id, title, created_at, updated_at FROM conversations ORDER BY updated_at DESC, rowid DESC LIMIT ?`, limit)
+	// Newest first; among those used in the same second, the one made last.
+	rows, err := s.db.Query(`SELECT id, title, created_at, updated_at FROM conversations ORDER BY updated_at DESC, `+
+		s.pick("rowid", "created_at")+` DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -764,7 +819,7 @@ func (s *Store) MonthCost() (map[string]float64, error) {
 // Setting returns a stored non-secret setting, or "" if unset.
 func (s *Store) Setting(key string) (string, error) {
 	var v string
-	err := s.db.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&v)
+	err := s.db.QueryRow("SELECT value FROM settings WHERE `key` = ?", key).Scan(&v)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
@@ -773,13 +828,13 @@ func (s *Store) Setting(key string) (string, error) {
 
 // SetSetting stores a non-secret setting.
 func (s *Store) SetSetting(key, value string) error {
-	_, err := s.db.Exec(`INSERT INTO settings (key, value) VALUES (?, ?)
-		ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value)
+	_, err := s.db.Exec(s.pick("INSERT INTO settings (`key`, value) VALUES (?, ?) ON CONFLICT(`key`) DO UPDATE SET value = excluded.value",
+		"INSERT INTO settings (`key`, value) VALUES (?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)"), key, value)
 	return err
 }
 
 // DeleteSetting removes a setting.
 func (s *Store) DeleteSetting(key string) error {
-	_, err := s.db.Exec(`DELETE FROM settings WHERE key = ?`, key)
+	_, err := s.db.Exec("DELETE FROM settings WHERE `key` = ?", key)
 	return err
 }
