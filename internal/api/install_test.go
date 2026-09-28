@@ -1,6 +1,7 @@
 package api
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -146,5 +147,23 @@ func TestInstallWizardMySQL(t *testing.T) {
 	defer st.Close()
 	if u, err := st.UserByName("owner"); err != nil || !st.IsMySQL() {
 		t.Fatalf("reopened: %+v %v", u, err)
+	}
+
+	// A database that is not there yet is made by the wizard.
+	db += "_w"
+	admin, err := sql.Open("mysql", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	defer admin.Exec("DROP DATABASE IF EXISTS `" + db + "`")
+	_, code, serve, _ = installWizard(t)
+	r = serve(call{method: "POST", path: "/api/install/check", body: body(cfg.Passwd)})
+	if m := decodeBody(t, r); r.StatusCode != http.StatusOK || m["missing"] != true {
+		t.Fatalf("check a missing database = %d %v", r.StatusCode, m)
+	}
+	r = serve(call{method: "POST", path: "/api/install/database", body: body(cfg.Passwd)})
+	if m := decodeBody(t, r); r.StatusCode != http.StatusOK || m["users"] != float64(0) {
+		t.Fatalf("install into a new database = %d %v", r.StatusCode, m)
 	}
 }

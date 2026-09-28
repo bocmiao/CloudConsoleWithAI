@@ -45,6 +45,79 @@ jobs:
         run: |
           bash -n scripts/discover.sh && sh -n scripts/discover.sh
           for script in scripts/actions/*.sh; do sh -n "$script"; done
+      - name: Check the Linux install scripts
+        run: shellcheck -s sh deploy/linux/*.sh
+
+  # The web edition's store, install wizard and everything on top of them
+  # against the MySQL and MariaDB versions it supports.
+  mysql:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["mysql:5.7", "mysql:8.0", "mysql:8.4", "mariadb:10.3", "mariadb:11.4"]
+    services:
+      db:
+        image: ${{ matrix.image }}
+        env:
+          MYSQL_ROOT_PASSWORD: miaotest
+          MARIADB_ROOT_PASSWORD: miaotest
+        ports: ["3306:3306"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Wait for the database
+        run: |
+          for i in $(seq 1 60); do
+            if mysqladmin ping -h 127.0.0.1 -P 3306 -uroot -pmiaotest --silent 2>/dev/null; then exit 0; fi
+            sleep 2
+          done
+          exit 1
+      - name: Test
+        env:
+          MIAO_TEST_MYSQL: root:miaotest@tcp(127.0.0.1:3306)/
+        run: go test -count=1 ./internal/store ./internal/dbconf ./internal/auth ./internal/api ./internal/app
+
+  # The Linux install package on a real systemd: installed, the wizard
+  # run over HTTP, upgraded in place, moved behind a proxy, uninstalled.
+  linux-package:
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Build the package
+        run: |
+          CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=v0.0.1-ci" -o dist/MiaoPanel-linux-amd64 ./cmd/miaopanel
+          deploy/linux/package.sh dist/MiaoPanel-linux-amd64 dist/MiaoPanel-linux-amd64.tar.gz
+          mkdir /tmp/pkg && tar -C /tmp/pkg -xzf dist/MiaoPanel-linux-amd64.tar.gz
+      - name: Install, set up, upgrade and uninstall
+        run: |
+          U=http://127.0.0.1:18765
+          H='X-Miao: 1'
+          sudo sh /tmp/pkg/miaopanel/install.sh | tee /tmp/install.log
+          code=$(sudo cat /opt/miaopanel/data/setup-code)
+          grep -q "初始化码：$code" /tmp/install.log
+          curl -fsS -H "$H" $U/api/auth/state | grep -q '"install":true'
+          curl -fsS -H "$H" -X POST -d "{\"code\":\"$code\",\"kind\":\"sqlite\"}" $U/api/install/database | grep -q '"users":0'
+          curl -fsS -c /tmp/jar -H "$H" -X POST \
+            -d "{\"code\":\"$code\",\"name\":\"admin\",\"password\":\"correct horse battery\"}" $U/api/auth/setup
+          # The service may replace its own program: one-click update works.
+          curl -fsS -b /tmp/jar -H "$H" $U/api/update | tee /dev/stderr | grep -q '"canApply":true'
+          # Installing again upgrades in place and keeps the account.
+          sudo sh /tmp/pkg/miaopanel/install.sh | grep -q '已经安装过'
+          curl -fsS -H "$H" -X POST -d '{"name":"admin","password":"correct horse battery"}' $U/api/auth/login
+          sudo sh /opt/miaopanel/install.sh --local
+          ss -ltn | grep -q '127.0.0.1:18765'
+          sudo sh /opt/miaopanel/uninstall.sh --purge
+          if systemctl is-active --quiet miaopanel || test -e /opt/miaopanel || id miaopanel; then exit 1; fi
+      - name: Service log
+        if: failure()
+        run: sudo journalctl -u miaopanel --no-pager -n 100
 
   build:
     # Cross-platform artifacts are needed for releases, not every push.
@@ -77,6 +150,11 @@ jobs:
           if [ "${GOOS}" = "windows" ]; then LDFLAGS="${LDFLAGS} -H=windowsgui"; fi
           go build -trimpath -ldflags "${LDFLAGS}" \
             -o "dist/MiaoPanel-${GOOS}-${GOARCH}${{ matrix.ext }}" ./cmd/miaopanel
+      # Linux also gets the install package; the bare program stays for
+      # one-click updates.
+      - name: Install package
+        if: matrix.goos == 'linux'
+        run: deploy/linux/package.sh "dist/MiaoPanel-linux-${{ matrix.goarch }}" "dist/MiaoPanel-linux-${{ matrix.goarch }}.tar.gz"
       - uses: actions/upload-artifact@v4
         with:
           name: MiaoPanel-${{ matrix.goos }}-${{ matrix.goarch }}
@@ -96,10 +174,10 @@ jobs:
             -e MIAO_TRUSTED_PROXIES=172.16.0.0/12 miaopanel:ci
           for i in $(seq 1 20); do curl -fsS -H 'X-Miao: 1' http://127.0.0.1:18765/api/auth/state && break; sleep 1; done
           docker logs miaopanel 2>&1 | grep -q '初始化码'
-          curl -fsS -H 'X-Miao: 1' http://127.0.0.1:18765/api/auth/state | grep -q '"setup":true'
+          curl -fsS -H 'X-Miao: 1' http://127.0.0.1:18765/api/auth/state | grep -q '"install":true'
           curl -fsS -H 'X-Miao: 1' -H 'X-Forwarded-Proto: https' \
             http://127.0.0.1:18765/api/auth/state | grep -q '"https":true'
-      - name: Check browser setup and password login
+      - name: Check the install wizard and password login in a browser
         run: python3 scripts/browser_smoke.py
       - name: Restore a stopped data volume
         run: |
@@ -122,7 +200,7 @@ jobs:
 
   release:
     if: (github.ref_type == 'tag' && startsWith(github.ref_name, 'v')) || (github.event_name == 'workflow_dispatch' && startsWith(inputs.version, 'v'))
-    needs: build
+    needs: [build, mysql, linux-package]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

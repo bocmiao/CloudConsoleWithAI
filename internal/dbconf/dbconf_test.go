@@ -38,7 +38,7 @@ func TestChoice(t *testing.T) {
 	// A MySQL choice keeps its password in the secret store only, and
 	// going back to SQLite forgets it.
 	m := store.MySQL{Host: "127.0.0.1", Port: 1, Database: "miao", User: "miao", Password: "s3cret-pw"}
-	if err := Save(dir, sec, Choice{Kind: "mysql", MySQL: m}); err != nil {
+	if err := Save(dir, sec, Choice{Kind: "mysql", MySQL: &m}); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(filepath.Join(dir, file))
@@ -51,11 +51,14 @@ func TestChoice(t *testing.T) {
 	if _, err := Open(dir, sec); err == nil {
 		t.Fatal("opened a MySQL nobody listens on")
 	}
-	if err := Save(dir, sec, Choice{Kind: "sqlite", MySQL: m}); err != nil {
+	if err := Save(dir, sec, Choice{Kind: "sqlite", MySQL: &m}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := sec.Get(secretKey); !errors.Is(err, secrets.ErrNotFound) {
 		t.Fatalf("password kept: %v", err)
+	}
+	if raw, _ = os.ReadFile(filepath.Join(dir, file)); bytes.Contains(raw, []byte("mysql")) {
+		t.Fatalf("sqlite choice = %s", raw)
 	}
 	if st, err = Open(dir, sec); err != nil || st.IsMySQL() {
 		t.Fatalf("open sqlite = %v", err)

@@ -25,8 +25,8 @@ var ErrNotInstalled = errors.New("not installed")
 
 // Choice is where the data is kept.
 type Choice struct {
-	Kind  string      `json:"kind"` // sqlite or mysql
-	MySQL store.MySQL `json:"mysql,omitempty"`
+	Kind  string       `json:"kind"` // sqlite or mysql
+	MySQL *store.MySQL `json:"mysql,omitempty"`
 }
 
 // Installed says whether a database has been chosen for dir: a
@@ -60,31 +60,37 @@ func Open(dir string, sec secrets.Store) (*store.Store, error) {
 	case "sqlite":
 		return store.Open(dir)
 	case "mysql":
+		if c.MySQL == nil {
+			break
+		}
 		pw, err := sec.Get(secretKey)
 		if err != nil && !errors.Is(err, secrets.ErrNotFound) {
 			return nil, err
 		}
-		c.MySQL.Password = pw
-		st, err := store.OpenMySQL(c.MySQL)
+		m := *c.MySQL
+		m.Password = pw
+		st, err := store.OpenMySQL(m)
 		if err != nil {
-			return nil, fmt.Errorf("连接 %s 失败：%w", c.MySQL, err)
+			return nil, fmt.Errorf("连接 %s 失败：%w", m, err)
 		}
 		return st, nil
 	}
-	return nil, fmt.Errorf("%s 里的数据库类型 %q 不认识", file, c.Kind)
+	return nil, fmt.Errorf("%s 里的数据库设置不对：kind 要是 sqlite 或 mysql", file)
 }
 
 // Save remembers the choice; the MySQL password goes to the secret store.
 func Save(dir string, sec secrets.Store, c Choice) error {
-	if c.Kind == "mysql" {
+	if c.Kind == "mysql" && c.MySQL != nil {
 		if err := sec.Set(secretKey, c.MySQL.Password); err != nil {
 			return err
 		}
+		m := *c.MySQL
+		m.Password = ""
+		c.MySQL = &m
 	} else {
-		c.MySQL = store.MySQL{}
+		c.MySQL = nil
 		_ = sec.Delete(secretKey)
 	}
-	c.MySQL.Password = ""
 	raw, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err

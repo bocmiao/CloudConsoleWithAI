@@ -1,7 +1,7 @@
 # Miao Panel Web 版
 #
 #   docker compose up -d            （见 docker-compose.yml）
-#   docker logs miaopanel           （第一次启动时，这里有创建管理员账号用的初始化码）
+#   docker logs miaopanel           （第一次启动时，这里有安装向导用的初始化码）
 #
 # 在国内构建可以换 Go 模块代理：docker compose build --build-arg GOPROXY=https://goproxy.cn,direct
 

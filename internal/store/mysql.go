@@ -74,30 +74,77 @@ func OpenMySQL(m MySQL) (*Store, error) {
 	return s, nil
 }
 
-// CheckMySQL tries a MySQL database for the install wizard: that it can
-// be reached and logged in to, and that the account may create tables.
-// It says which server it is.
-func CheckMySQL(ctx context.Context, m MySQL) (string, error) {
-	c, err := mysql.NewConnector(m.config())
+// CheckMySQL tries a MySQL server for the install wizard: that it can be
+// reached and logged in to, and that the account may create tables in
+// the database. It says which server it is, and whether the database is
+// still missing: CreateMySQLDatabase makes it when installing.
+func CheckMySQL(ctx context.Context, m MySQL) (version string, missing bool, err error) {
+	db, err := openServer(m)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	db := sql.OpenDB(c)
 	defer db.Close()
-	var version string
 	if err := db.QueryRowContext(ctx, "SELECT VERSION()").Scan(&version); err != nil {
-		return "", MySQLError(err)
+		return "", false, MySQLError(err)
 	}
 	if err := checkVersion(version); err != nil {
-		return version, err
+		return version, false, err
 	}
-	const probe = "miaopanel_install_check"
+	exists, err := hasDatabase(ctx, db, m.Database)
+	if err != nil {
+		return version, false, MySQLError(err)
+	}
+	if !exists {
+		return version, true, nil
+	}
+	probe := quoteName(m.Database) + ".miaopanel_install_check"
 	if _, err := db.ExecContext(ctx, "CREATE TABLE IF NOT EXISTS "+probe+" (id INT PRIMARY KEY) ENGINE=InnoDB"); err != nil {
-		return version, fmt.Errorf("这个账号不能在库 %s 里建表：%w", m.Database, MySQLError(err))
+		return version, false, fmt.Errorf("这个账号不能在库 %s 里建表：%w", m.Database, MySQLError(err))
 	}
 	_, _ = db.ExecContext(ctx, "DROP TABLE IF EXISTS "+probe)
-	return version, nil
+	return version, false, nil
 }
+
+// CreateMySQLDatabase makes the database when it does not exist yet.
+func CreateMySQLDatabase(ctx context.Context, m MySQL) error {
+	db, err := openServer(m)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	exists, err := hasDatabase(ctx, db, m.Database)
+	if err != nil {
+		return MySQLError(err)
+	}
+	if exists {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, "CREATE DATABASE "+quoteName(m.Database)+" CHARACTER SET utf8mb4 COLLATE utf8mb4_bin"); err != nil {
+		return fmt.Errorf("没有库 %s，这个账号也不能创建它（%v）。请先在 MySQL（或 1Panel、宝塔的数据库页）里创建这个库，并授权给这个账号", m.Database, MySQLError(err))
+	}
+	return nil
+}
+
+// openServer connects to the server itself, not to a database in it.
+func openServer(m MySQL) (*sql.DB, error) {
+	c := m.config()
+	c.DBName = ""
+	conn, err := mysql.NewConnector(c)
+	if err != nil {
+		return nil, err
+	}
+	return sql.OpenDB(conn), nil
+}
+
+// hasDatabase says whether the account sees the database: one it has no
+// rights to is as good as missing.
+func hasDatabase(ctx context.Context, db *sql.DB, name string) (bool, error) {
+	var n int
+	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?", name).Scan(&n)
+	return n > 0, err
+}
+
+func quoteName(name string) string { return "`" + strings.ReplaceAll(name, "`", "``") + "`" }
 
 // checkVersion refuses servers too old for utf8mb4 indexes and stored
 // generated columns: MySQL before 5.7, MariaDB before 10.3.
@@ -124,13 +171,16 @@ func checkVersion(v string) error {
 
 // MySQLError puts the usual reasons a MySQL connection fails in words.
 func MySQLError(err error) error {
+	if err == nil {
+		return nil
+	}
 	var me *mysql.MySQLError
 	var ne net.Error
 	switch {
 	case errors.As(err, &me) && me.Number == 1045:
 		return errors.New("用户名或密码不对（MySQL 拒绝登录）")
 	case errors.As(err, &me) && me.Number == 1049:
-		return errors.New("没有这个数据库，请先在 MySQL（或 1Panel、宝塔的数据库页）里创建它")
+		return errors.New("没有这个数据库，请在 MySQL（或 1Panel、宝塔的数据库页）里创建它")
 	case errors.As(err, &me) && (me.Number == 1044 || me.Number == 1142):
 		return errors.New("这个账号没有权限使用这个数据库")
 	case errors.As(err, &ne) && ne.Timeout():

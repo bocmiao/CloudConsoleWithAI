@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise first-run setup and password login in a real browser."""
+"""Exercise the install wizard and password login in a real browser."""
 
 import json
 import os
@@ -74,16 +74,20 @@ def main():
             element = wait_for(lambda: find(selector))
             request("POST", root + f"/element/{element}/click")
 
+        # The install wizard: setup code, the built-in database, the account.
         request("POST", root + "/url", {"url": "http://127.0.0.1:18765/"})
-        wait_for(lambda: find(".login-card input[placeholder='XXXX-XXXX-XXXX-XXXX']"))
+        wait_for(lambda: find(".install-card input[placeholder='XXXX-XXXX-XXXX-XXXX']"))
         code_file = os.environ.get("MIAO_TEST_SETUP_CODE_FILE")
         code = (Path(code_file).read_text().strip() if code_file else
                 subprocess.check_output(["docker", "exec", "miaopanel", "cat", "/data/setup-code"], text=True).strip())
         password = "browser smoke test password"
-        fill(".login-card input[placeholder='XXXX-XXXX-XXXX-XXXX']", code)
+        fill(".install-card input[placeholder='XXXX-XXXX-XXXX-XXXX']", code)
+        click(".login-card .login-btn")
+        wait_for(lambda: find(".install-kind button[aria-checked='true']"))
+        click(".login-card .login-btn")
         fill(".login-card input[autocomplete='username']", "admin")
         fields = request("POST", root + "/elements", {"using": "css selector", "value": ".login-card input[autocomplete='new-password']"})
-        assert len(fields) == 2, "Expected setup and confirmation password fields"
+        assert len(fields) == 2, "Expected the password and confirmation fields"
         for field in fields:
             request("POST", root + f"/element/{field[ELEMENT]}/value", {"text": password})
         click(".login-card .login-btn")

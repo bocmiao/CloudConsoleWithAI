@@ -95,7 +95,7 @@ func TestCheckMySQL(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if _, err := CheckMySQL(ctx, MySQL{Host: "127.0.0.1", Port: 1, Database: "x", User: "x"}); err == nil || !strings.Contains(err.Error(), "拒绝") {
+	if _, _, err := CheckMySQL(ctx, MySQL{Host: "127.0.0.1", Port: 1, Database: "x", User: "x"}); err == nil || !strings.Contains(err.Error(), "拒绝") {
 		t.Errorf("nothing listening: %v", err)
 	}
 	dsn := os.Getenv("MIAO_TEST_MYSQL")
@@ -108,19 +108,34 @@ func TestCheckMySQL(t *testing.T) {
 	}
 	defer st.Close()
 	m := testMySQL(t, dsn, st.drop)
-	if v, err := CheckMySQL(ctx, m); err != nil || v == "" {
-		t.Fatalf("check = %q %v", v, err)
+	if v, missing, err := CheckMySQL(ctx, m); err != nil || v == "" || missing {
+		t.Fatalf("check = %q %v %v", v, missing, err)
 	}
 	bad := m
 	bad.Password += "x"
-	if _, err := CheckMySQL(ctx, bad); err == nil || !strings.Contains(err.Error(), "密码") {
+	if _, _, err := CheckMySQL(ctx, bad); err == nil || !strings.Contains(err.Error(), "密码") {
 		t.Errorf("wrong password: %v", err)
 	}
-	bad = m
-	bad.Database = "miaotest_none"
-	if _, err := CheckMySQL(ctx, bad); err == nil || !strings.Contains(err.Error(), "没有这个数据库") {
-		t.Errorf("no database: %v", err)
+	// A database not made yet is found missing, then made when installing.
+	fresh := m
+	fresh.Database = st.drop + "_new"
+	if _, missing, err := CheckMySQL(ctx, fresh); err != nil || !missing {
+		t.Fatalf("missing database: %v %v", missing, err)
 	}
+	if _, err := OpenMySQL(fresh); err == nil || !strings.Contains(err.Error(), "没有这个数据库") {
+		t.Errorf("open a missing database: %v", err)
+	}
+	for range 2 {
+		if err := CreateMySQLDatabase(ctx, fresh); err != nil {
+			t.Fatal(err)
+		}
+	}
+	made, err := OpenMySQL(fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	made.drop = fresh.Database
+	made.Close()
 	if !strings.Contains(st.Where(), "MySQL") || strings.Contains(st.Where(), m.Password) {
 		t.Errorf("where = %q", st.Where())
 	}

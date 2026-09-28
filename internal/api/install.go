@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,9 @@ type installer struct {
 	mu   sync.Mutex
 	done bool
 }
+
+// dbName is a MySQL database name the wizard takes, or makes.
+var dbName = regexp.MustCompile(`^[0-9A-Za-z_$-]{1,64}$`)
 
 // installRequest is what the wizard sends.
 type installRequest struct {
@@ -71,11 +75,11 @@ func NewInstaller(dir string, sec secrets.Store, version string, ready func(*sto
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 		defer cancel()
-		v, err := store.CheckMySQL(ctx, req.MySQL)
+		v, missing, err := store.CheckMySQL(ctx, req.MySQL)
 		if err != nil {
 			return nil, &app.UserError{Msg: err.Error()}
 		}
-		return map[string]string{"version": v}, nil
+		return map[string]any{"version": v, "missing": missing}, nil
 	})
 	open("POST /api/install/database", func(_ http.ResponseWriter, r *http.Request) (any, error) {
 		req, err := in.request(s, r)
@@ -109,6 +113,9 @@ func (in *installer) request(s *Server, r *http.Request) (installRequest, error)
 		if req.MySQL.Host == "" || req.MySQL.Database == "" || req.MySQL.User == "" {
 			return req, &app.UserError{Msg: "请填写 MySQL 的地址、数据库名和用户名"}
 		}
+		if !dbName.MatchString(req.MySQL.Database) {
+			return req, &app.UserError{Msg: "库名只能用字母、数字、下划线和减号，最长 64 个字符"}
+		}
 		if req.MySQL.Port == 0 {
 			req.MySQL.Port = 3306
 		}
@@ -134,6 +141,12 @@ func (in *installer) install(req installRequest) (any, error) {
 	case "sqlite":
 		st, err = store.Open(in.dir)
 	case "mysql":
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		err = store.CreateMySQLDatabase(ctx, req.MySQL)
+		cancel()
+		if err != nil {
+			return nil, &app.UserError{Msg: err.Error()}
+		}
 		st, err = store.OpenMySQL(req.MySQL)
 	default:
 		return nil, &app.UserError{Msg: "请选择数据库"}
@@ -143,7 +156,7 @@ func (in *installer) install(req installRequest) (any, error) {
 	}
 	users, err := st.CountUsers()
 	if err == nil {
-		err = dbconf.Save(in.dir, in.sec, dbconf.Choice{Kind: req.Kind, MySQL: req.MySQL})
+		err = dbconf.Save(in.dir, in.sec, dbconf.Choice{Kind: req.Kind, MySQL: &req.MySQL})
 	}
 	if err == nil {
 		err = in.ready(st)
