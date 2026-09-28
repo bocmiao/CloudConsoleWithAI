@@ -11,6 +11,8 @@
   --hover: rgba(118, 118, 128, .1);
   --selected: rgba(118, 118, 128, .18);
   --sep: rgba(60, 60, 67, .14);
+  --scroll: rgba(60, 60, 67, .24);
+  --scroll-hover: rgba(60, 60, 67, .42);
   --text: #1d1d1f;
   --text-2: #6e6e73;
   --text-3: #8e8e93;
@@ -43,6 +45,8 @@
     --hover: rgba(118, 118, 128, .2);
     --selected: rgba(118, 118, 128, .32);
     --sep: rgba(84, 84, 88, .55);
+    --scroll: rgba(235, 235, 245, .2);
+    --scroll-hover: rgba(235, 235, 245, .36);
     --text: #f5f5f7;
     --text-2: #98989d;
     --text-3: #8e8e93;
@@ -67,6 +71,22 @@
 
 * { box-sizing: border-box; }
 [v-cloak] { display: none; }
+
+/* Scrollbars: a thin rounded thumb in the page's colours, no arrows and no
+   track (Windows would draw its wide classic ones). The sidebar's shows
+   only while the pointer is over it. Chromium and Safari use these rules;
+   Firefox gets the standard properties instead (setting those in Chromium
+   would switch these off). */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-button { display: none; }
+::-webkit-scrollbar-thumb { background: var(--scroll); background-clip: padding-box; border: 2px solid transparent; border-radius: 999px; min-height: 36px; }
+::-webkit-scrollbar-thumb:hover { background-color: var(--scroll-hover); }
+.sidebar::-webkit-scrollbar-thumb { background-color: transparent; }
+.sidebar:hover::-webkit-scrollbar-thumb { background-color: var(--scroll); }
+@supports not selector(::-webkit-scrollbar) {
+  * { scrollbar-width: thin; scrollbar-color: var(--scroll) transparent; }
+}
 html, body { height: 100%; }
 body {
   margin: 0; background: var(--bg); color: var(--text);
@@ -107,6 +127,15 @@ input, select, textarea {
   box-shadow: inset 0 0 0 1px var(--sep);
 }
 input:focus, select:focus, textarea:focus { box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 3px var(--accent-track); }
+/* Drop-downs look like the fields around them, with a thin chevron, not
+   the system's own box. */
+select {
+  appearance: none; -webkit-appearance: none; cursor: pointer; padding-right: 30px; text-overflow: ellipsis;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%238e8e93' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 10px center;
+}
+select:disabled { cursor: default; opacity: .6; }
+option { background: var(--surface); color: var(--text); }
 input[type=number] { font-variant-numeric: tabular-nums; }
 input[type=checkbox], input[type=radio] { width: 16px; height: 16px; padding: 0; margin: 0; flex: none; box-shadow: none; accent-color: var(--accent); vertical-align: middle; }
 input[type=checkbox]:focus, input[type=radio]:focus { box-shadow: none; }
