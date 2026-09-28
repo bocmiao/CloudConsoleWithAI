@@ -30,6 +30,7 @@ type NoticeSettings struct {
 	AlertCert  bool   `json:"alertCert"`
 	AlertBlock bool   `json:"alertBlock"`
 	AlertRenew bool   `json:"alertRenew"` // cloud servers and domains about to expire, money owed
+	AlertCloud bool   `json:"alertCloud"` // the clouds' own monitoring alarms
 
 	Webhook     string `json:"webhook"`     // masked; empty when none
 	WebhookKind string `json:"webhookKind"` // in words
@@ -75,7 +76,7 @@ const (
 var noticeMu sync.Mutex
 
 func defaultNoticeSettings() NoticeSettings {
-	return NoticeSettings{Daily: true, DailyAt: "09:00", AlertRisk: true, AlertLeak: true, AlertCert: true, AlertBlock: true, AlertRenew: true}
+	return NoticeSettings{Daily: true, DailyAt: "09:00", AlertRisk: true, AlertLeak: true, AlertCert: true, AlertBlock: true, AlertRenew: true, AlertCloud: true}
 }
 
 func (a *App) loadNotices() noticeState {
@@ -171,7 +172,7 @@ func (a *App) SaveNoticeSettings(s NoticeSettings) (NoticesView, error) {
 	noticeMu.Lock()
 	st := a.loadNotices()
 	st.Settings = NoticeSettings{Daily: s.Daily, DailyAt: s.DailyAt, AlertRisk: s.AlertRisk, AlertLeak: s.AlertLeak, AlertCert: s.AlertCert,
-		AlertBlock: s.AlertBlock, AlertRenew: s.AlertRenew}
+		AlertBlock: s.AlertBlock, AlertRenew: s.AlertRenew, AlertCloud: s.AlertCloud}
 	err := a.saveNotices(st)
 	noticeMu.Unlock()
 	if err != nil {
@@ -382,6 +383,26 @@ func (a *App) alert(ctx context.Context) {
 			if len(lines) > 0 {
 				titles = append(titles, "续费和余额")
 				sections = append(sections, "**续费和余额**（在「云服务器 → 账户和续费」可以一键开启自动续费）\n"+strings.Join(lines, "\n"))
+			}
+		}
+	}
+	if s.AlertCloud && a.hasCloud() {
+		if v, _, err := a.CloudAlarmsPage(ctx, PageWait); err == nil {
+			var lines []string
+			for _, x := range v.Alarms {
+				key := "alarm:" + x.Key
+				if !x.Active || x.Level == "info" || !fresh(key, realertAfter) {
+					continue
+				}
+				keys = append(keys, key)
+				lines = append(lines, fmt.Sprintf("- %s：%s（%s，%s开始）", x.Object, x.What, providerName[x.Provider], whenShort(x.First)))
+			}
+			if len(lines) > 0 {
+				if len(lines) > 10 {
+					lines = append(lines[:10], fmt.Sprintf("- 还有 %d 个", len(lines)-10))
+				}
+				titles = append(titles, "云监控告警")
+				sections = append(sections, "**云监控告警**（腾讯云或阿里云云监控发出的，在「监控」页可以看到全部）\n"+strings.Join(lines, "\n"))
 			}
 		}
 	}

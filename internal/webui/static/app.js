@@ -114,6 +114,7 @@ const ICONS = {
   menu: 'M4 7h16M4 12h16M4 17h16',
   globe: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM3.6 9h16.8M3.6 15h16.8M12 3c-2.4 2.6-3.6 5.6-3.6 9s1.2 6.4 3.6 9M12 3c2.4 2.6 3.6 5.6 3.6 9s-1.2 6.4-3.6 9',
   bolt: 'M13 3L5 13.5h6L10 21l8-10.5h-6z',
+  layers: 'M12 3l9 5-9 5-9-5zM3 12.5l9 5 9-5M3 16.5l9 5 9-5',
   cloud: 'M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 8.6 4.5 4.5 0 0 1 17.5 18z',
   bucket: 'M4 7h16l-1.6 12.2a2 2 0 0 1-2 1.8H7.6a2 2 0 0 1-2-1.8zM4 7c0-1.7 3.6-3 8-3s8 1.3 8 3',
   pulse: 'M3 12h4l2.5-6 4.5 12 2.5-6H21',
@@ -1801,9 +1802,22 @@ const CertPage = {
       return null;
     }
     const ask = text => emit('ask', text);
+    // A free certificate from Tencent Cloud's SSL 证书: a checklist.
+    const free = reactive({ open: false, domain: '', error: '', busy: false });
+    const freePlan = ref(null);
+    function openFree() { Object.assign(free, { open: true, domain: '', error: '', busy: false }); }
+    async function submitFree() {
+      free.busy = true; free.error = '';
+      try {
+        freePlan.value = await api('POST', '/api/certificates/free/plan', { domain: free.domain.trim() });
+        free.open = false;
+      } catch (e) { free.error = e.message; }
+      finally { free.busy = false; }
+    }
+    function freeDone() { load(true); }
     return { data, loading, error, load, whenText, groups, live, noHttps, counts, date, others, uses, copyText, action, ask,
       q, show, sort, filtered, tally, hiddenProblems, attentionV, fineV, unusedV, unusedOpen, liveShown, noHttpsShown, shownCount, totalCount,
-      toggleReveal, clearFilters, leftText, CERT_SHOWS, CERT_SORTS, icon: l => LEVEL_ICON[l] || 'info' };
+      toggleReveal, clearFilters, leftText, CERT_SHOWS, CERT_SORTS, icon: l => LEVEL_ICON[l] || 'info', free, freePlan, openFree, submitFree, freeDone };
   },
   template: `
   <div>
@@ -1811,6 +1825,7 @@ const CertPage = {
     <div class="filter-row">
       <button @click="load(true)" :disabled="loading"><ui-icon name="refresh"></ui-icon>刷新</button>
       <button @click="ask('我想给网站申请 HTTPS 证书并开启自动续签，域名是：')"><ui-icon name="plus"></ui-icon>申请证书</button>
+      <button v-if="configured" @click="openFree" title="向腾讯云 SSL 证书申请免费证书，用在腾讯云 CDN、负载均衡等产品上"><ui-icon name="lock"></ui-icon>腾讯云免费证书</button>
       <span class="small tertiary live-note" v-if="data"><template v-if="loading"><span class="spinner inline"></span>正在重新检查，下面是 {{ whenText(data.checkedAt) }} 的结果</template><template v-else>检查于 {{ whenText(data.checkedAt) }}</template></span>
       <span class="grow"></span>
       <button class="primary" @click="ask('检查一下我所有网站的 HTTPS 证书：有没有快到期、已经过期、没有自动续签或者申请失败的？有问题帮我处理。')"><ui-icon name="sparkles"></ui-icon>让 AI 检查</button>
@@ -1940,6 +1955,27 @@ const CertPage = {
       </template>
       <div class="notice" v-for="n in data.notes || []" :key="n"><ui-icon name="info"></ui-icon>没能读取：{{ n }}</div>
     </template>
+  
+    <!-- A free certificate from Tencent Cloud -->
+    <div class="sheet-mask" v-if="free.open" @click.self="free.open = false">
+      <div class="sheet" role="dialog" aria-label="申请腾讯云免费证书">
+        <h2>申请腾讯云免费证书</h2>
+        <p>TrustAsia 免费 DV 证书，有效期 3 个月，一次一个名字，不支持泛域名。域名的解析要在这个腾讯云账号的 DNSPod 里：验证记录自动添加，签发后自动删除，一般几分钟签发。
+          签发后用在腾讯云 CDN、负载均衡等产品上；经过 EdgeOne 的网站和 1Panel 上的网站用它们自己的免费证书更省事，会自动续签。</p>
+        <div class="group"><div class="row form"><span class="k">域名</span><span class="v"><input v-model="free.domain" placeholder="如 www.example.com" aria-label="域名" autocomplete="off" autocapitalize="off" spellcheck="false" @keydown.enter="submitFree"></span></div></div>
+        <div class="notice" v-if="free.error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ free.error }}</div>
+        <div class="sheet-actions"><button @click="free.open = false">取消</button>
+          <button class="primary" @click="submitFree" :disabled="free.busy || !free.domain.trim()">{{ free.busy ? '正在生成……' : '生成清单' }}</button></div>
+      </div>
+    </div>
+    <div class="sheet-mask" v-if="freePlan" @click.self="freePlan = null">
+      <div class="sheet plan-sheet" role="dialog" aria-label="确认清单">
+        <h2>{{ freePlan.title }}</h2>
+        <p>勾选后点「执行」，确认后才会生效。</p>
+        <plan-card :plan="freePlan" server-name="腾讯云" @done="freeDone"></plan-card>
+        <div class="sheet-actions"><button @click="freePlan = null">关闭</button></div>
+      </div>
+    </div>
   </div>`,
 };
 
@@ -2285,13 +2321,14 @@ const PALETTE_PAGES = [
   { tab: 'home', label: '总览', icon: 'home', keys: 'home overview zonglan' },
   { tab: 'chat', label: 'AI 助手', icon: 'sparkles', keys: 'ai chat' },
   { tab: 'inbox', label: '待处理', icon: 'inbox', keys: 'inbox todo 建议 通知 清单 plans notices' },
-  { tab: 'monitor', label: '监控', icon: 'pulse', keys: 'monitor uptime 监控 可用性 宕机 打不开 告警 cpu 内存 磁盘' },
+  { tab: 'monitor', label: '监控', icon: 'pulse', keys: 'monitor uptime 监控 可用性 宕机 打不开 告警 云监控 cpu 内存 磁盘' },
   { tab: 'sites', label: '网站管理', icon: 'window', keys: 'sites website 网站 1panel nginx https 反向代理 证书' },
   { stats: ['logs', 'overview'], label: '访问统计', icon: 'chart', keys: 'stats visits pv uv 统计 流量' },
   { stats: ['logs', 'security'], label: '安全', icon: 'shield', keys: 'security 封禁 ip 攻击' },
   { tab: 'certs', label: '证书', icon: 'lock', keys: 'certs ssl https 证书 续签' },
   { tab: 'cloud', label: '云服务器', icon: 'cloud', keys: 'cloud lighthouse cvm ecs aliyun 阿里云 腾讯云 轻量 云服务器 实例 防火墙 安全组 快照 开机 关机 重启 到期 续费 自动续费 余额 欠费 充值 域名到期' },
   { stats: ['eo'], label: 'EdgeOne', icon: 'bolt', keys: 'edgeone eo cdn 缓存 cache' },
+  { tab: 'cdn', label: 'CDN', icon: 'layers', keys: 'cdn 加速 缓存 刷新 预热 purge prefetch 腾讯云 阿里云 https 证书' },
   { tab: 'dns', label: '解析', icon: 'globe', keys: 'dns dnspod 解析 域名' },
   { tab: 'storage', label: '存储', icon: 'bucket', keys: 'cos storage bucket 存储桶' },
   { tab: 'terminal', label: '终端', icon: 'prompt', keys: 'terminal ssh shell 终端' },
@@ -2427,6 +2464,7 @@ const HomePage = {
       else if (t.kind === 'monitor') emit('ask', `${t.title}（${t.meta}）。帮我排查原因，能修的话给我一份清单。`);
       else if (t.kind === 'update') emit('go', 'settings');
       else if (t.kind === 'account') emit('go', 'cloud');
+      else if (t.kind === 'alarm') emit('go', 'monitor');
       else if (t.kind === 'server') {
         const s = ov.value.servers.find(x => x.id === t.id);
         emit('ask', `服务器 ${s ? s.name : ''} 提示「${s ? s.note : ''}」，帮我看看是怎么回事，要不要处理，怎么处理？`);
@@ -3040,6 +3078,8 @@ const CloudPage = {
     }
     function openSnap() { Object.assign(snap, { open: true, name: '' }); formError.value = ''; }
     function submitSnap() { propose({ op: 'snapshot', name: snap.name.trim() }); }
+    // Back to a snapshot: the checklist snapshots the disk as it is first.
+    const rollback = sn => propose({ op: 'rollback', snapshot: sn.id });
     const autoRenew = s => s.renewFlag === 'NOTIFY_AND_AUTO_RENEW';
     // Automatic renewal can be switched here for prepaid servers, except
     // 阿里云's lightweight ones.
@@ -3077,7 +3117,7 @@ const CloudPage = {
     return { list, loading, error, open, detail, dLoading, dError, plan, planning, formError, fw, snap, servers, serverOf, inst,
       loadList, loadDetail, openOne, back, expiry, traffic, trafficLevel, power, openFirewall, submitFirewall, closeRule, openSnap, submitSnap,
       closePlan, planDone, loginPort, metricFormat, snapState, ask, cloudState, cloudKind, cloudLight, fmtBytes, anyCloud, providerName, planServer, both, CLOUD_NAMES,
-      account, aLoading, aError, showAll, loadAccount, dues, attention, soon, renewURL, dueHow, autoRenew, canRenew, renew, money, dueWords, CLOUD_CONSOLE };
+      account, aLoading, aError, showAll, loadAccount, dues, attention, soon, renewURL, dueHow, autoRenew, canRenew, renew, money, dueWords, CLOUD_CONSOLE, rollback };
   },
   template: `
   <div class="cloud-page">
@@ -3238,10 +3278,11 @@ const CloudPage = {
         <div class="group-title cloud-title">系统盘快照<span class="grow"></span><button class="plain small" @click="openSnap" :disabled="planning"><ui-icon name="plus"></ui-icon>创建快照</button></div>
         <div class="group">
           <div class="row" v-if="detail.snapshotError"><ui-icon name="alert" class="st-crit"></ui-icon><span class="grow secondary">{{ detail.snapshotError }}</span></div>
-          <div class="row secondary" v-else-if="!detail.snapshots.length">还没有快照。大改之前做一个，出问题可以在{{ providerName }}控制台回滚。</div>
+          <div class="row secondary" v-else-if="!detail.snapshots.length">还没有快照。大改之前做一个，出问题可以在这里一键回滚。</div>
           <div class="row" v-for="sn in detail.snapshots" :key="sn.id">
             <div class="grow"><div>{{ sn.name || sn.id }}</div><div class="small tertiary">{{ sn.id }}<span v-if="sn.created"> · {{ new Date(sn.created).toLocaleString('zh-CN', { hour12: false }) }}</span><span v-if="sn.sizeGB"> · {{ sn.sizeGB }} GB</span></div></div>
             <span class="small"><span class="sdot" :class="sn.state === 'NORMAL' ? 'good' : sn.state === 'FAILED' ? 'crit' : 'warn'"></span>{{ snapState(sn) }}<span v-if="sn.state === 'CREATING' && sn.percent"> {{ sn.percent }}%</span></span>
+            <button class="link small destructive" v-if="sn.state === 'NORMAL'" @click="rollback(sn)" :disabled="planning" title="把系统盘换回这个快照时的样子（会先给现在的系统盘做一个快照）">回滚到这里</button>
           </div>
         </div>
       </template>
@@ -3289,14 +3330,212 @@ const CloudPage = {
   </div>`,
 };
 
+// 云服务 › CDN: Tencent Cloud's and 阿里云's accelerated domains together.
+// Refreshing and prefetching the cache, turning acceleration on or off and
+// (Tencent) HTTPS are checklists, confirmed first.
+const CDN_STATUS = { online: ['good', '已启用'], offline: ['off', '已停用'], processing: ['warn', '部署中'], closing: ['warn', '关闭中'],
+  rejected: ['crit', '审核未通过'], configuring: ['warn', '配置中'], configure_failed: ['crit', '配置失败'], checking: ['warn', '审核中'],
+  check_failed: ['crit', '审核失败'], stopping: ['warn', '停用中'], deleting: ['warn', '删除中'] };
+const cdnStatus = s => CDN_STATUS[s] || ['off', s || '未知'];
+const CDN_TYPE = { web: '网页小文件', download: '下载大文件', media: '音视频' };
+const CDN_AREA = { mainland: '中国境内', overseas: '境外', global: '全球' };
+// A certificate covers a name itself, or one level under a wildcard.
+function certCovers(names, host) {
+  return names.some(n => n === host || (n.startsWith('*.') && host.endsWith(n.slice(1)) && !host.slice(0, -n.length + 1).includes('.')));
+}
+
+const CdnPage = {
+  props: { active: Boolean, configured: Boolean, aliyun: Boolean },
+  emits: ['settings', 'ask'],
+  setup(props, { emit }) {
+    const data = ref(null), loading = ref(false), error = ref('');
+    const plan = ref(null), planning = ref(false), formError = ref('');
+    const search = ref('');
+    const cache = reactive({ open: false, item: null, op: 'purge', dir: false, text: '' });
+    const https = reactive({ open: false, item: null, choice: '' });
+    const anyCloud = computed(() => props.configured || props.aliyun);
+    let seq = 0;
+    async function load(force) {
+      if (!anyCloud.value) return;
+      const n = ++seq;
+      loading.value = true; error.value = '';
+      try {
+        const d = await pageGet('/api/cdn', { force: force === true, fresh: d => { if (n === seq) data.value = d; } });
+        if (n === seq) data.value = d;
+      } catch (e) { if (n === seq) error.value = e.message; }
+      finally { if (n === seq) loading.value = false; }
+    }
+    watch(() => props.active, v => { if (v) load(); }, { immediate: true });
+    watch(() => [props.configured, props.aliyun], () => { data.value = null; if (props.active) load(); });
+
+    const domains = computed(() => {
+      const q = search.value.trim().toLowerCase();
+      return ((data.value && data.value.domains) || []).filter(d => !q || d.domain.includes(q) || (d.cname || '').includes(q) || d.origins.join(' ').includes(q));
+    });
+    const both = computed(() => props.configured && props.aliyun);
+    const certsFor = d => ((data.value && data.value.certs) || []).filter(c => certCovers(c.names, d.domain));
+    const expiresText = t => t ? String(t).slice(0, 10) : '';
+
+    async function propose(body) {
+      planning.value = true; formError.value = '';
+      try {
+        plan.value = await api('POST', '/api/cdn/plan', body);
+        cache.open = false; https.open = false;
+      } catch (e) { formError.value = e.message; if (!cache.open && !https.open) notify(e.message, 'error'); }
+      finally { planning.value = false; }
+    }
+    function openCache(d, op) {
+      Object.assign(cache, { open: true, item: d, op, dir: false, text: '' });
+      formError.value = '';
+    }
+    function submitCache() {
+      const d = cache.item;
+      const targets = cache.text.split(/[\n,，\s]+/).map(x => x.trim()).filter(Boolean);
+      propose({ provider: d.provider, domain: d.domain, op: cache.op, dir: cache.dir, targets });
+    }
+    function openHTTPS(d) {
+      const certs = certsFor(d);
+      Object.assign(https, { open: true, item: d, choice: d.certId && certs.some(c => c.id === d.certId) ? d.certId : certs.length ? certs[0].id : 'new' });
+      formError.value = '';
+    }
+    function submitHTTPS() {
+      const d = https.item;
+      propose({ provider: d.provider, domain: d.domain, op: 'https', cert: https.choice === 'off' ? '' : https.choice });
+    }
+    const toggle = d => propose({ provider: d.provider, domain: d.domain, op: d.status === 'online' ? 'off' : 'on' });
+    function ask(d) {
+      emit('ask', `帮我看看${CLOUD_NAMES[d.provider]} CDN 加速域名 ${d.domain} 的状况：解析是不是指向了 CDN、源站和 HTTPS 配置对不对，有没有需要处理的？`);
+    }
+    function planDone() { load(true); }
+    function closePlan() { plan.value = null; load(); }
+    return { data, loading, error, plan, planning, formError, search, cache, https, anyCloud, domains, both, certsFor, expiresText,
+      load, openCache, submitCache, openHTTPS, submitHTTPS, toggle, ask, planDone, closePlan, cdnStatus, CDN_TYPE, CDN_AREA, CLOUD_NAMES };
+  },
+  template: `
+  <div class="cdn-page">
+    <div class="group" v-if="!anyCloud">
+      <div class="row"><ui-icon name="layers" class="lg" style="color: var(--accent)"></ui-icon>
+        <div class="grow">还没有配置云账号的密钥<span class="small secondary block">在「设置」里填写腾讯云或阿里云的密钥，就能在这里管理 CDN 加速域名。</span></div>
+        <button class="primary" @click="$emit('settings')">去设置</button></div>
+    </div>
+    <template v-else>
+      <div class="page-head"><p>{{ both ? '腾讯云和阿里云' : aliyun ? '阿里云' : '腾讯云' }}的 CDN 加速域名。改了网站的图片、脚本等静态文件，访客还看到旧的时刷新缓存；上线大文件前预热。启用、停用和 HTTPS 的修改都会先生成清单，确认后才执行。EdgeOne 的站点在「EdgeOne」页。</p></div>
+      <div class="stat-bar">
+        <span class="small tertiary" v-if="data">{{ data.domains.length }} 个域名 · <fresh-note :data="data"></fresh-note></span>
+        <span class="grow"></span>
+        <input class="cdn-search" type="search" v-model="search" placeholder="搜索域名或源站" aria-label="搜索域名或源站" autocomplete="off" spellcheck="false" @keydown.esc="search = ''" v-if="data && data.domains.length > 5">
+        <button class="plain" @click="load(true)" :disabled="loading"><ui-icon name="refresh"></ui-icon>刷新</button>
+      </div>
+      <div class="notice" v-if="error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ error }}<button class="plain" @click="load(true)">重试</button></div>
+      <div class="notice" v-for="e in (data && data.errors) || []" :key="e"><ui-icon name="warn" class="st-warn"></ui-icon>{{ e }}</div>
+      <div class="notice" v-if="loading && !data"><span class="spinner"></span>正在读取 CDN 加速域名……</div>
+      <div class="group" v-if="data && !data.domains.length"><div class="row secondary">账号里还没有 CDN 加速域名。新增加速域名要在云控制台完成（涉及计费和备案）。</div></div>
+      <div class="group" v-if="domains.length">
+        <div class="table-wrap">
+          <table class="table cdn-table">
+            <thead><tr><th>加速域名</th><th>状态</th><th>CNAME</th><th>源站</th><th>HTTPS</th><th><span class="sr-only">操作</span></th></tr></thead>
+            <tbody>
+              <tr v-for="d in domains" :key="d.provider + d.domain">
+                <td><div class="site-name">{{ d.domain }}</div><div class="small tertiary"><template v-if="both">{{ CLOUD_NAMES[d.provider] }} · </template>{{ CDN_TYPE[d.type] || d.type }}<template v-if="CDN_AREA[d.area]"> · {{ CDN_AREA[d.area] }}</template></div></td>
+                <td class="nowrap"><span class="sdot" :class="cdnStatus(d.status)[0]"></span>{{ cdnStatus(d.status)[1] }}<div class="small st-crit-text" v-if="d.disabled">被云平台关闭（{{ d.disabled }}）</div></td>
+                <td class="mono small cdn-cname" data-label="CNAME">{{ d.cname || '—' }}</td>
+                <td class="small" data-label="源站">{{ d.origins.join('、') || '—' }}</td>
+                <td class="nowrap" data-label="HTTPS"><template v-if="d.https"><span class="sdot good"></span>已开启<div class="small tertiary" v-if="d.certExpires">证书 {{ expiresText(d.certExpires) }} 到期</div></template>
+                  <span class="tertiary" v-else>未开启</span></td>
+                <td class="site-ops nowrap">
+                  <button class="link small" @click="openCache(d, 'purge')" :disabled="planning || d.status !== 'online'">刷新缓存</button>
+                  <button class="link small" @click="openCache(d, 'prefetch')" :disabled="planning || d.status !== 'online'">预热</button>
+                  <button class="link small" v-if="d.provider === 'tencent'" @click="openHTTPS(d)" :disabled="planning">HTTPS</button>
+                  <button class="link small" :class="{destructive: d.status === 'online'}" v-if="d.status === 'online' || d.status === 'offline'" @click="toggle(d)" :disabled="planning">{{ d.status === 'online' ? '停用' : '启用' }}</button>
+                  <button class="link small" @click="ask(d)"><ui-icon name="sparkles"></ui-icon></button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </template>
+
+    <!-- Refreshing or prefetching -->
+    <div class="sheet-mask" v-if="cache.open" @click.self="cache.open = false">
+      <div class="sheet" role="dialog" :aria-label="cache.op === 'purge' ? '刷新缓存' : '预热'">
+        <h2>{{ cache.op === 'purge' ? '刷新缓存' : '预热' }}：{{ cache.item.domain }}</h2>
+        <p v-if="cache.op === 'purge'">节点丢掉旧的缓存，下次访问时从源站取新的。不中断访问。</p>
+        <p v-else>提前把文件缓存到节点，第一批访客就不用等回源。会从源站拉一次，产生回源流量。</p>
+        <div class="group">
+          <div class="row form" v-if="cache.op === 'purge'"><span class="k">刷新什么</span><span class="v"><span class="segmented">
+            <button :class="{on: !cache.dir}" @click="cache.dir = false">指定网址</button><button :class="{on: cache.dir}" @click="cache.dir = true">整个目录</button></span></span></div>
+          <div class="row stack"><textarea v-model="cache.text" rows="5" :placeholder="cache.dir ? '每行一个目录，如 /images/ 或 https://' + cache.item.domain + '/static/' : '每行一个，如 /app.js 或 https://' + cache.item.domain + '/index.html'" aria-label="网址"></textarea>
+            <span class="small tertiary">可以只写路径（/ 开头），会自动加上 https://{{ cache.item.domain }}</span></div>
+        </div>
+        <div class="notice" v-if="formError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ formError }}</div>
+        <div class="sheet-actions"><button @click="cache.open = false">取消</button>
+          <button class="primary" @click="submitCache" :disabled="planning || !cache.text.trim()">{{ planning ? '正在生成……' : '生成清单' }}</button></div>
+      </div>
+    </div>
+
+    <!-- HTTPS (Tencent) -->
+    <div class="sheet-mask" v-if="https.open" @click.self="https.open = false">
+      <div class="sheet" role="dialog" aria-label="HTTPS">
+        <h2>HTTPS：{{ https.item.domain }}</h2>
+        <p>选一张包含这个域名的证书（来自腾讯云 SSL 证书），或者申请一张免费证书。腾讯云 CDN 的 HTTPS 请求按量计费。</p>
+        <div class="group">
+          <label class="row check" v-for="c in certsFor(https.item)" :key="c.id"><input type="radio" v-model="https.choice" :value="c.id">
+            <span class="grow">{{ c.names.join('、') }}<span class="small tertiary block">{{ c.id }} · {{ expiresText(c.expires) }} 到期<template v-if="c.id === https.item.certId"> · 正在用</template></span></span></label>
+          <label class="row check"><input type="radio" v-model="https.choice" value="new">
+            <span class="grow">申请免费证书<span class="small tertiary block">域名的解析要在这个腾讯云账号的 DNSPod 里；一般几分钟签发，有效期 3 个月，到期前要重新申请</span></span></label>
+          <label class="row check" v-if="https.item.https"><input type="radio" v-model="https.choice" value="off">
+            <span class="grow">关闭 HTTPS<span class="small tertiary block">https:// 会打不开</span></span></label>
+        </div>
+        <div class="notice" v-if="formError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ formError }}</div>
+        <div class="sheet-actions"><button @click="https.open = false">取消</button>
+          <button class="primary" @click="submitHTTPS" :disabled="planning || (https.choice === https.item.certId && https.item.https)">{{ planning ? '正在生成……' : '生成清单' }}</button></div>
+      </div>
+    </div>
+
+    <!-- The checklist to confirm -->
+    <div class="sheet-mask" v-if="plan" @click.self="closePlan">
+      <div class="sheet plan-sheet" role="dialog" aria-label="确认清单">
+        <h2>{{ plan.title }}</h2>
+        <p>勾选后点「执行」，确认后才会生效；能撤销的执行后可以撤销。</p>
+        <plan-card :plan="plan" :server-name="CLOUD_NAMES[(https.item || cache.item || {}).provider] || 'CDN'" @done="planDone"></plan-card>
+        <div class="sheet-actions"><button @click="closePlan">关闭</button></div>
+      </div>
+    </div>
+  </div>`,
+};
+
+
 // 监控: every website opened once a minute, every server sampled every two,
 // and what went wrong in the last week. Alerts go to 待处理 and the webhook.
 const INCIDENT_KIND = { site: '网站打不开', server: '服务器连不上', disk: '磁盘快满', mem: '内存快用完', cpu: 'CPU 过高' };
 const MonitorPage = {
-  props: { active: Boolean },
+  // cloud: a Tencent Cloud or 阿里云 key is set, so their alarms show too.
+  props: { active: Boolean, cloud: Boolean },
   emits: ['server', 'ask', 'settings'],
   setup(props, { emit }) {
     const v = ref(null), loading = ref(false), error = ref(''), checking = ref(false);
+    // What the clouds' own monitoring (云监控) raised in the last week.
+    const alarms = ref(null), aLoading = ref(false), aError = ref(''), allAlarms = ref(false);
+    let aSeq = 0;
+    async function loadAlarms(force) {
+      if (!props.cloud) return;
+      const n = ++aSeq;
+      aLoading.value = true; aError.value = '';
+      try {
+        const d = await pageGet('/api/cloud/alarms', { force: force === true, fresh: d => { if (n === aSeq) alarms.value = d; } });
+        if (n === aSeq) alarms.value = d;
+      } catch (e) { if (n === aSeq) aError.value = e.message; }
+      finally { if (n === aSeq) aLoading.value = false; }
+    }
+    const alarmList = computed(() => {
+      const list = (alarms.value && alarms.value.alarms) || [];
+      return allAlarms.value ? list : list.filter(x => x.active).concat(list.filter(x => !x.active).slice(0, 5));
+    });
+    const alarmActive = computed(() => ((alarms.value && alarms.value.alarms) || []).filter(x => x.active).length);
+    function askAlarm(x) {
+      emit('ask', `${CLOUD_NAMES[x.provider]}云监控告警：${x.object}，${x.what}（${x.active ? '还没恢复' : '已恢复'}）。帮我查一下原因，需要处理的话给我一份清单。`);
+    }
     const hist = reactive({ open: false, site: null, hours: 24, points: [], loading: false });
     const form = reactive({ open: false, saving: false, error: '' });
     let timer = null;
@@ -3312,8 +3551,9 @@ const MonitorPage = {
     }
     watch(() => props.active, on => {
       clearInterval(timer);
-      if (on) { load(); timer = setInterval(load, 60000); }
+      if (on) { load(); loadAlarms(); timer = setInterval(load, 60000); }
     }, { immediate: true });
+    watch(() => props.cloud, on => { alarms.value = null; if (on && props.active) loadAlarms(); });
     onUnmounted(() => clearInterval(timer));
 
     const sites = computed(() => (v.value && v.value.sites) || []);
@@ -3377,7 +3617,8 @@ const MonitorPage = {
         .then(() => { notify('不再监控 ' + s.name); return api('POST', '/api/monitor/check'); }).then(r => { v.value = r; }).catch(e => notify(e.message, 'error'));
     }
     return { v, loading, error, checking, hist, form, sites, down, servers, incidents, bars, uptimeText, uptimeLevel, lastedText, when, rate,
-      checkNow, load, openHistory, histMain, histMore, histFails, histChecks, ask, openSettings, saveSettings, skipSite, INCIDENT_KIND, fmtBytes };
+      checkNow, load, openHistory, histMain, histMore, histFails, histChecks, ask, openSettings, saveSettings, skipSite, INCIDENT_KIND, fmtBytes,
+      alarms, aLoading, aError, allAlarms, loadAlarms, alarmList, alarmActive, askAlarm, CLOUD_NAMES };
   },
   template: `
   <div class="monitor-page">
@@ -3454,6 +3695,28 @@ const MonitorPage = {
             <div :class="x.endedAt ? 'tertiary' : 'st-crit-text'">{{ x.endedAt ? '持续 ' + lastedText(x) : '还没恢复 · ' + lastedText(x) }}</div></div>
         </div>
       </div>
+    </template>
+
+    <!-- The clouds' own monitoring -->
+    <template v-if="cloud">
+      <div class="group-title group-title-row">云监控告警<span class="tertiary small">腾讯云、阿里云云监控最近 7 天</span><fresh-note :data="alarms"></fresh-note><span class="grow"></span>
+        <span class="spinner inline" v-if="aLoading"></span>
+        <button class="plain icon-only" @click="loadAlarms(true)" :disabled="aLoading" title="刷新" aria-label="刷新云监控告警"><ui-icon name="refresh"></ui-icon></button></div>
+      <div class="notice" v-if="aError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ aError }}</div>
+      <div class="notice" v-for="e in (alarms && alarms.errors) || []" :key="e"><ui-icon name="warn" class="st-warn"></ui-icon>{{ e }}</div>
+      <div class="group" v-if="alarms">
+        <div class="row secondary" v-if="!alarms.alarms.length">最近 7 天云监控没有告警。没有在云控制台配置告警策略的话这里也是空的。</div>
+        <div class="row" v-for="x in alarmList" :key="x.key">
+          <span class="sdot" :class="x.active && x.level !== 'info' ? x.level : 'off'"></span>
+          <div class="grow"><div>{{ x.object }}<span class="small secondary"> · {{ x.what }}</span></div>
+            <div class="small tertiary">{{ CLOUD_NAMES[x.provider] }}<template v-if="x.policy"> · {{ x.policy }}</template></div></div>
+          <div class="small nowrap" style="text-align: right"><div>{{ when(x.first) }}</div>
+            <div :class="x.active && x.level !== 'info' ? 'st-' + x.level + '-text' : 'tertiary'">{{ x.active ? '还没恢复' : '已恢复' }}</div></div>
+          <button class="plain icon-only" @click="askAlarm(x)" title="让 AI 查原因" aria-label="让 AI 查原因"><ui-icon name="sparkles"></ui-icon></button>
+        </div>
+      </div>
+      <div class="acct-more" v-if="alarms && alarms.alarms.length > alarmList.length || allAlarms">
+        <button class="link small" @click="allAlarms = !allAlarms">{{ allAlarms ? '只看没恢复的和最近 5 条' : '查看全部 ' + alarms.alarms.length + ' 条' }}</button></div>
     </template>
 
     <!-- A website's history -->
@@ -5180,7 +5443,7 @@ const StoragePage = {
   </div>`,
 };
 
-const EO_SECTIONS = [{ id: 'overview', text: '概览' }, { id: 'visitors', text: '访客' }, { id: 'content', text: '内容' }];
+const EO_SECTIONS = [{ id: 'overview', text: '概览' }, { id: 'visitors', text: '访客' }, { id: 'content', text: '内容' }, { id: 'protect', text: '防护' }];
 const EO_SERIES = {
   requests: { text: '请求', key: 'series', label: '次请求', format: fmtCount },
   flux: { text: '流量', key: 'flux', label: '流量', format: fmtBytes },
@@ -5190,6 +5453,154 @@ const EO_SERIES = {
 
 // EdgeOne 实时: EdgeOne's own analytics (a few minutes behind) for a site
 // or one of its domains, in the same sections as 访问分析.
+// EdgeOne › 防护: a site's rate limits, CC protection and acceleration
+// domains. Every change is a checklist (the capabilities the AI proposes).
+const EO_ACTIONS = { Deny: '拦截', JSChallenge: 'JavaScript 挑战', ManagedChallenge: '托管挑战', Monitor: '只记录', Allow: '放行' };
+const EO_SENS = { Loose: '宽松', Moderate: '适中', Strict: '严格' };
+const EO_PERIODS = ['10s', '30s', '1m', '5m', '10m', '1h'];
+const EO_DOMAIN_STATE = { online: ['good', '已启用'], offline: ['off', '已停用'], process: ['warn', '部署中'], init: ['warn', '未生效'] };
+const EoProtect = {
+  props: { domain: String, active: Boolean },
+  emits: ['ask', 'security'],
+  setup(props, { emit }) {
+    const v = ref(null), loading = ref(false), error = ref('');
+    const plan = ref(null), planning = ref(false), formError = ref('');
+    const rl = reactive({ open: false, host: '', path: '', threshold: 60, period: '1m', action: 'challenge', duration: '10m' });
+    const cc = reactive({ open: false, sensitivity: 'Moderate', action: 'challenge' });
+    let seq = 0;
+    async function load(force) {
+      if (!props.domain) return;
+      const n = ++seq;
+      loading.value = true; error.value = '';
+      const url = '/api/eo/protection?domain=' + encodeURIComponent(props.domain);
+      try {
+        const d = await pageGet(url, { force: force === true, fresh: d => { if (n === seq) v.value = d; } });
+        if (n === seq) v.value = d;
+      } catch (e) { if (n === seq) error.value = e.message; }
+      finally { if (n === seq) loading.value = false; }
+    }
+    watch(() => [props.domain, props.active], () => { if (props.active) load(); }, { immediate: true });
+    async function propose(body) {
+      planning.value = true; formError.value = '';
+      try {
+        plan.value = await api('POST', '/api/eo/protection/plan', { domain: v.value.zone, ...body });
+        rl.open = false; cc.open = false;
+      } catch (e) { formError.value = e.message; if (!rl.open && !cc.open) notify(e.message, 'error'); }
+      finally { planning.value = false; }
+    }
+    function openRL() { Object.assign(rl, { open: true, host: '', path: '', threshold: 60, period: '1m', action: 'challenge', duration: '10m' }); formError.value = ''; }
+    const submitRL = () => propose({ op: 'ratelimit_set', host: rl.host, path: rl.path.trim(), threshold: Number(rl.threshold), period: rl.period, action: rl.action, duration: rl.duration });
+    const removeRule = r => propose({ op: 'ratelimit_remove', name: r.name });
+    function openCC() { Object.assign(cc, { open: true, sensitivity: 'Moderate', action: 'challenge' }); formError.value = ''; }
+    const submitCC = () => propose({ op: 'cc', enabled: true, sensitivity: cc.sensitivity, action: cc.action });
+    const ccOff = () => propose({ op: 'cc', enabled: false });
+    const toggleDomain = d => propose({ op: d.status === 'online' ? 'domain_off' : 'domain_on', name: d.name });
+    const scope = r => r.host || r.path ? (r.host || '整个站点') + (r.path ? ' · 路径含 ' + r.path : '') : r.condition.length > 80 ? r.condition.slice(0, 80) + '…' : r.condition;
+    function ask() {
+      emit('ask', `帮我看看 EdgeOne 站点 ${v.value.zone} 的防护：限速规则、CC 防护和封禁够不够，结合最近的访问数据看有没有被刷或被攻击，需要的话给我一份清单。`);
+    }
+    function closePlan() { plan.value = null; load(); }
+    return { v, loading, error, plan, planning, formError, rl, cc, load, openRL, submitRL, removeRule, openCC, submitCC, ccOff, toggleDomain, scope, ask, closePlan,
+      EO_ACTIONS, EO_SENS, EO_PERIODS, EO_DOMAIN_STATE };
+  },
+  template: `
+  <div class="eo-protect">
+    <div class="notice" v-if="error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ error }}<button class="plain" @click="load(true)">重试</button></div>
+    <div class="notice" v-if="loading && !v"><span class="spinner"></span>正在读取站点的防护设置……</div>
+    <template v-if="v">
+      <div class="stat-bar">
+        <span class="small tertiary">站点 {{ v.zone }} 的站点级策略 · <fresh-note :data="v"></fresh-note></span>
+        <span class="grow"></span>
+        <button class="plain icon-only" @click="load(true)" :disabled="loading" title="刷新" aria-label="刷新防护设置"><ui-icon name="refresh"></ui-icon></button>
+        <button class="primary" @click="ask"><ui-icon name="sparkles"></ui-icon>让 AI 检查</button>
+      </div>
+      <div class="notice" v-if="v.policyError"><ui-icon name="warn" class="st-warn"></ui-icon>读取安全策略失败：{{ v.policyError }}</div>
+
+      <div class="group-title group-title-row">速率限制<span class="tertiary small">同一个 IP 请求太频繁就挑战或拦截</span><span class="grow"></span>
+        <button class="plain small" @click="openRL" :disabled="planning || !!v.policyError"><ui-icon name="plus"></ui-icon>添加规则</button></div>
+      <div class="group">
+        <div class="row secondary" v-if="!v.rules.length">还没有速率限制规则。登录页、搜索、接口被刷时加一条，例如同一个 IP 每分钟超过 60 次就挑战。</div>
+        <div class="row" v-for="r in v.rules" :key="r.name">
+          <span class="sdot" :class="r.enabled ? 'good' : 'off'"></span>
+          <div class="grow"><div>{{ r.name }}</div>
+            <div class="small tertiary">{{ scope(r) }} · {{ r.period }} 内超过 {{ r.threshold }} 次 → {{ EO_ACTIONS[r.action] || r.action }}<template v-if="r.duration">（{{ r.duration }}）</template><template v-if="!r.enabled"> · 未开启</template></div></div>
+          <button class="link small destructive" @click="removeRule(r)" :disabled="planning">删除</button>
+        </div>
+      </div>
+
+      <div class="group-title group-title-row">CC 防护<span class="tertiary small">自适应频控：按平时的访问基线自动识别攻击</span></div>
+      <div class="group" v-if="!v.policyError">
+        <div class="row">
+          <span class="sdot" :class="v.cc.enabled ? 'good' : 'off'"></span>
+          <div class="grow">{{ v.cc.enabled ? '已开启' : '未开启' }}<span class="small tertiary" v-if="v.cc.enabled"> · 灵敏度{{ EO_SENS[v.cc.sensitivity] || v.cc.sensitivity }} · {{ EO_ACTIONS[v.cc.action] || v.cc.action }}</span></div>
+          <button class="small" v-if="!v.cc.enabled" @click="openCC" :disabled="planning">开启</button>
+          <template v-else><button class="link small" @click="openCC" :disabled="planning">修改</button><button class="link small destructive" @click="ccOff" :disabled="planning">关闭</button></template>
+        </div>
+        <div class="row small secondary" v-if="v.blocked">已经封禁 {{ v.blocked }} 个 IP，在「安全」页查看和解封。</div>
+      </div>
+
+      <div class="group-title">加速域名</div>
+      <div class="notice" v-if="v.domainError"><ui-icon name="warn" class="st-warn"></ui-icon>{{ v.domainError }}</div>
+      <div class="group">
+        <div class="row secondary" v-if="!v.domains.length && !v.domainError">这个站点还没有加速域名。</div>
+        <div class="row" v-for="d in v.domains" :key="d.name">
+          <span class="sdot" :class="(EO_DOMAIN_STATE[d.status] || ['off'])[0]"></span>
+          <div class="grow"><div>{{ d.name }}</div><div class="small tertiary">{{ (EO_DOMAIN_STATE[d.status] || ['', d.status])[1] }} · 回源 {{ d.origin || '—' }} · {{ d.https ? 'HTTPS 已开启' : '没有 HTTPS' }}</div></div>
+          <button class="link small" :class="{ destructive: d.status === 'online' }" v-if="d.status === 'online' || d.status === 'offline'" @click="toggleDomain(d)" :disabled="planning">{{ d.status === 'online' ? '停用' : '启用' }}</button>
+        </div>
+      </div>
+    </template>
+
+    <!-- A rate limiting rule -->
+    <div class="sheet-mask" v-if="rl.open" @click.self="rl.open = false">
+      <div class="sheet" role="dialog" aria-label="添加速率限制">
+        <h2>添加速率限制</h2>
+        <p>按访客 IP 统计请求次数，超过阈值就处理。阈值要比正常访客高得多；先用「挑战」，真人浏览器能自动通过。</p>
+        <div class="group">
+          <div class="row form"><span class="k">统计哪里</span><span class="v"><select v-model="rl.host" aria-label="统计哪个域名"><option value="">整个站点 {{ v.zone }}</option><option v-for="d in v.domains" :key="d.name" :value="d.name">只统计 {{ d.name }}</option></select></span></div>
+          <div class="row form"><span class="k">路径包含</span><span class="v"><input v-model="rl.path" placeholder="可以不填，如 /wp-login.php 或 /api/" aria-label="路径" autocomplete="off" spellcheck="false"></span></div>
+          <div class="row form"><span class="k">阈值</span><span class="v eo-rl-threshold"><select v-model="rl.period" aria-label="统计周期"><option v-for="p in EO_PERIODS" :key="p" :value="p">{{ p }}</option></select>
+            <span class="secondary">内超过</span><input type="number" min="1" max="100000" v-model="rl.threshold" aria-label="次数"><span class="secondary">次</span></span></div>
+          <div class="row form"><span class="k">超过后</span><span class="v"><span class="segmented">
+            <button :class="{on: rl.action === 'challenge'}" @click="rl.action = 'challenge'">挑战</button><button :class="{on: rl.action === 'deny'}" @click="rl.action = 'deny'">拦截</button><button :class="{on: rl.action === 'monitor'}" @click="rl.action = 'monitor'">只记录</button></span></span></div>
+          <div class="row form"><span class="k">持续</span><span class="v"><span class="segmented">
+            <button v-for="d in ['10m', '1h', '1d']" :key="d" :class="{on: rl.duration === d}" @click="rl.duration = d">{{ {'10m': '10 分钟', '1h': '1 小时', '1d': '1 天'}[d] }}</button></span></span></div>
+        </div>
+        <div class="notice" v-if="formError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ formError }}</div>
+        <div class="sheet-actions"><button @click="rl.open = false">取消</button>
+          <button class="primary" @click="submitRL" :disabled="planning || !(Number(rl.threshold) > 0)">{{ planning ? '正在生成……' : '生成清单' }}</button></div>
+      </div>
+    </div>
+
+    <!-- CC protection -->
+    <div class="sheet-mask" v-if="cc.open" @click.self="cc.open = false">
+      <div class="sheet" role="dialog" aria-label="CC 防护">
+        <h2>CC 防护</h2>
+        <p>EdgeOne 学习网站平时的访问量，自动识别异常的高频访问并处理。个人版等套餐可能不支持。</p>
+        <div class="group">
+          <div class="row form"><span class="k">灵敏度</span><span class="v"><span class="segmented">
+            <button v-for="(t, k) in EO_SENS" :key="k" :class="{on: cc.sensitivity === k}" @click="cc.sensitivity = k">{{ t }}</button></span></span></div>
+          <div class="row form"><span class="k">识别到后</span><span class="v"><span class="segmented">
+            <button :class="{on: cc.action === 'challenge'}" @click="cc.action = 'challenge'">挑战</button><button :class="{on: cc.action === 'deny'}" @click="cc.action = 'deny'">拦截</button><button :class="{on: cc.action === 'monitor'}" @click="cc.action = 'monitor'">只记录</button></span></span></div>
+        </div>
+        <div class="notice" v-if="formError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ formError }}</div>
+        <div class="sheet-actions"><button @click="cc.open = false">取消</button>
+          <button class="primary" @click="submitCC" :disabled="planning">{{ planning ? '正在生成……' : '生成清单' }}</button></div>
+      </div>
+    </div>
+
+    <!-- The checklist to confirm -->
+    <div class="sheet-mask" v-if="plan" @click.self="closePlan">
+      <div class="sheet plan-sheet" role="dialog" aria-label="确认清单">
+        <h2>{{ plan.title }}</h2>
+        <p>勾选后点「执行」，确认后才会生效；执行后可以撤销。</p>
+        <plan-card :plan="plan" server-name="EdgeOne" @done="load(true)"></plan-card>
+        <div class="sheet-actions"><button @click="closePlan">关闭</button></div>
+      </div>
+    </div>
+  </div>`,
+};
+
 const EoStats = {
   props: { configured: Boolean, active: Boolean },
   emits: ['ask', 'settings', 'origin'],
@@ -5377,9 +5788,11 @@ const EoStats = {
 
       <div class="notice" v-if="error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ error }}</div>
       <div class="group" v-if="!sites.length && !error && !loading"><div class="row secondary">EdgeOne 里还没有站点。</div></div>
-      <div class="notice" v-if="!data && loading"><span class="spinner"></span>正在读取 EdgeOne 数据……</div>
+      <div class="notice" v-if="!data && loading && section !== 'protect'"><span class="spinner"></span>正在读取 EdgeOne 数据……</div>
 
-      <template v-if="data">
+      <eo-protect v-if="section === 'protect' && domain" :domain="domain" :active="active" @ask="$emit('ask', $event)"></eo-protect>
+
+      <template v-if="data && section !== 'protect'">
         <template v-if="section === 'overview'">
           <div class="alerts" v-if="alerts.length">
             <div class="alert" v-for="(a, i) in alerts" :key="i" :class="'al-' + a.level">
@@ -5499,7 +5912,7 @@ const NoticePage = {
     const data = ref(null);
     const error = ref('');
     const busy = ref('');
-    const form = reactive({ daily: true, dailyAt: '09:00', alertRisk: true, alertLeak: true, alertCert: true, alertRenew: true, alertBlock: true });
+    const form = reactive({ daily: true, dailyAt: '09:00', alertRisk: true, alertLeak: true, alertCert: true, alertRenew: true, alertCloud: true, alertBlock: true });
     const hook = reactive({ url: '', secret: '', editing: false });
     // The form follows what is saved, unless it has changes not saved yet
     // (coming back to the page reloads the list, not your edits).
@@ -5509,7 +5922,7 @@ const NoticePage = {
       data.value = v;
       if (force || !saved || formNow() === saved) {
         Object.assign(form, { daily: v.settings.daily, dailyAt: v.settings.dailyAt, alertRisk: v.settings.alertRisk, alertLeak: v.settings.alertLeak,
-          alertCert: v.settings.alertCert, alertRenew: v.settings.alertRenew, alertBlock: v.settings.alertBlock });
+          alertCert: v.settings.alertCert, alertRenew: v.settings.alertRenew, alertCloud: v.settings.alertCloud, alertBlock: v.settings.alertBlock });
         saved = formNow();
       }
       emit('unread', v.unread);
@@ -5582,6 +5995,7 @@ const NoticePage = {
         <div class="row"><label class="check"><input type="checkbox" v-model="form.alertLeak"> 敏感文件（如 .env、数据库备份）被下载</label></div>
         <div class="row"><label class="check"><input type="checkbox" v-model="form.alertCert"> 证书快到期、已过期或申请失败</label></div>
         <div class="row"><label class="check"><input type="checkbox" v-model="form.alertRenew"> 云服务器或域名快到期又不会自动续费、账户欠费</label></div>
+        <div class="row"><label class="check"><input type="checkbox" v-model="form.alertCloud"> 腾讯云、阿里云云监控发出新的告警</label></div>
         <div class="row"><label class="check"><input type="checkbox" v-model="form.alertBlock"> 自动封禁和解封了 IP</label></div>
         <div class="row"><div class="grow small tertiary">提醒随统计每 20 分钟检查一次，同一个问题一周内只提醒一次（高风险 IP 和欠费一天）。日报在设定时间后的第一次检查时生成；Miao Panel 没开着就等下次打开。</div>
           <button @click="reportNow" :disabled="!!busy"><span class="spinner inline" v-if="busy === 'report'"></span>现在生成一份日报</button>
@@ -7717,6 +8131,8 @@ app.component('server-ring', ServerRing);
 app.component('server-overview', ServerOverview);
 app.component('server-apps', ServerApps);
 app.component('cloud-page', CloudPage);
+app.component('cdn-page', CdnPage);
+app.component('eo-protect', EoProtect);
 app.component('monitor-page', MonitorPage);
 app.component('command-palette', CommandPalette);
 app.component('inbox-page', InboxPage);

@@ -195,9 +195,10 @@ func cloudMetrics(ctx context.Context, c *tencent.Client, s tencent.Server) ([]C
 type CloudRequest struct {
 	Instance string `json:"instance"`
 	Region   string `json:"region"`
-	Op       string `json:"op"` // start, stop, reboot, snapshot, firewall_open, firewall_close, renew_on, renew_off
-	// For a snapshot.
-	Name string `json:"name,omitempty"`
+	Op       string `json:"op"` // start, stop, reboot, snapshot, rollback, firewall_open, firewall_close, renew_on, renew_off
+	// For a snapshot, or the snapshot to roll back to.
+	Name     string `json:"name,omitempty"`
+	Snapshot string `json:"snapshot,omitempty"`
 	// For a firewall rule.
 	Port        string `json:"port,omitempty"`
 	Protocol    string `json:"protocol,omitempty"`
@@ -229,7 +230,36 @@ func (a *App) ProposeCloud(ctx context.Context, req CloudRequest) (PlanView, err
 	}
 	params := map[string]any{"instance": s.ID, "region": s.Region}
 	var capability, title, summary, reason string
+	var first []core.Step // steps before the change itself
 	switch req.Op {
+	case "rollback":
+		lctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		list, err := c.Snapshots(lctx, s.Region, s)
+		cancel()
+		if err != nil {
+			return PlanView{}, userErr("读取快照失败：%v", err)
+		}
+		var sn *tencent.Snapshot
+		for i := range list {
+			if list[i].ID == req.Snapshot {
+				sn = &list[i]
+			}
+		}
+		if sn == nil {
+			return PlanView{}, userErr("%s 没有快照 %s", name, req.Snapshot)
+		}
+		if sn.State != "NORMAL" {
+			return PlanView{}, userErr("快照 %s 还不能用（%s），等它完成再回滚", sn.ID, sn.State)
+		}
+		capability, title = "cloud.snapshot.rollback", "回滚到快照："+name
+		params["snapshot"] = sn.ID
+		summary = fmt.Sprintf("把 %s 的系统盘回滚到快照 %s", name, snapLabel(sn.Name, sn.ID))
+		if sn.Created != "" {
+			summary += "（" + snapTime(sn.Created) + " 创建）"
+		}
+		first = []core.Step{{Capability: "cloud.snapshot.create", Summary: "先给现在的系统盘做一个快照，回滚后想反悔可以再回滚到它",
+			Params: map[string]any{"instance": s.ID, "region": s.Region, "name": rollbackSnapName()}}}
+		reason = rollbackReason("腾讯云", s.Kind == tencent.CVM)
 	case "start":
 		capability, title = "cloud.server.start", "启动服务器："+name
 		summary = "启动腾讯云" + kindName[s.Kind] + " " + name
@@ -248,7 +278,7 @@ func (a *App) ProposeCloud(ctx context.Context, req CloudRequest) (PlanView, err
 			params["name"] = n
 		}
 		summary = "给 " + name + " 的系统盘创建快照"
-		reason = "快照是系统盘的整盘备份，大改之前做一个，出问题可以在腾讯云控制台回滚到这个时刻。不影响运行。"
+		reason = "快照是系统盘的整盘备份，大改之前做一个，出问题可以在这里一键回滚到这个时刻。不影响运行。"
 		if s.Kind == tencent.CVM {
 			reason += "云服务器的快照按容量收费。"
 		}
@@ -313,7 +343,8 @@ func (a *App) ProposeCloud(ctx context.Context, req CloudRequest) (PlanView, err
 		return PlanView{}, userErr("%v", err)
 	}
 	servers, _ := a.Store.ListServers()
-	p, _, err := a.proposePlan(ctx, "user", matchServer(s, servers), title, reason, []core.Step{{Capability: capability, Summary: summary, Params: params}})
+	steps := append(first, core.Step{Capability: capability, Summary: summary, Params: params})
+	p, _, err := a.proposePlan(ctx, "user", matchServer(s, servers), title, reason, steps)
 	if err != nil {
 		return PlanView{}, err
 	}

@@ -179,8 +179,9 @@ func (a *App) toolReminders(_ context.Context, raw json.RawMessage) (string, err
 	v := a.Notices()
 	var b strings.Builder
 	s := v.Settings
-	fmt.Fprintf(&b, "通知设置：日报 %s（%s）；提醒：高风险 IP %s、敏感文件被下载 %s、证书 %s、续费和余额 %s、自动封禁 %s；推送 %s\n",
-		kaiGuan(s.Daily), s.DailyAt, kaiGuan(s.AlertRisk), kaiGuan(s.AlertLeak), kaiGuan(s.AlertCert), kaiGuan(s.AlertRenew), kaiGuan(s.AlertBlock), orDash(s.WebhookKind))
+	fmt.Fprintf(&b, "通知设置：日报 %s（%s）；提醒：高风险 IP %s、敏感文件被下载 %s、证书 %s、续费和余额 %s、云监控告警 %s、自动封禁 %s；推送 %s\n",
+		kaiGuan(s.Daily), s.DailyAt, kaiGuan(s.AlertRisk), kaiGuan(s.AlertLeak), kaiGuan(s.AlertCert), kaiGuan(s.AlertRenew), kaiGuan(s.AlertCloud),
+		kaiGuan(s.AlertBlock), orDash(s.WebhookKind))
 	fmt.Fprintf(&b, "未读 %d 条。最近的通知（新的在前）：\n", v.Unread)
 	if len(v.Notices) == 0 {
 		b.WriteString("- 没有\n")

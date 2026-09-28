@@ -216,6 +216,8 @@ input[type=checkbox]:focus-visible, input[type=radio]:focus-visible { outline: 2
 .group-title { font-size: 13px; font-weight: 600; color: var(--text-2); margin: 0 4px 8px; }
 .group-title-row { display: flex; align-items: center; gap: 6px; }
 .group-title-row .fresh-note { font-weight: 400; }
+.group-title-row .grow { flex: 1; }
+.group > label.row.check { display: flex; }
 .group { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); margin-bottom: 26px; overflow: hidden; }
 .row { display: flex; align-items: center; gap: 12px; padding: 11px 16px; min-height: 44px; }
 .row + .row { border-top: 1px solid var(--sep); }
@@ -1350,3 +1352,27 @@ button.wb-site:hover:not(:disabled) { background: var(--hover); }
   .acct-due .row { flex-wrap: wrap; }
   .acct-due .row .acct-name { flex-basis: calc(100% - 24px); }
 }
+
+/* 云服务 › CDN */
+.cdn-search { width: 200px; }
+.cdn-table .cdn-cname { max-width: 260px; overflow-wrap: anywhere; }
+.cdn-table .site-ops { display: flex; gap: 12px; justify-content: flex-end; align-items: center; }
+@media (max-width: 720px) {
+  .cdn-search { width: auto; flex: 1; min-width: 0; }
+  /* Each domain a card: name and status, then CNAME, origin, HTTPS and the actions. */
+  .cdn-table thead { display: none; }
+  .cdn-table tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; padding: 12px 16px; border-top: 1px solid var(--sep); }
+  .cdn-table tr:first-child { border-top: 0; }
+  .cdn-table td { padding: 0; border: 0; white-space: normal; }
+  .cdn-table td:nth-child(2) { justify-self: end; text-align: right; }
+  .cdn-table td:nth-child(3), .cdn-table td:nth-child(4), .cdn-table td:nth-child(5), .cdn-table td:nth-child(6) { grid-column: 1 / -1; }
+  .cdn-table .cdn-cname { max-width: none; }
+  .cdn-table .site-ops { justify-content: flex-start; flex-wrap: wrap; padding-top: 4px; }
+  .cdn-table td[data-label]::before { content: attr(data-label); display: inline-block; min-width: 52px; margin-right: 8px;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; font-size: 12px; color: var(--text-3); }
+}
+
+/* EdgeOne › 防护 */
+.eo-rl-threshold { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.eo-rl-threshold select { width: auto; }
+.eo-rl-threshold input { width: 90px; }

@@ -54,6 +54,8 @@ const systemPrompt = `你是 Miao Panel 里的服务器运维助手。用户可�
 - CVM 的安全组里有「所有端口对所有人开放」的规则时，可以用 cloud.firewall.tighten 收紧：只保留 80/443 对所有人开放，SSH 和面板端口只允许 admin_cidr（用户自己的公网 IP/32，要先问用户）访问；
   group 填 tencent_servers 返回的安全组，ssh_port、panel_port 从服务器画像里读。会让其他端口上的服务对外不可用，summary 里要说明；
 - 重启、关机或其他大改动前，建议先加一步 cloud.snapshot.create；到期不足 15 天、流量包用量超过 80% 要主动提醒用户。
+- 系统盘回滚到快照：cloud.snapshot.rollback / aliyun.snapshot.rollback（snapshot 填详情里列出的快照 ID）。会关机几分钟，快照之后写入的数据全部丢失，不能撤销，
+  只在用户明确要回滚时使用；清单里先加一步 cloud.snapshot.create / aliyun.snapshot.create 给现在的系统盘做快照，想反悔可以再回滚到它。
 
 云账号的余额、续费和域名到期：用 cloud_account。
 - 包年包月的服务器快到期又没开自动续费时，可以用 cloud.renew.set（腾讯云）或 aliyun.renew.set（阿里云 ECS）开启自动续费（auto=on），开启后到期前自动从余额扣费续费一个月；
@@ -69,8 +71,15 @@ const systemPrompt = `你是 Miao Panel 里的服务器运维助手。用户可�
 阿里云云解析：aliyun_dns 看域名和记录。能执行 aliyun.dns.record.set（让一个名字解析到 IP 或域名，替换它默认线路的 A、AAAA、CNAME）、
 aliyun.dns.record.add / modify / delete / status（record_id 用 aliyun_dns 返回的 id，线路写中文名：默认、电信、联通、移动、教育网、境外）。
 EdgeOne 是腾讯云的，阿里云云解析里的域名要接 EdgeOne 得先把域名的 DNS 换到 DNSPod，或者在 EdgeOne 用 NS 接入。
-阿里云 CDN：aliyun_cdn 看加速域名；网站改了静态文件访客还看到旧的，用 aliyun.cdn.purge 刷新（url 指定网址，dir 整个目录），大文件发布前可以 aliyun.cdn.prefetch 预热。
+阿里云 CDN：aliyun_cdn 看加速域名；网站改了静态文件访客还看到旧的，用 aliyun.cdn.purge 刷新（url 指定网址，dir 整个目录），大文件发布前可以 aliyun.cdn.prefetch 预热，
+aliyun.cdn.status 启用或停用加速域名（可撤销）。
 
+腾讯云 CDN（不是 EdgeOne）：cdn_domains 看两家云的 CDN 加速域名。能执行 cdn.cache.purge（刷新，url 或 dir）、cdn.cache.prefetch（预热）、cdn.domain.status（启用或停用，可撤销）、
+cdn.https.set（用腾讯云 SSL 证书里已签发、包含这个域名的证书开启 HTTPS，cert=off 关闭，可撤销）。停用加速或关闭 HTTPS 前确认解析和访问方式，summary 里说明影响。
+腾讯云免费证书：ssl.cert.apply（一个名字，不能泛域名，域名解析要在这个账号的 DNSPod 里，自动验证，一般几分钟签发，有效期 3 个月不会自动续期）；
+要用在同名的腾讯云 CDN 上时加 use_cdn=yes，签发后自动开启 HTTPS。经过 EdgeOne 的网站用 eo.https.set、1Panel 网站用 cert.issue，它们会自动续签，更省事。
+
+云上的告警：cloud_alarms 看腾讯云和阿里云云监控最近 7 天的告警（没有配置告警策略的账号是空的），结合 monitor_status 和服务器检查找原因。
 Miao Panel 自己的记录：recent_changes 看最近做过的修改和结果（出问题时先看是不是刚改过什么），reminders 看通知页的日报和提醒，
 1Panel 服务器的数据库用 panel_databases 查。
 
@@ -282,6 +291,18 @@ func (a *App) tools() map[string]ai.Tool {
 				"以及需要注意的（快到期又不会自动续费、已过期、余额不足以自动续费）。用户问「钱够不够」「什么快到期了」「要不要续费」时用它。refresh=true 重新读取。",
 			Schema: obj(map[string]any{"refresh": map[string]any{"type": "boolean"}}),
 		}, Run: a.toolCloudAccount},
+		{Def: ai.ToolDef{
+			Name: "cdn_domains",
+			Description: "腾讯云 CDN 和阿里云 CDN 的加速域名（只读）：状态、CNAME、源站、加速区域、是否开了 HTTPS 和用的证书，以及腾讯云 SSL 证书里可以用的证书。" +
+				"refresh=true 重新读取。EdgeOne 的站点不在这里，用 tencent_eo。",
+			Schema: obj(map[string]any{"refresh": map[string]any{"type": "boolean"}}),
+		}, Run: a.toolCDN},
+		{Def: ai.ToolDef{
+			Name: "cloud_alarms",
+			Description: "腾讯云云监控和阿里云云监控最近 7 天发出的告警（只读）：哪台服务器或资源、什么条件（如 CPU 利用率 > 90%）、级别、是否已恢复、开始和最近的时间。" +
+				"和 monitor_status（Miao Panel 自己的监控）一起看，判断服务器出过什么问题。refresh=true 重新读取。",
+			Schema: obj(map[string]any{"refresh": map[string]any{"type": "boolean"}}),
+		}, Run: a.toolCloudAlarms},
 		{Def: ai.ToolDef{
 			Name:        "panel_databases",
 			Description: "列出 1Panel 服务器上的 MySQL / MariaDB 应用和其中的数据库（只读）：数据库名、用户、允许从哪里连接、创建时间、备注。新建用 mysql.db.create，删除用 mysql.db.delete，备份用 backup.create 加 database 参数。",

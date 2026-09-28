@@ -136,6 +136,10 @@ func (s *Server) routes() {
 	api("GET /api/aliyun/servers/{region}/{instance}", s.aliyunDetail)
 	api("POST /api/aliyun/servers/plan", s.aliyunPlan)
 	api("GET /api/cloud/account", s.cloudAccount)
+	api("GET /api/cdn", s.cdnDomains)
+	api("GET /api/cloud/alarms", s.cloudAlarms)
+	api("POST /api/cdn/plan", s.cdnPlan)
+	api("POST /api/certificates/free/plan", s.freeCertPlan)
 	api("POST /api/servers/{id}/security/plan", s.serverSecurityPlan)
 	api("GET /api/servers/{id}/databases", s.serverDatabases)
 	api("GET /api/update", s.updateStatus)
@@ -189,6 +193,8 @@ func (s *Server) routes() {
 	api("PUT /api/autoblock", s.saveAutoBlock)
 	api("POST /api/autoblock/run", s.runAutoBlock)
 	api("GET /api/eo/sites", s.eoSites)
+	api("GET /api/eo/protection", s.eoProtection)
+	api("POST /api/eo/protection/plan", s.eoProtectionPlan)
 	api("GET /api/eo/analytics", s.eoAnalytics)
 	api("POST /api/chat", s.chat)
 	api("POST /api/chat/stream", s.chatStream)
@@ -892,6 +898,47 @@ func (s *Server) aliyunDetail(w http.ResponseWriter, r *http.Request) (any, erro
 func (s *Server) cloudAccount(w http.ResponseWriter, r *http.Request) (any, error) {
 	v, m, err := s.app.CloudAccountPage(r.Context(), pageRead(r))
 	return pageAnswer(w, v, m, err)
+}
+
+func (s *Server) eoProtection(w http.ResponseWriter, r *http.Request) (any, error) {
+	v, m, err := s.app.EOProtectionPage(r.Context(), r.URL.Query().Get("domain"), pageRead(r))
+	return pageAnswer(w, v, m, err)
+}
+
+func (s *Server) eoProtectionPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req app.EOProtectRequest
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.ProposeEOProtect(r.Context(), req)
+}
+
+func (s *Server) cloudAlarms(w http.ResponseWriter, r *http.Request) (any, error) {
+	v, m, err := s.app.CloudAlarmsPage(r.Context(), pageRead(r))
+	return pageAnswer(w, v, m, err)
+}
+
+func (s *Server) cdnDomains(w http.ResponseWriter, r *http.Request) (any, error) {
+	v, m, err := s.app.CDNPage(r.Context(), pageRead(r))
+	return pageAnswer(w, v, m, err)
+}
+
+func (s *Server) cdnPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req app.CDNRequest
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.ProposeCDN(r.Context(), req)
+}
+
+func (s *Server) freeCertPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req struct {
+		Domain string `json:"domain"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.ProposeFreeCert(r.Context(), req.Domain)
 }
 
 func (s *Server) aliyunPlan(_ http.ResponseWriter, r *http.Request) (any, error) {

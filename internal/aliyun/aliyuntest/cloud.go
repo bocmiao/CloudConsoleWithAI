@@ -47,6 +47,8 @@ type Cloud struct {
 	Groups                  map[string][]GroupRule   // ECS security group rules by group ID
 	SWASRules               map[string][]SWASRule    // firewall rules by SWAS instance ID
 	Snapshots               []*Snap
+	Resets                  []string       // "instance snapshot" for each disk rolled back
+	AlertLogs               []aliyun.Alarm // CloudMonitor's alert log
 	// Metrics are monitoring samples by "instanceID metric", with the
 	// metric named as the product names it.
 	Metrics map[string][]Sample
@@ -70,6 +72,7 @@ type ECSInstance struct {
 	OS, ChargeType, ExpiredTime          string // ExpiredTime as ECS writes it: 2026-12-10T04:04Z
 	AutoRenew                            bool
 	pending                              string // status reached on the next look
+	resetting                            bool   // the system disk is being rolled back
 }
 
 // SWASInstance is a Simple Application Server held by the fake.
@@ -81,6 +84,7 @@ type SWASInstance struct {
 	ImageName, ImageVersion, ExpiredTime string
 	TrafficUsed, TrafficTotal            int64
 	pending                              string
+	resetting                            bool
 }
 
 // GroupRule is an ECS security group rule.
@@ -242,6 +246,7 @@ var specs = map[string]map[string]string{
 		"DescribeSnapshots":                "RegionId! DiskId InstanceId MaxResults NextToken SnapshotType SourceDiskType Status",
 		"CreateSnapshot":                   "DiskId! SnapshotName Description RetentionDays",
 		"ModifyInstanceAutoRenewAttribute": "RegionId! InstanceId! Duration AutoRenew RenewalStatus PeriodUnit",
+		"ResetDisk":                        "DiskId! SnapshotId! DryRun",
 	},
 	aliyun.ProductBSS: {
 		"QueryAccountBalance": "",
@@ -263,10 +268,13 @@ var specs = map[string]map[string]string{
 		"ListDisks":                    "RegionId! InstanceId DiskIds DiskType PageNumber PageSize",
 		"ListSnapshots":                "RegionId! InstanceId DiskId SnapshotIds SourceDiskType PageNumber PageSize",
 		"CreateSnapshot":               "RegionId! DiskId! SnapshotName! ClientToken",
+		"ResetDisk":                    "RegionId! DiskId! SnapshotId! ClientToken",
 		"DescribeMonitorData":          "RegionId! InstanceId! MetricName! Period! StartTime! EndTime! Length NextToken ClientToken",
 	},
 	aliyun.ProductCMS: {
 		"DescribeMetricList": "Namespace! MetricName! Period StartTime EndTime Dimensions NextToken Length Express",
+		"DescribeAlertLogList": "StartTime EndTime PageNumber PageSize SearchKey GroupId Namespace Product Level SendStatus ContactGroup RuleName " +
+			"MetricName LastMin GroupBy RuleId SourceType EventType",
 	},
 	aliyun.ProductDNS: {
 		"DescribeDomains":          "PageNumber PageSize KeyWord SearchMode Lang GroupId",
@@ -284,6 +292,8 @@ var specs = map[string]map[string]string{
 		"RefreshObjectCaches":  "ObjectPath! ObjectType Force",
 		"PushObjectCache":      "ObjectPath! Area L2Preload WithHeader",
 		"DescribeRefreshTasks": "TaskId ObjectPath PageNumber PageSize ObjectType DomainName Status StartTime EndTime",
+		"StartCdnDomain":       "DomainName!",
+		"StopCdnDomain":        "DomainName!",
 	},
 }
 

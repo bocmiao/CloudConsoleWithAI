@@ -173,6 +173,42 @@ func (f *Fake) serveMore(w http.ResponseWriter, service, action, region string, 
 		}
 		f.Snaps[id] = &tencent.Snapshot{ID: id, Name: str("SnapshotName") + "|" + owner, State: "CREATING", Percent: 40}
 		ok(w, map[string]any{"SnapshotId": id})
+	case "lighthouse ApplyInstanceSnapshot", "cbs ApplySnapshot":
+		// Lighthouse forces a running instance off; a CVM has to be
+		// stopped first.
+		var i *Instance
+		owner := str("InstanceId")
+		for _, x := range f.Instances {
+			if x.ID == owner || (owner == "" && x.DiskID == str("DiskId")) {
+				i = x
+			}
+		}
+		if i == nil || !here {
+			fail(w, "InvalidInstanceId.NotFound", "实例不存在。")
+			return true
+		}
+		if owner == "" {
+			owner = i.DiskID
+		}
+		sn := f.Snaps[str("SnapshotId")]
+		if sn == nil || !strings.HasSuffix(sn.Name, "|"+owner) {
+			fail(w, "InvalidSnapshotId.NotFound", "快照不存在。")
+			return true
+		}
+		if sn.State != "NORMAL" {
+			fail(w, "UnsupportedOperation.InvalidSnapshotState", "快照状态不支持该操作。")
+			return true
+		}
+		switch {
+		case service == "cbs" && i.State != "STOPPED":
+			fail(w, "InvalidInstance.NotSupported", "实例需要处于关机状态。")
+			return true
+		case service == "lighthouse" && i.State == "RUNNING":
+			i.State = "STOPPED"
+		}
+		sn.State = "ROLLBACKING"
+		f.Rollbacks = append(f.Rollbacks, i.ID+" "+sn.ID)
+		ok(w, nil)
 	case "lighthouse DescribeSnapshots", "cbs DescribeSnapshots":
 		var out []map[string]any
 		want := ""
@@ -320,7 +356,7 @@ func (f *Fake) serveMore(w http.ResponseWriter, service, action, region string, 
 		}
 		ok(w, nil)
 	default:
-		return f.serveEO(w, service, action, in) || f.serveTAT(w, service, action, region, in)
+		return f.serveEO(w, service, action, in) || f.serveTAT(w, service, action, region, in) || f.serveCDN(w, service, action, in)
 	}
 	return true
 }

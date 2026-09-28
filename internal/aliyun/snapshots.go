@@ -145,3 +145,46 @@ func (c *Client) CreateSnapshot(ctx context.Context, s Server, name string) (str
 	}
 	return out.SnapshotID, err
 }
+
+// ResetDisk rolls a server's system disk back to one of its snapshots
+// (ResetDisk). The server has to be stopped; while the disk is being
+// rolled back its status is ReIniting.
+func (c *Client) ResetDisk(ctx context.Context, s Server, snapshotID string) error {
+	disk, err := c.SystemDisk(ctx, s)
+	if err != nil {
+		return err
+	}
+	in := map[string]string{"DiskId": disk, "SnapshotId": snapshotID}
+	if s.Kind == KindSWAS {
+		return c.Call(ctx, ProductSWAS, VersionSWAS, "ResetDisk", s.Region, in, nil)
+	}
+	return c.Call(ctx, ProductECS, VersionECS, "ResetDisk", s.Region, in, nil)
+}
+
+// DiskStatus is the status of a server's system disk: In_use normally,
+// ReIniting while it is rolled back.
+func (c *Client) DiskStatus(ctx context.Context, s Server) (string, error) {
+	if s.Kind == KindECS {
+		disks, err := c.ecsDisks(ctx, s.Region, s.ID)
+		if err != nil || len(disks) == 0 {
+			return "", errors.Join(err, errors.New("找不到这台服务器的系统盘"))
+		}
+		return disks[0].status, nil
+	}
+	var out struct {
+		Disks []struct {
+			DiskType string `json:"DiskType"`
+			Status   string `json:"Status"`
+		} `json:"Disks"`
+	}
+	err := c.Call(ctx, ProductSWAS, VersionSWAS, "ListDisks", s.Region, map[string]string{"InstanceId": s.ID, "PageSize": "100"}, &out)
+	if err != nil {
+		return "", err
+	}
+	for _, d := range out.Disks {
+		if strings.EqualFold(d.DiskType, "system") {
+			return d.Status, nil
+		}
+	}
+	return "", errors.New("找不到这台服务器的系统盘")
+}

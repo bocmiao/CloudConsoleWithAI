@@ -63,7 +63,18 @@ type Fake struct {
 	// Servers: a Lighthouse instance and a CVM instance in ap-guangzhou.
 	Instances map[string]*Instance
 	Firewall  map[string][]tencent.FirewallRule // by instance or security group
+	// CDN domains and the tasks asked of them ("purge-url https://…",
+	// "purge-dir …", "push …"); SSL certificates, and how many free ones
+	// may still be applied for (-1: no limit).
+	CDN           []*tencent.CDNDomain
+	CDNTasks      []string
+	SSLCerts      []*tencent.SSLCert
+	SSLApplied    []string
+	FreeCertsLeft int
+	Alarms        []tencent.Alarm // Cloud Monitor's alarm history
+
 	Snaps     map[string]*tencent.Snapshot
+	Rollbacks []string // "instance snapshot" for each rollback asked for
 	Regions   []string // regions the fake saw requests for
 
 	// EdgeOne: site-level security policies by zone, and plans.
@@ -114,8 +125,12 @@ func New() *Fake {
 			"lhins-abc12345": {{Protocol: "TCP", Port: "22", CidrBlock: "0.0.0.0/0", Action: "ACCEPT"}, {Protocol: "TCP", Port: "80", CidrBlock: "0.0.0.0/0", Action: "ACCEPT"}},
 			"sg-abc":         {{Protocol: "TCP", Port: "22", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Index: 0}},
 		},
-		Snaps:   map[string]*tencent.Snapshot{},
-		SMSSign: "喵面板", SMSParams: 2,
+		Snaps: map[string]*tencent.Snapshot{},
+		SSLCerts: []*tencent.SSLCert{{ID: "ssl-abc", Domain: "api.example.com", SANs: []string{"api.example.com"}, From: "trustasia",
+			Product: "TrustAsia 免费版", Status: 1, StatusName: "已通过", IsDV: true, HostingStatus: intPtr(-1),
+			EndTime: time.Now().Add(10 * 24 * time.Hour).In(time.FixedZone("CST", 8*3600)).Format("2006-01-02 15:04:05")}},
+		FreeCertsLeft: -1,
+		SMSSign:       "喵面板", SMSParams: 2,
 		nextID:  100,
 		Records: map[string][]Record{"example.com": {{RecordID: 1, Name: "blog", Type: "A", Value: "1.2.3.4", Line: tencent.DefaultLine, TTL: 600, Status: "ENABLE"}}},
 		Zones:   []tencent.Zone{{ZoneID: "zone-abc", ZoneName: "example.com", Type: "partial", Status: "active", Area: "mainland", CnameStatus: "finished"}},

@@ -372,9 +372,23 @@ func (a *App) preloadRound(ctx context.Context) {
 	}
 	if a.hasCloud() {
 		run(func() { wait(warmPage(ctx, a, "page_account", a.CloudAccount)) })
+		run(func() { wait(warmPage(ctx, a, "page_cdn", a.CDN)) })
+		run(func() { wait(warmPage(ctx, a, "page_alarms", a.CloudAlarms)) })
 	}
 	if a.tencentClient() != nil {
-		run(func() { wait(warmPage(ctx, a, "page_eo_sites", a.EOSites)) })
+		run(func() {
+			wait(warmPage(ctx, a, "page_eo_sites", a.EOSites))
+			zones, err := a.tencentClient().Zones(ctx)
+			if err != nil {
+				return
+			}
+			for _, z := range zones {
+				name := z.ZoneName
+				later(func() {
+					wait(warmPage(ctx, a, "page_eoprot_"+name, func(ctx context.Context) (EOProtectView, error) { return a.EOProtection(ctx, name) }))
+				})
+			}
+		})
 		run(func() { wait(warmPage(ctx, a, "page_blocked", a.Blocked)) })
 		run(func() {
 			wait(warmPage(ctx, a, "page_cos_buckets", a.COSBuckets))

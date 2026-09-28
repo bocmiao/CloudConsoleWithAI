@@ -68,7 +68,7 @@ type OverviewItem struct {
 	Level  string `json:"level"` // crit, warn, info, plan
 	Title  string `json:"title"`
 	Meta   string `json:"meta,omitempty"`
-	Kind   string `json:"kind"` // plan, notice, cert, server, security, monitor, update, account
+	Kind   string `json:"kind"` // plan, notice, cert, server, security, monitor, update, account, alarm
 	ID     int64  `json:"id,omitempty"`
 	Action string `json:"action"`
 }
@@ -200,15 +200,17 @@ func (a *App) Overview(ctx context.Context) (OverviewView, error) {
 	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
 	var (
-		wg      sync.WaitGroup
-		vv      VisitsView
-		vvErr   error = fmt.Errorf("no source")
-		certs   CertOverview
-		certErr error = fmt.Errorf("not read")
-		blocked []BlockedZone
-		blkErr  error = fmt.Errorf("not read")
-		acct    AccountView
-		acctErr error = fmt.Errorf("not read")
+		wg       sync.WaitGroup
+		vv       VisitsView
+		vvErr    error = fmt.Errorf("no source")
+		certs    CertOverview
+		certErr  error = fmt.Errorf("not read")
+		blocked  []BlockedZone
+		blkErr   error = fmt.Errorf("not read")
+		acct     AccountView
+		acctErr  error = fmt.Errorf("not read")
+		alarms   CloudAlarmsView
+		alarmErr error = fmt.Errorf("not read")
 	)
 	source := ""
 	if a.tencentClient() != nil {
@@ -229,6 +231,8 @@ func (a *App) Overview(ctx context.Context) (OverviewView, error) {
 	if a.hasCloud() {
 		wg.Add(1)
 		go func() { defer wg.Done(); acct, _, acctErr = a.CloudAccountPage(ctx, PageLatest) }()
+		wg.Add(1)
+		go func() { defer wg.Done(); alarms, _, alarmErr = a.CloudAlarmsPage(ctx, PageLatest) }()
 	}
 	wg.Wait()
 
@@ -306,6 +310,16 @@ func (a *App) Overview(ctx context.Context) (OverviewView, error) {
 		if len(items) > 4 {
 			items = append(items[:3], OverviewItem{Level: "warn", Kind: "account", Action: "去看看",
 				Title: fmt.Sprintf("还有 %d 项续费提醒", len(items)-3), Meta: "云服务器 → 账户和续费"})
+		}
+		v.Todo = append(v.Todo, items...)
+	}
+
+	// What the clouds' monitoring raises now.
+	if alarmErr == nil {
+		items := alarmTodo(alarms)
+		if len(items) > 3 {
+			items = append(items[:2], OverviewItem{Level: "warn", Kind: "alarm", Action: "去看看",
+				Title: fmt.Sprintf("还有 %d 个云监控告警没有恢复", len(items)-2), Meta: "监控 → 云监控告警"})
 		}
 		v.Todo = append(v.Todo, items...)
 	}

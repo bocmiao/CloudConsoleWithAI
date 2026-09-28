@@ -236,8 +236,8 @@ func (c *Client) ecsServers(ctx context.Context, r Region, ids []string) ([]Serv
 }
 
 type disk struct {
-	id, instance string
-	sizeGB       int
+	id, instance, status string
+	sizeGB               int
 }
 
 // ecsDisks lists the system disks of a region, or of one instance.
@@ -257,6 +257,7 @@ func (c *Client) ecsDisks(ctx context.Context, region, instance string) ([]disk,
 					DiskID     string `json:"DiskId"`
 					InstanceID string `json:"InstanceId"`
 					Size       int    `json:"Size"`
+					Status     string `json:"Status"`
 				} `json:"Disk"`
 			} `json:"Disks"`
 			NextToken string `json:"NextToken"`
@@ -265,7 +266,7 @@ func (c *Client) ecsDisks(ctx context.Context, region, instance string) ([]disk,
 			return disks, err
 		}
 		for _, d := range out.Disks.Disk {
-			disks = append(disks, disk{id: d.DiskID, instance: d.InstanceID, sizeGB: d.Size})
+			disks = append(disks, disk{id: d.DiskID, instance: d.InstanceID, sizeGB: d.Size, status: d.Status})
 		}
 		if out.NextToken == "" || out.NextToken == token || len(out.Disks.Disk) == 0 {
 			return disks, nil

@@ -77,6 +77,10 @@ func applyAliyun(ctx context.Context, env *Env, r Resolved, progress Progress) O
 			return aliRenew(ctx, env, v, out, report)
 		case "ali_snapshot":
 			return aliSnapshot(ctx, env, v, out, report)
+		case "ali_snapshot_rollback":
+			return aliRollback(ctx, env, v, out, report)
+		case "ali_cdn_status":
+			return aliCDNStatus(ctx, env, v, out, report)
 		case "ali_firewall_open":
 			return aliFirewallOpen(ctx, env, v, out, report)
 		case "ali_firewall_close":
@@ -116,6 +120,8 @@ func undoAliyun(ctx context.Context, env *Env, r Resolved, undo map[string]strin
 			err = c.Power(ctx, undo["region"], undo["instance"], "start")
 		case "ali_renew":
 			err = c.SetAutoRenew(ctx, undo["region"], undo["instance"], undo["auto"] == "on")
+		case "ali_cdn_status":
+			err = c.SetCDNDomain(ctx, undo["domain"], undo["on"] == "on")
 		case "ali_firewall_open", "ali_firewall_close":
 			err = aliUndoFirewall(ctx, c, undo)
 		case "ali_dns_add", "ali_dns_modify", "ali_dns_delete", "ali_dns_status", "ali_dns_set":
@@ -233,7 +239,7 @@ func aliSnapshot(ctx context.Context, env *Env, v map[string]string, out *Outcom
 		}
 		return *out
 	}
-	report("完成：快照 %s（%s）已创建好，出问题时可以在阿里云控制台用它回滚系统盘", name, id)
+	report("完成：快照 %s（%s）已创建好，出问题时可以在「云服务器」页一键回滚到它", name, id)
 	out.Status, out.Undo = StatusDone, map[string]string{}
 	return *out
 }

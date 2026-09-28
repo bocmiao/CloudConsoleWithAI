@@ -373,7 +373,36 @@ func (a *App) ProposeAliyun(ctx context.Context, req CloudRequest) (PlanView, er
 	kind := aliKindName[s.Kind]
 	params := map[string]any{"instance": s.ID, "region": s.Region}
 	var capability, title, summary, reason string
+	var first []core.Step // steps before the change itself
 	switch req.Op {
+	case "rollback":
+		lctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		list, err := c.Snapshots(lctx, s)
+		cancel()
+		if err != nil {
+			return PlanView{}, userErr("读取快照失败：%v", err)
+		}
+		var sn *aliyun.Snapshot
+		for i := range list {
+			if list[i].ID == req.Snapshot {
+				sn = &list[i]
+			}
+		}
+		if sn == nil {
+			return PlanView{}, userErr("%s 没有快照 %s", name, req.Snapshot)
+		}
+		if sn.State != "ACCOMPLISHED" {
+			return PlanView{}, userErr("快照 %s 还没有完成，等它完成再回滚", sn.ID)
+		}
+		capability, title = "aliyun.snapshot.rollback", "回滚到快照："+name
+		params["snapshot"] = sn.ID
+		summary = fmt.Sprintf("把 %s 的系统盘回滚到快照 %s", name, snapLabel(sn.Name, sn.ID))
+		if sn.Created != "" {
+			summary += "（" + snapTime(sn.Created) + " 创建）"
+		}
+		first = []core.Step{{Capability: "aliyun.snapshot.create", Summary: "先给现在的系统盘做一个快照，回滚后想反悔可以再回滚到它",
+			Params: map[string]any{"instance": s.ID, "region": s.Region, "name": rollbackSnapName()}}}
+		reason = rollbackReason("阿里云", s.Kind == aliyun.KindECS)
 	case "start":
 		capability, title = "aliyun.server.start", "启动服务器："+name
 		summary = "启动阿里云" + kind + " " + name
@@ -395,7 +424,7 @@ func (a *App) ProposeAliyun(ctx context.Context, req CloudRequest) (PlanView, er
 			params["name"] = n
 		}
 		summary = "给 " + name + " 的系统盘创建快照"
-		reason = "快照是系统盘的整盘备份，大改之前做一个，出问题可以在阿里云控制台回滚到这个时刻。不影响运行。"
+		reason = "快照是系统盘的整盘备份，大改之前做一个，出问题可以在这里一键回滚到这个时刻。不影响运行。"
 		if s.Kind == aliyun.KindECS {
 			reason += "ECS 的快照按容量收费。"
 		}
@@ -463,7 +492,8 @@ func (a *App) ProposeAliyun(ctx context.Context, req CloudRequest) (PlanView, er
 		return PlanView{}, userErr("%v", err)
 	}
 	servers, _ := a.Store.ListServers()
-	p, _, err := a.proposePlan(ctx, "user", aliServerOf(s, servers).ServerID, title, reason, []core.Step{{Capability: capability, Summary: summary, Params: params}})
+	steps := append(first, core.Step{Capability: capability, Summary: summary, Params: params})
+	p, _, err := a.proposePlan(ctx, "user", aliServerOf(s, servers).ServerID, title, reason, steps)
 	if err != nil {
 		return PlanView{}, err
 	}
@@ -549,4 +579,35 @@ func serverNameFor(sv store.Server, capability string) string {
 		return "阿里云"
 	}
 	return sv.Name
+}
+
+// rollbackSnapName names the snapshot taken before a rollback: both clouds
+// take letters, digits and dashes, starting with a letter.
+func rollbackSnapName() string { return "before-rollback-" + time.Now().Format("20060102-1504") }
+
+func snapLabel(name, id string) string {
+	if name == "" || name == id {
+		return id
+	}
+	return name + "（" + id + "）"
+}
+
+// rollbackReason explains a rollback checklist.
+func rollbackReason(cloud string, billed bool) string {
+	r := "回滚会把整个系统盘换成快照时的样子：之后改过的配置、上传的文件、数据库里新写入的数据都会丢失（数据盘不受影响）。" +
+		"服务器会先关机，回滚要几分钟，原来开着的回滚后自动开机。清单第一步先给现在的系统盘做一个快照，回滚后想反悔可以再回滚到它；" +
+		"快照数量到了上限时第一步会失败、不会继续回滚，可以先在" + cloud + "控制台删掉不要的快照，或者确定不需要时取消勾选第一步。"
+	if billed {
+		r += "这台服务器的快照按容量收费。"
+	}
+	return r
+}
+
+// snapTime shows when a snapshot was made, to the minute: the clouds
+// write RFC 3339 or "2006-01-02 15:04:05".
+func snapTime(s string) string {
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t.In(time.Local).Format("2006-01-02 15:04")
+	}
+	return s[:min(16, len(s))]
 }

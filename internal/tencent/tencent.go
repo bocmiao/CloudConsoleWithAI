@@ -61,7 +61,7 @@ func friendly(e *Error) string {
 	case strings.HasPrefix(e.Code, "AuthFailure.UnauthorizedOperation"), strings.HasPrefix(e.Code, "UnauthorizedOperation"):
 		name := map[string]string{"dnspod": "DNSPod", "teo": "EdgeOne", "lighthouse": "轻量应用服务器", "cvm": "云服务器 CVM",
 			"vpc": "私有网络（安全组）", "cbs": "云硬盘（快照）", "monitor": "云监控", "tat": "自动化助手（TAT）", "ssl": "SSL 证书",
-			"billing": "费用中心（查询余额）", "domain": "域名注册"}[e.Service]
+			"billing": "费用中心（查询余额）", "domain": "域名注册", "cdn": "内容分发网络 CDN"}[e.Service]
 		if name == "" {
 			name = e.Service
 		}

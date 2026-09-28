@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/bocmiao/CloudConsoleWithAI/internal/aliyun"
 )
 
 // look returns an instance's status as a list shows it now; a power
@@ -147,7 +149,7 @@ func (f *Cloud) serveECS(action, region string, q map[string]string) (map[string
 		list := []map[string]any{}
 		for _, i := range match[from:to] {
 			list = append(list, map[string]any{"DiskId": i.DiskID, "InstanceId": i.ID, "Size": i.DiskGB, "Type": "system",
-				"Category": "cloud_essd", "Status": "In_use", "RegionId": i.Region, "ZoneId": i.Zone, "DiskName": "", "Device": "/dev/xvda"})
+				"Category": "cloud_essd", "Status": diskStatus(&i.resetting), "RegionId": i.Region, "ZoneId": i.Zone, "DiskName": "", "Device": "/dev/xvda"})
 		}
 		return map[string]any{"Disks": map[string]any{"Disk": list}, "NextToken": next, "TotalCount": len(match)}, nil
 	case "DescribeInstanceAutoRenewAttribute":
@@ -287,6 +289,20 @@ func (f *Cloud) serveECS(action, region string, q map[string]string) (map[string
 			list = append(list, f.snapshot(s))
 		}
 		return map[string]any{"Snapshots": map[string]any{"Snapshot": list}, "NextToken": next, "TotalCount": len(match)}, nil
+	case "ResetDisk":
+		var owner *ECSInstance
+		for _, i := range f.ECS {
+			if i.DiskID == q["DiskId"] && i.Region == region {
+				owner = i
+			}
+		}
+		if owner == nil {
+			return nil, refuse(404, "InvalidDiskId.NotFound", "The specified disk does not exist.")
+		}
+		if err := f.reset(q["SnapshotId"], owner.DiskID, owner.ID, owner.Status, &owner.resetting); err != nil {
+			return nil, err
+		}
+		return nil, nil
 	case "CreateSnapshot":
 		var owner *ECSInstance
 		for _, i := range f.ECS {
@@ -507,7 +523,7 @@ func (f *Cloud) serveSWAS(action, region string, q map[string]string) (map[strin
 		list := []map[string]any{}
 		for _, i := range match[from:to] {
 			list = append(list, map[string]any{"DiskId": i.DiskID, "DiskType": "system", "Size": i.DiskGB, "InstanceId": i.ID, "InstanceName": i.Name,
-				"Category": "ESSD", "Status": "In_use", "Device": "/dev/xvda", "DiskName": "SystemDisk", "RegionId": i.Region, "DiskChargeType": "PrePaid"})
+				"Category": "ESSD", "Status": diskStatus(&i.resetting), "Device": "/dev/xvda", "DiskName": "SystemDisk", "RegionId": i.Region, "DiskChargeType": "PrePaid"})
 		}
 		return map[string]any{"Disks": list, "TotalCount": len(match), "PageNumber": 1, "PageSize": len(list)}, nil
 	case "ListSnapshots":
@@ -523,6 +539,20 @@ func (f *Cloud) serveSWAS(action, region string, q map[string]string) (map[strin
 			list = append(list, f.snapshot(s))
 		}
 		return map[string]any{"Snapshots": list, "TotalCount": len(match), "PageNumber": 1, "PageSize": len(list)}, nil
+	case "ResetDisk":
+		var owner *SWASInstance
+		for _, i := range f.SWAS {
+			if i.DiskID == q["DiskId"] && i.Region == region {
+				owner = i
+			}
+		}
+		if owner == nil {
+			return nil, refuse(404, "InvalidDiskId.NotFound", "The specified disk does not exist.")
+		}
+		if err := f.reset(q["SnapshotId"], owner.DiskID, owner.ID, owner.Status, &owner.resetting); err != nil {
+			return nil, err
+		}
+		return nil, nil
 	case "CreateSnapshot":
 		var owner *SWASInstance
 		for _, i := range f.SWAS {
@@ -590,6 +620,9 @@ func (f *Cloud) samples(q map[string]string, key string, start, end time.Time, s
 }
 
 func (f *Cloud) serveCMS(action, region string, q map[string]string) (map[string]any, *apiErr) {
+	if action == "DescribeAlertLogList" {
+		return f.alertLogs(q)
+	}
 	if q["Namespace"] != "acs_ecs_dashboard" {
 		// CloudMonitor answers these in the body, with HTTP 200.
 		return map[string]any{"Code": "404", "Success": false, "Message": "The specified resource is not found."}, nil
@@ -623,4 +656,65 @@ func (f *Cloud) serveCMS(action, region string, q map[string]string) (map[string
 		resp["Code"], resp["Success"] = "200", true
 	}
 	return resp, err
+}
+
+// reset rolls a disk back to one of its snapshots: the server has to be
+// stopped and the snapshot finished.
+func (f *Cloud) reset(snapshot, diskID, instance, status string, resetting *bool) *apiErr {
+	var sn *Snap
+	for _, x := range f.Snapshots {
+		if x.ID == snapshot {
+			sn = x
+		}
+	}
+	switch {
+	case sn == nil:
+		return refuse(404, "InvalidSnapshotId.NotFound", "The specified snapshot does not exist.")
+	case sn.DiskID != diskID:
+		return refuse(403, "InvalidSnapshotId.NotBelongToDisk", "The specified snapshot does not belong to the disk.")
+	case !sn.looked:
+		return refuse(403, "IncorrectSnapshotStatus", "The snapshot is still being created.")
+	case status != "Stopped":
+		return refuse(403, "IncorrectInstanceStatus", "The current status of the resource does not support this operation.")
+	}
+	*resetting = true
+	f.Resets = append(f.Resets, instance+" "+snapshot)
+	return nil
+}
+
+// diskStatus shows a disk being rolled back once, then done.
+func diskStatus(resetting *bool) string {
+	if *resetting {
+		*resetting = false
+		return "ReIniting"
+	}
+	return "In_use"
+}
+
+// alertLogs answers DescribeAlertLogList: times in milliseconds, at most
+// 15 days apart, both or neither.
+func (f *Cloud) alertLogs(q map[string]string) (map[string]any, *apiErr) {
+	start, err1 := strconv.ParseInt(q["StartTime"], 10, 64)
+	end, err2 := strconv.ParseInt(q["EndTime"], 10, 64)
+	if err1 != nil || err2 != nil || end < start || end-start > 15*24*3600*1000 {
+		return map[string]any{"Code": "400", "Success": false, "Message": "The time range must be within 15 days."}, nil
+	}
+	var match []aliyun.Alarm
+	for _, a := range f.AlertLogs {
+		t, err := time.Parse(time.RFC3339, a.Time)
+		if err == nil && t.UnixMilli() >= start && t.UnixMilli() <= end {
+			match = append(match, a)
+		}
+	}
+	from, to := f.pageNumber(q, 10, len(match))
+	list := []map[string]any{}
+	for _, a := range match[from:to] {
+		t, _ := time.Parse(time.RFC3339, a.Time)
+		list = append(list, map[string]any{"AlertTime": strconv.FormatInt(t.UnixMilli(), 10), "LogId": a.ID, "RuleName": a.Rule, "RuleId": a.RuleID,
+			"InstanceId": a.Instance, "InstanceName": a.InstanceName, "Product": a.Product, "MetricName": a.Metric, "Level": a.Level,
+			"LevelChange": a.Change, "Namespace": "acs_ecs_dashboard", "SendStatus": "0",
+			"Escalation": map[string]any{"Expression": a.Expression, "Level": a.Level, "Times": 3},
+			"Dimensions": []map[string]string{{"Key": "instanceId", "Value": a.Instance}}})
+	}
+	return map[string]any{"Code": "200", "Success": true, "PageNumber": q["PageNumber"], "PageSize": q["PageSize"], "AlertLogList": list}, nil
 }

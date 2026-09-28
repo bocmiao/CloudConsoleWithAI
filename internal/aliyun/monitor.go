@@ -179,3 +179,68 @@ func datapoints(s string) []Point {
 func sortPoints(pts []Point) {
 	sort.SliceStable(pts, func(i, j int) bool { return pts[i].T < pts[j].T })
 }
+
+// Alarm is one alert event of CloudMonitor (云监控): it went off, or it
+// recovered (Level OK).
+type Alarm struct {
+	ID           string `json:"id"`
+	Rule         string `json:"rule"`
+	RuleID       string `json:"ruleId"`
+	Instance     string `json:"instance"`
+	InstanceName string `json:"instanceName"`
+	Product      string `json:"product"`
+	Metric       string `json:"metric"`
+	Level        string `json:"level"`  // P2, P3, P4 (CRITICAL, WARN, INFO), or OK once recovered
+	Change       string `json:"change"` // e.g. P4->OK
+	Expression   string `json:"expression"`
+	Time         string `json:"time"` // RFC 3339
+}
+
+// Alarms reads CloudMonitor's alert log since a time, newest first
+// (DescribeAlertLogList; it keeps 15 days, at most 500 are read).
+func (c *Client) Alarms(ctx context.Context, since time.Time) ([]Alarm, error) {
+	now := time.Now()
+	if now.Sub(since) > 15*24*time.Hour {
+		since = now.Add(-15 * 24 * time.Hour)
+	}
+	var all []Alarm
+	for page := 1; page <= 5; page++ {
+		var out struct {
+			AlertLogList []struct {
+				AlertTime    string `json:"AlertTime"`
+				LogID        string `json:"LogId"`
+				RuleName     string `json:"RuleName"`
+				RuleID       string `json:"RuleId"`
+				InstanceID   string `json:"InstanceId"`
+				InstanceName string `json:"InstanceName"`
+				Product      string `json:"Product"`
+				MetricName   string `json:"MetricName"`
+				Level        string `json:"Level"`
+				LevelChange  string `json:"LevelChange"`
+				Escalation   struct {
+					Expression string `json:"Expression"`
+				} `json:"Escalation"`
+			} `json:"AlertLogList"`
+		}
+		err := c.Call(ctx, ProductCMS, VersionCMS, "DescribeAlertLogList", "cn-hangzhou", map[string]string{
+			"StartTime": strconv.FormatInt(since.UnixMilli(), 10), "EndTime": strconv.FormatInt(now.UnixMilli(), 10),
+			"PageNumber": strconv.Itoa(page), "PageSize": "100",
+		}, &out)
+		if err != nil {
+			return all, err
+		}
+		for _, x := range out.AlertLogList {
+			a := Alarm{ID: x.LogID, Rule: x.RuleName, RuleID: x.RuleID, Instance: x.InstanceID, InstanceName: x.InstanceName, Product: x.Product,
+				Metric: x.MetricName, Level: x.Level, Change: x.LevelChange, Expression: x.Escalation.Expression}
+			if ms, err := strconv.ParseInt(x.AlertTime, 10, 64); err == nil {
+				a.Time = time.UnixMilli(ms).UTC().Format(time.RFC3339)
+			}
+			all = append(all, a)
+		}
+		if len(out.AlertLogList) < 100 {
+			break
+		}
+	}
+	sort.SliceStable(all, func(i, j int) bool { return all[i].Time > all[j].Time })
+	return all, nil
+}

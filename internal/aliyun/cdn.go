@@ -174,3 +174,13 @@ func (c *Client) CDNTasks(ctx context.Context, ids ...string) ([]CDNTask, error)
 	}
 	return list, nil
 }
+
+// SetCDNDomain turns a domain's acceleration on or off (StartCdnDomain,
+// StopCdnDomain).
+func (c *Client) SetCDNDomain(ctx context.Context, name string, on bool) error {
+	action := "StopCdnDomain"
+	if on {
+		action = "StartCdnDomain"
+	}
+	return c.Call(ctx, ProductCDN, VersionCDN, action, "", map[string]string{"DomainName": name}, nil)
+}

@@ -99,6 +99,16 @@ func applyCloud(ctx context.Context, env *Env, r Resolved, progress Progress) Ou
 			return applyPower(ctx, env, strings.TrimPrefix(r.Impl.Cloud, "power_"), r.Values, out, report)
 		case "renew":
 			return applyRenew(ctx, env, r.Values, out, report)
+		case "snapshot_rollback":
+			return applyRollback(ctx, env, r.Values, out, report)
+		case "cdn_purge", "cdn_prefetch":
+			return applyCDNCache(ctx, env, r.Impl.Cloud, r.Values, out, report)
+		case "cdn_status":
+			return applyCDNStatus(ctx, env, r.Values, out, report)
+		case "cdn_https":
+			return applyCDNHTTPS(ctx, env, r.Values, out, report)
+		case "ssl_apply":
+			return applySSL(ctx, env, r.Values, out, report)
 		case "eo_purge":
 			return applyPurge(ctx, env, r.Values, out, report)
 		case "eo_prefetch":
@@ -158,6 +168,14 @@ func undoCloud(ctx context.Context, env *Env, r Resolved, undo map[string]string
 			err = undoFirewallTighten(ctx, env.Cloud, undo)
 		case "renew":
 			err = undoRenew(ctx, env.Cloud, undo)
+		case "cdn_status":
+			err = env.Cloud.SetCDNDomain(ctx, undo["domain"], undo["on"] == "on")
+		case "cdn_https":
+			cert := undo["cert"]
+			if cert == "off" {
+				cert = ""
+			}
+			err = env.Cloud.SetCDNCert(ctx, undo["domain"], cert)
 		case "power_start", "power_stop":
 			op := "StopInstances"
 			if r.Impl.Cloud == "power_stop" {

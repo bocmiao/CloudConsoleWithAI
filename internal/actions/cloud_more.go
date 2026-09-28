@@ -515,7 +515,7 @@ func applySnapshot(ctx context.Context, env *Env, v map[string]string, out *Outc
 		}
 		return *out
 	}
-	report("完成：快照 %s（%s）已创建好，出问题时可以在腾讯云控制台用它回滚整台服务器", name, id)
+	report("完成：快照 %s（%s）已创建好，出问题时可以在「云服务器」页一键回滚到它", name, id)
 	out.Status = StatusDone
 	out.Undo = map[string]string{}
 	return *out

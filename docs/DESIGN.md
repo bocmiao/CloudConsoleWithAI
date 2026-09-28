@@ -1595,3 +1595,15 @@ Web 版除了「用户名 + 密码」，可以用邮箱或手机收到的验证�
 - **哪里看到**：「云服务器」页最上面「账户和续费」：每个云的余额（欠费标红，带充值链接）、30 天内到期的数量，需要处理的逐条列出（服务器的「开启自动续费」按钮，域名的「去续费」），「查看全部」列出所有包年包月服务器和注册域名；服务器详情的「到期」一行有开关和续费链接。总览「需要你处理」列出欠费和需要处理的到期（最多 3 条，多的合成一条「还有 N 项续费提醒」）。提醒新增「续费和余额」（默认开，同一项一周提醒一次、级别变了再提醒，欠费一天一次），日报加「云账号」一节。
 - **AI 工具**：`cloud_account`（余额、到期、续费方式、需要注意的）；把页面上有、AI 以前看不到的补上：`panel_databases`（1Panel 的数据库）、`recent_changes`（最近的修改和结果、失败原因、没执行的清单、设置变更，出问题时先看是不是刚改过什么）、`reminders`（通知页的日报和提醒、通知设置）。系统提示补上 `cloud.firewall.tighten`、`eo.clientip.header` + `nginx.realip` 的用法；`ssh.harden` 由 Miao Panel 填上登录用的账号，AI 也能提出。
 - **测试**：两个云的模拟服务端加上余额、域名列表和续费接口（参数和官方元数据一致，按量付费的实例拒绝改续费）；客户端、清单能力（开、再开不改、撤销）、账户汇总（级别、排序、服务器对应、读不到的部分）、总览、提醒只发一次、日报、一键开启后页面马上看到、AI 工具的输出。浏览器里看过「云服务器」页（桌面、深色、手机宽度）和一键开启自动续费生成的清单。
+
+### 快照回滚、CDN 页、免费证书、云监控告警、EdgeOne 防护页（已完成）
+
+目标：云控制台里常做的几件事也在 Miao Panel 里一键完成，并且 AI 都能用。
+
+- **快照回滚**（`cloud.snapshot.rollback`、`aliyun.snapshot.rollback`，R3，不可撤销）：腾讯云轻量 `ApplyInstanceSnapshot`、CVM 系统盘 `cbs ApplySnapshot`，阿里云 ECS 和轻量都是 `ResetDisk`。执行时先确认快照属于这台服务器的系统盘并且已经可用；服务器开着就先正常关机（CVM 和阿里云要求关机，轻量腾讯云会强制关机，我们先正常关），回滚完成（腾讯云看快照从 ROLLBACKING 回到 NORMAL，阿里云看系统盘从 ReIniting 回到 In_use）后原来开着的自动开机。回滚本身不能撤销，所以「云服务器」页生成的清单第一步先给现在的系统盘做一个快照（`before-rollback-日期`），失败（比如快照数量到了上限）就不会继续回滚；想反悔就回滚到它。
+- **CDN 页**（`internal/app/cdn.go`，`page_cdn`）：腾讯云 CDN（`DescribeDomainsConfig`，带 HTTPS 和证书）和阿里云 CDN 的加速域名一起列出。能做：刷新缓存（`cdn.cache.purge`：`PurgeUrlsCache` / `PurgePathCache` 的 flush；阿里云原有的 `aliyun.cdn.purge`）、预热（`cdn.cache.prefetch`：`PushUrlsCache`）、启用或停用（`cdn.domain.status`：`StartCdnDomain` / `StopCdnDomain`；`aliyun.cdn.status` 同名接口；可撤销）、腾讯云的 HTTPS（`cdn.https.set`：`UpdateDomainConfig` 只带 `Https`，用 SSL 证书里已签发、包含这个域名的证书，或关闭；撤销恢复原来的证书）。网址必须是这个账号、正在启用的加速域名；页面上可以只写路径。新增加速域名涉及备案和计费，仍在控制台。
+- **免费证书**（`ssl.cert.apply`）：`ApplyCertificate`，`DvAuthMethod=DNS_AUTO`（域名要在同一账号的 DNSPod）、`DeleteDnsAutoRecord`，一次一个名字，不支持泛域名；每隔几秒 `DescribeCertificate` 等签发（Status 1），验证失败（2）如实报告。`use_cdn=yes` 时签发后配置到同名的腾讯云 CDN 上；CDN 页的「申请免费证书」就是这一步。「证书」页有单独的按钮。
+- **云监控告警**（`internal/app/alarms.go`，`page_alarms`，`GET /api/cloud/alarms`）：腾讯云 `DescribeAlarmHistories`（最近 7 天，状态 ALARM 是未恢复，级别 Serious/Warn/Remind）和阿里云 `DescribeAlertLogList`（时间以毫秒、最多 15 天；每次报警和恢复各一条，按规则和资源归成一次告警：从最新一条往回看，遇到上一次恢复就是这次的开始；P2 严重、P3 警告、P4 提醒）。「监控」页列出，没恢复的在前；总览列出没恢复的（最多 2 条，多的合成一条）；提醒新增「云监控告警」（默认开，同一次告警只提醒一次）；AI 工具 `cloud_alarms`。
+- **EdgeOne 防护页**（`internal/app/eo_protect.go`，`page_eoprot_<站点>`）：「EdgeOne」页新增「防护」：站点级的速率限制规则（从条件里读出域名和路径）、CC 防护（自适应频控）、Miao Panel 封禁了多少 IP、加速域名和状态。添加或删除限速规则、开关 CC、启用或停用加速域名都走原来的能力（`eo.ratelimit.set` / `remove`、`eo.cc.set`、`eo.domain.status`），生成清单、可撤销。
+- **AI**：新工具 `cdn_domains`、`cloud_alarms`；系统提示补上回滚（先快照、只在用户明确要求时）、腾讯云 CDN、免费证书的用法。
+- **测试**：两个云的模拟服务端加上回滚（运行中的 CVM 和阿里云拒绝、轻量强制关机、快照不属于这块盘拒绝）、腾讯云 CDN（域名不在账号或没启用时拒绝、证书不匹配拒绝）、SSL 申请（不在 DNSPod、泛域名、免费额度用完各自拒绝，申请后下一次查询签发）、两家的告警历史（阿里云超过 15 天拒绝）。能力层：回滚开着的和关着的服务器、CDN 刷新预热启停和撤销、免费证书配置到 CDN 和撤销；应用层：页面生成的回滚清单（先快照）端到端执行、CDN 页和它的清单、告警的归并和排序、总览、提醒只发一次、EdgeOne 防护页的添加、删除和启停。浏览器里看过这些页面（桌面、深色、手机宽度），执行过一次限速规则的清单。

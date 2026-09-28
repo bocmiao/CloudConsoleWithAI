@@ -44,6 +44,25 @@ func (f *Cloud) tasks(paths, kind string, folder bool) (string, *apiErr) {
 
 func (f *Cloud) serveCDN(action string, q map[string]string) (map[string]any, *apiErr) {
 	switch action {
+	case "StartCdnDomain", "StopCdnDomain":
+		var d *CDNDomain
+		for _, x := range f.CDN {
+			if x.Name == q["DomainName"] {
+				d = x
+			}
+		}
+		if d == nil {
+			return nil, refuse(404, "InvalidDomain.NotFound", "The domain provided does not belong to you.")
+		}
+		from, to := "offline", "online"
+		if action == "StopCdnDomain" {
+			from, to = "online", "offline"
+		}
+		if d.Status != from {
+			return nil, refuse(400, "InvalidDomain.Offline", "The specified domain status does not support the operation.")
+		}
+		d.Status = to
+		return nil, nil
 	case "DescribeUserDomains":
 		from, to := f.pageNumber(q, 20, len(f.CDN))
 		list := []map[string]any{}
