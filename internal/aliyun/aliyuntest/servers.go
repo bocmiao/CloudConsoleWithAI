@@ -167,6 +167,26 @@ func (f *Cloud) serveECS(action, region string, q map[string]string) (map[string
 			list = append(list, map[string]any{"InstanceId": id, "AutoRenewEnabled": i.AutoRenew, "Duration": 1, "PeriodUnit": "Month", "RenewalStatus": status})
 		}
 		return map[string]any{"InstanceRenewAttributes": map[string]any{"InstanceRenewAttribute": list}, "TotalCount": len(list), "PageNumber": 1, "PageSize": 100}, nil
+	case "ModifyInstanceAutoRenewAttribute":
+		i, err := here(q["InstanceId"])
+		if err != nil {
+			return nil, err
+		}
+		if i.ChargeType != "PrePaid" {
+			return nil, refuse(400, "InvalidInstance.NotPrepaid", "The specified instance is not a subscription instance.")
+		}
+		switch q["RenewalStatus"] {
+		case "AutoRenewal":
+			if q["Duration"] == "" {
+				return nil, refuse(400, "MissingDuration", "Duration is mandatory when RenewalStatus is AutoRenewal.")
+			}
+			i.AutoRenew = true
+		case "Normal", "NotRenewal":
+			i.AutoRenew = false
+		default:
+			return nil, refuse(400, "InvalidRenewalStatus", "The specified RenewalStatus is invalid.")
+		}
+		return nil, nil
 	case "StartInstance", "StopInstance", "RebootInstance":
 		i, err := here(q["InstanceId"])
 		if err != nil {

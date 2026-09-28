@@ -68,7 +68,7 @@ type OverviewItem struct {
 	Level  string `json:"level"` // crit, warn, info, plan
 	Title  string `json:"title"`
 	Meta   string `json:"meta,omitempty"`
-	Kind   string `json:"kind"` // plan, notice, cert, server, security
+	Kind   string `json:"kind"` // plan, notice, cert, server, security, monitor, update, account
 	ID     int64  `json:"id,omitempty"`
 	Action string `json:"action"`
 }
@@ -207,6 +207,8 @@ func (a *App) Overview(ctx context.Context) (OverviewView, error) {
 		certErr error = fmt.Errorf("not read")
 		blocked []BlockedZone
 		blkErr  error = fmt.Errorf("not read")
+		acct    AccountView
+		acctErr error = fmt.Errorf("not read")
 	)
 	source := ""
 	if a.tencentClient() != nil {
@@ -223,6 +225,10 @@ func (a *App) Overview(ctx context.Context) (OverviewView, error) {
 	if source == "edgeone" {
 		wg.Add(1)
 		go func() { defer wg.Done(); blocked, _, blkErr = a.BlockedPage(ctx, PageLatest) }()
+	}
+	if a.hasCloud() {
+		wg.Add(1)
+		go func() { defer wg.Done(); acct, _, acctErr = a.CloudAccountPage(ctx, PageLatest) }()
 	}
 	wg.Wait()
 
@@ -292,6 +298,16 @@ func (a *App) Overview(ctx context.Context) (OverviewView, error) {
 				}
 			}
 		}
+	}
+
+	// Money owed and what expires soon, a few at most.
+	if acctErr == nil {
+		items := accountTodo(acct)
+		if len(items) > 4 {
+			items = append(items[:3], OverviewItem{Level: "warn", Kind: "account", Action: "去看看",
+				Title: fmt.Sprintf("还有 %d 项续费提醒", len(items)-3), Meta: "云服务器 → 账户和续费"})
+		}
+		v.Todo = append(v.Todo, items...)
 	}
 
 	if t := a.updateTodo(); t != nil {

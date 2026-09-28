@@ -49,17 +49,21 @@ func New(id, secret string) *Client {
 // Products Call knows the endpoints of, and the API versions this
 // package was written against.
 const (
-	ProductECS  = "ecs"       // 云服务器 ECS
-	ProductSWAS = "swas-open" // 轻量应用服务器
-	ProductCMS  = "cms"       // 云监控
-	ProductDNS  = "alidns"    // 云解析 DNS
-	ProductCDN  = "cdn"       // CDN
+	ProductECS    = "ecs"        // 云服务器 ECS
+	ProductSWAS   = "swas-open"  // 轻量应用服务器
+	ProductCMS    = "cms"        // 云监控
+	ProductDNS    = "alidns"     // 云解析 DNS
+	ProductCDN    = "cdn"        // CDN
+	ProductBSS    = "bssopenapi" // 费用中心
+	ProductDomain = "domain"     // 域名
 
-	VersionECS  = "2014-05-26"
-	VersionSWAS = "2020-06-01"
-	VersionCMS  = "2019-01-01"
-	VersionDNS  = "2015-01-09"
-	VersionCDN  = "2018-05-10"
+	VersionECS    = "2014-05-26"
+	VersionSWAS   = "2020-06-01"
+	VersionCMS    = "2019-01-01"
+	VersionDNS    = "2015-01-09"
+	VersionCDN    = "2018-05-10"
+	VersionBSS    = "2017-12-14"
+	VersionDomain = "2018-01-29"
 )
 
 // defaultRegion is where region-wide questions (which regions exist) go.
@@ -85,6 +89,10 @@ func DefaultEndpoint(product, region string) string {
 		return "https://alidns.aliyuncs.com"
 	case ProductCDN:
 		return "https://cdn.aliyuncs.com"
+	case ProductBSS:
+		return "https://business.aliyuncs.com"
+	case ProductDomain:
+		return "https://domain.aliyuncs.com"
 	case "dysmsapi":
 		return "https://dysmsapi.aliyuncs.com"
 	}
@@ -299,6 +307,10 @@ func Policy(product string) string {
 		return "AliyunDNSFullAccess"
 	case ProductCDN:
 		return "AliyunCDNFullAccess"
+	case ProductBSS:
+		return "AliyunBSSReadOnlyAccess"
+	case ProductDomain:
+		return "AliyunDomainReadOnlyAccess"
 	case "dysmsapi":
 		return "AliyunDysmsFullAccess"
 	}
@@ -317,6 +329,10 @@ func productName(product string) string {
 		return "云解析 DNS"
 	case ProductCDN:
 		return "CDN"
+	case ProductBSS:
+		return "费用中心"
+	case ProductDomain:
+		return "域名"
 	}
 	return product
 }

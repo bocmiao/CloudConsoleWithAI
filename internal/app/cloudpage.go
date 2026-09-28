@@ -195,7 +195,7 @@ func cloudMetrics(ctx context.Context, c *tencent.Client, s tencent.Server) ([]C
 type CloudRequest struct {
 	Instance string `json:"instance"`
 	Region   string `json:"region"`
-	Op       string `json:"op"` // start, stop, reboot, snapshot, firewall_open, firewall_close
+	Op       string `json:"op"` // start, stop, reboot, snapshot, firewall_open, firewall_close, renew_on, renew_off
 	// For a snapshot.
 	Name string `json:"name,omitempty"`
 	// For a firewall rule.
@@ -251,6 +251,20 @@ func (a *App) ProposeCloud(ctx context.Context, req CloudRequest) (PlanView, err
 		reason = "快照是系统盘的整盘备份，大改之前做一个，出问题可以在腾讯云控制台回滚到这个时刻。不影响运行。"
 		if s.Kind == tencent.CVM {
 			reason += "云服务器的快照按容量收费。"
+		}
+	case "renew_on", "renew_off":
+		if s.ChargeType != "PREPAID" {
+			return PlanView{}, userErr("%s 是按量计费的，没有续费这回事", name)
+		}
+		capability = "cloud.renew.set"
+		if req.Op == "renew_on" {
+			params["auto"] = "on"
+			title, summary = "开启自动续费："+name, "把 "+name+" 改为到期前自动续费"
+			reason = fmt.Sprintf("%s开启后到期前会自动从腾讯云账户余额扣费续费一个月，免得忘了续费被停机、数据被回收。请确保账户里有足够余额。", expiresText(s.ExpiredTime))
+		} else {
+			params["auto"] = "off"
+			title, summary = "关闭自动续费："+name, "把 "+name+" 改为手动续费"
+			reason = "关闭后到期前需要自己去续费，否则到期会停机，一段时间后数据被回收。不打算继续用这台服务器时再关闭。"
 		}
 	case "firewall_open", "firewall_close":
 		port := strings.TrimSpace(req.Port)

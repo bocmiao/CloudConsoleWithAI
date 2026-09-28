@@ -97,6 +97,8 @@ func applyCloud(ctx context.Context, env *Env, r Resolved, progress Progress) Ou
 			return applySnapshot(ctx, env, r.Values, out, report)
 		case "power_start", "power_stop", "power_reboot":
 			return applyPower(ctx, env, strings.TrimPrefix(r.Impl.Cloud, "power_"), r.Values, out, report)
+		case "renew":
+			return applyRenew(ctx, env, r.Values, out, report)
 		case "eo_purge":
 			return applyPurge(ctx, env, r.Values, out, report)
 		case "eo_prefetch":
@@ -154,6 +156,8 @@ func undoCloud(ctx context.Context, env *Env, r Resolved, undo map[string]string
 			err = undoFirewall(ctx, env.Cloud, undo)
 		case "firewall_tighten":
 			err = undoFirewallTighten(ctx, env.Cloud, undo)
+		case "renew":
+			err = undoRenew(ctx, env.Cloud, undo)
 		case "power_start", "power_stop":
 			op := "StopInstances"
 			if r.Impl.Cloud == "power_stop" {

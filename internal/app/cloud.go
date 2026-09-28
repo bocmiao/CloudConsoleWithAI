@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bocmiao/CloudConsoleWithAI/internal/geoip"
@@ -18,10 +19,11 @@ import (
 // cloudCache keeps the instance list for a few minutes: listing every
 // region of two products takes a few dozen calls.
 type cloudCache struct {
-	mu   sync.Mutex
-	at   time.Time
-	list []tencent.Server
-	errs []string
+	mu    sync.Mutex
+	at    time.Time
+	list  []tencent.Server
+	errs  []string
+	stale atomic.Bool // a checklist step changed a server: list again
 }
 
 const cloudCacheTTL = 5 * time.Minute
@@ -49,7 +51,7 @@ func (a *App) TencentServers(ctx context.Context, refresh bool) (CloudServers, e
 	}
 	a.cloud.mu.Lock()
 	defer a.cloud.mu.Unlock()
-	if refresh || a.cloud.at.IsZero() || time.Since(a.cloud.at) > cloudCacheTTL {
+	if a.cloud.stale.Swap(false) || refresh || a.cloud.at.IsZero() || time.Since(a.cloud.at) > cloudCacheTTL {
 		ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
 		list, errs := c.Servers(ctx)

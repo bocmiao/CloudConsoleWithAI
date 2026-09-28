@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bocmiao/CloudConsoleWithAI/internal/actions"
@@ -133,10 +134,11 @@ func (a *App) TestAliyun(ctx context.Context) (string, error) {
 
 // aliCache keeps the instance list for a few minutes, as for Tencent Cloud.
 type aliCache struct {
-	mu   sync.Mutex
-	at   time.Time
-	list []aliyun.Server
-	errs []string
+	mu    sync.Mutex
+	at    time.Time
+	list  []aliyun.Server
+	errs  []string
+	stale atomic.Bool // a checklist step changed a server: list again
 }
 
 // AliServer is a 阿里云 instance, in the shape the 云服务器 page shows.
@@ -185,7 +187,7 @@ func (a *App) AliyunServers(ctx context.Context, refresh bool) (AliServers, erro
 	}
 	a.aliCloud.mu.Lock()
 	defer a.aliCloud.mu.Unlock()
-	if refresh || a.aliCloud.at.IsZero() || time.Since(a.aliCloud.at) > cloudCacheTTL {
+	if a.aliCloud.stale.Swap(false) || refresh || a.aliCloud.at.IsZero() || time.Since(a.aliCloud.at) > cloudCacheTTL {
 		ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
 		list, errs := c.Servers(ctx)
@@ -396,6 +398,23 @@ func (a *App) ProposeAliyun(ctx context.Context, req CloudRequest) (PlanView, er
 		reason = "快照是系统盘的整盘备份，大改之前做一个，出问题可以在阿里云控制台回滚到这个时刻。不影响运行。"
 		if s.Kind == aliyun.KindECS {
 			reason += "ECS 的快照按容量收费。"
+		}
+	case "renew_on", "renew_off":
+		if s.ChargeType != "PREPAID" {
+			return PlanView{}, userErr("%s 是按量付费的，没有续费这回事", name)
+		}
+		if s.Kind != aliyun.KindECS {
+			return PlanView{}, userErr("阿里云轻量应用服务器的自动续费请在阿里云控制台设置")
+		}
+		capability = "aliyun.renew.set"
+		if req.Op == "renew_on" {
+			params["auto"] = "on"
+			title, summary = "开启自动续费："+name, "把 "+name+" 改为到期前自动续费"
+			reason = fmt.Sprintf("%s开启后到期前会自动从阿里云账户余额扣费续费一个月，免得忘了续费被停机、数据被释放。请确保账户里有足够余额。", expiresText(s.ExpiredTime))
+		} else {
+			params["auto"] = "off"
+			title, summary = "关闭自动续费："+name, "把 "+name+" 改为手动续费"
+			reason = "关闭后到期前需要自己去续费，否则到期会停机，一段时间后数据被释放。不打算继续用这台服务器时再关闭。"
 		}
 	case "firewall_open", "firewall_close":
 		port := strings.TrimSpace(req.Port)

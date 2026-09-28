@@ -75,6 +75,13 @@ func (a *App) proposePlan(ctx context.Context, actor string, serverID int64, tit
 		if steps[i].Capability == freeCapability {
 			a.vetFree(ctx, sv, steps, i)
 		}
+		// SSH stays open to the account Miao Panel logs in with.
+		if steps[i].Capability == "ssh.harden" {
+			if steps[i].Params == nil {
+				steps[i].Params = map[string]any{}
+			}
+			steps[i].Params["login_user"] = sv.Username
+		}
 	}
 	a.fillRealIP(steps)
 	if err := a.fillSiteDiffs(ctx, sv, steps); err != nil {

@@ -51,7 +51,14 @@ const systemPrompt = `你是 Miao Panel 里的服务器运维助手。用户可�
 - tencent_servers 看所有实例（到期时间、流量包、对应的 Miao Panel 服务器），tencent_server_detail 看防火墙、快照和云监控；
 - 能执行：cloud.firewall.open / cloud.firewall.close（腾讯云防火墙或安全组）、cloud.snapshot.create（整盘快照）、cloud.server.reboot / stop / start。
   清单的 server_id 填对应的 Miao Panel 服务器编号，没有就填 0；
+- CVM 的安全组里有「所有端口对所有人开放」的规则时，可以用 cloud.firewall.tighten 收紧：只保留 80/443 对所有人开放，SSH 和面板端口只允许 admin_cidr（用户自己的公网 IP/32，要先问用户）访问；
+  group 填 tencent_servers 返回的安全组，ssh_port、panel_port 从服务器画像里读。会让其他端口上的服务对外不可用，summary 里要说明；
 - 重启、关机或其他大改动前，建议先加一步 cloud.snapshot.create；到期不足 15 天、流量包用量超过 80% 要主动提醒用户。
+
+云账号的余额、续费和域名到期：用 cloud_account。
+- 包年包月的服务器快到期又没开自动续费时，可以用 cloud.renew.set（腾讯云）或 aliyun.renew.set（阿里云 ECS）开启自动续费（auto=on），开启后到期前自动从余额扣费续费一个月；
+  阿里云轻量应用服务器的自动续费、手动续费（付款）、充值、域名续费都涉及付款，你和 Miao Panel 都不能做，告诉用户去云控制台「续费管理」或「费用中心」操作；
+- 余额不足、已欠费、服务器或域名 7 天内到期要放在回答最前面提醒。
 
 阿里云服务器（轻量应用服务器、云服务器 ECS）：
 - aliyun_servers 不带参数看所有实例（到期、自动续费、流量包、对应的 Miao Panel 服务器），带 instance 和 region 看一台的防火墙、快照和 24 小时监控；
@@ -64,11 +71,16 @@ aliyun.dns.record.add / modify / delete / status（record_id 用 aliyun_dns 返�
 EdgeOne 是腾讯云的，阿里云云解析里的域名要接 EdgeOne 得先把域名的 DNS 换到 DNSPod，或者在 EdgeOne 用 NS 接入。
 阿里云 CDN：aliyun_cdn 看加速域名；网站改了静态文件访客还看到旧的，用 aliyun.cdn.purge 刷新（url 指定网址，dir 整个目录），大文件发布前可以 aliyun.cdn.prefetch 预热。
 
+Miao Panel 自己的记录：recent_changes 看最近做过的修改和结果（出问题时先看是不是刚改过什么），reminders 看通知页的日报和提醒，
+1Panel 服务器的数据库用 panel_databases 查。
+
 网站访问量（PV、UV、独立 IP、地区、访问的页面和目录、来源、爬虫、状态码、设备）和可疑 IP：用 site_visits，可以看全部网站合计，也可以用 site 只看一个网站。
 - 经过 EdgeOne 的网站用 source=edgeone（EdgeOne 离线日志：每个请求都在，访客 IP 真实）；没有经过 EdgeOne 的网站给 server_id 看服务器日志。
   服务器日志里访客 IP 是 EdgeOne 节点时（结果里会提示），那台服务器的 UV、IP、地区和风险 IP 都不准，不要据此封禁；
 - 风险 IP：看评分和理由（扫描敏感路径、攻击代码、猜密码、频率过高、冒充搜索引擎），结合它访问了什么、归属地和时间段判断；
   已验证的搜索引擎爬虫、EdgeOne 节点、内网地址不要封禁。要封禁时用 eo.ip.block（网站经过 EdgeOne 时），把同一批 IP 一次写进 ips；
+- 网站经过 EdgeOne、服务器日志里的访客 IP 却都是 EdgeOne 节点时：清单里先 eo.clientip.header（EdgeOne 回源带上访客 IP，domain 填站点），
+  再 nginx.realip（server_id 填那台服务器，让 Nginx 日志记录真实访客 IP）；两步的请求头名称由 Miao Panel 自动生成，不用填；
 - 有「不该能访问却返回了 200 的敏感文件」（如 /.env、/.git/、备份 .sql）要立即提醒用户：密钥或代码可能已经泄露，需要删除或禁止访问这些文件并更换密钥。
 网站访问分析（EdgeOne）：用 tencent_eo_analytics。
 - 先用 overview 看整体数据和请求最多的时段；要解释变化（例如「流量为什么涨了」）时，在变化的时段和之前正常的时段分别用 top 查 url、ip、country、ua、referer、status，
@@ -264,6 +276,31 @@ func (a *App) tools() map[string]ai.Tool {
 				"轻量服务器本月流量包用量、CVM 安全组，以及对应的 Miao Panel 服务器编号。结果缓存 5 分钟，refresh=true 强制刷新。",
 			Schema: obj(map[string]any{"refresh": map[string]any{"type": "boolean"}}),
 		}, Run: a.toolTencentServers},
+		{Def: ai.ToolDef{
+			Name: "cloud_account",
+			Description: "腾讯云和阿里云账号本身（只读）：账户可用余额和欠费、所有包年包月服务器的到期日期、剩余天数和是否自动续费、在云账号注册的域名的到期日期，" +
+				"以及需要注意的（快到期又不会自动续费、已过期、余额不足以自动续费）。用户问「钱够不够」「什么快到期了」「要不要续费」时用它。refresh=true 重新读取。",
+			Schema: obj(map[string]any{"refresh": map[string]any{"type": "boolean"}}),
+		}, Run: a.toolCloudAccount},
+		{Def: ai.ToolDef{
+			Name:        "panel_databases",
+			Description: "列出 1Panel 服务器上的 MySQL / MariaDB 应用和其中的数据库（只读）：数据库名、用户、允许从哪里连接、创建时间、备注。新建用 mysql.db.create，删除用 mysql.db.delete，备份用 backup.create 加 database 参数。",
+			Schema:      obj(map[string]any{"server_id": serverIDProp}, "server_id"),
+		}, Run: a.toolPanelDatabases},
+		{Def: ai.ToolDef{
+			Name: "recent_changes",
+			Description: "最近通过 Miao Panel 做过的修改（只读）：每一步的时间、内容、服务器、结果（成功、失败、已自动恢复、已撤销）、由谁发起、失败原因，" +
+				"还没执行的清单，以及最近的设置变更。用户问「最近改过什么」「刚才那一步成功了吗」「是不是刚才的修改出了问题」时先用它。server_id 只看一台服务器。",
+			Schema: obj(map[string]any{
+				"server_id": map[string]any{"type": "integer", "description": "只看这台服务器；不填看全部"},
+				"limit":     map[string]any{"type": "integer", "description": "看最近多少条，默认 20，最多 50"},
+			}),
+		}, Run: a.toolRecentChanges},
+		{Def: ai.ToolDef{
+			Name:        "reminders",
+			Description: "「通知」页（只读）：最近的日报和提醒（高风险 IP、敏感文件被下载、证书、续费和余额、自动封禁、网站和服务器故障），是否已读，以及通知和推送设置。",
+			Schema:      obj(map[string]any{"limit": map[string]any{"type": "integer", "description": "看最近几条，默认 8，最多 20"}}),
+		}, Run: a.toolReminders},
 		{Def: ai.ToolDef{
 			Name:        "aliyun_dns",
 			Description: "阿里云云解析 DNS（只读）。不带参数：列出域名；带 domain：这个域名的所有解析记录（id、主机记录、类型、值、线路、TTL、状态、备注）。",

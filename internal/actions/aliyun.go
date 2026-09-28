@@ -73,6 +73,8 @@ func applyAliyun(ctx context.Context, env *Env, r Resolved, progress Progress) O
 		switch r.Impl.Cloud {
 		case "ali_power_start", "ali_power_stop", "ali_power_reboot":
 			return aliPower(ctx, env, strings.TrimPrefix(r.Impl.Cloud, "ali_power_"), v, out, report)
+		case "ali_renew":
+			return aliRenew(ctx, env, v, out, report)
 		case "ali_snapshot":
 			return aliSnapshot(ctx, env, v, out, report)
 		case "ali_firewall_open":
@@ -112,6 +114,8 @@ func undoAliyun(ctx context.Context, env *Env, r Resolved, undo map[string]strin
 			err = c.Power(ctx, undo["region"], undo["instance"], "stop")
 		case "ali_power_stop":
 			err = c.Power(ctx, undo["region"], undo["instance"], "start")
+		case "ali_renew":
+			err = c.SetAutoRenew(ctx, undo["region"], undo["instance"], undo["auto"] == "on")
 		case "ali_firewall_open", "ali_firewall_close":
 			err = aliUndoFirewall(ctx, c, undo)
 		case "ali_dns_add", "ali_dns_modify", "ali_dns_delete", "ali_dns_status", "ali_dns_set":

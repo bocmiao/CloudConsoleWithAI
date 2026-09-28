@@ -370,6 +370,9 @@ func (a *App) preloadRound(ctx context.Context) {
 			}
 		})
 	}
+	if a.hasCloud() {
+		run(func() { wait(warmPage(ctx, a, "page_account", a.CloudAccount)) })
+	}
 	if a.tencentClient() != nil {
 		run(func() { wait(warmPage(ctx, a, "page_eo_sites", a.EOSites)) })
 		run(func() { wait(warmPage(ctx, a, "page_blocked", a.Blocked)) })

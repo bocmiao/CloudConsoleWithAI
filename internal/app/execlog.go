@@ -64,6 +64,13 @@ func (a *App) finishExec(e *store.ExecLog, status, output string) {
 	}
 	if e.Kind != store.ExecRead {
 		a.PagesChanged() // the pages show what it changed
+		// A cloud server changed: its list is read again too.
+		if strings.HasPrefix(e.Capability, "cloud.") {
+			a.cloud.stale.Store(true)
+		}
+		if strings.HasPrefix(e.Capability, "aliyun.") {
+			a.aliCloud.stale.Store(true)
+		}
 	}
 }
 

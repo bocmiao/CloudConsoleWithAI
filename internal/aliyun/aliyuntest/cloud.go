@@ -56,6 +56,10 @@ type Cloud struct {
 
 	CDN   []*CDNDomain
 	Tasks []*CDNTask
+
+	// The account: its balance in yuan and the domains registered with it.
+	Balance    float64
+	Registered []aliyun.RegisteredDomain
 }
 
 // ECSInstance is an ECS instance held by the fake.
@@ -211,10 +215,11 @@ func (f *Cloud) Client() *aliyun.Client {
 var versions = map[string]string{
 	aliyun.ProductECS: aliyun.VersionECS, aliyun.ProductSWAS: aliyun.VersionSWAS, aliyun.ProductCMS: aliyun.VersionCMS,
 	aliyun.ProductDNS: aliyun.VersionDNS, aliyun.ProductCDN: aliyun.VersionCDN,
+	aliyun.ProductBSS: aliyun.VersionBSS, aliyun.ProductDomain: aliyun.VersionDomain,
 }
 
 // global products take no region.
-var global = map[string]bool{aliyun.ProductDNS: true, aliyun.ProductCDN: true}
+var global = map[string]bool{aliyun.ProductDNS: true, aliyun.ProductCDN: true, aliyun.ProductBSS: true, aliyun.ProductDomain: true}
 
 // specs are the parameters of each action the fake serves, as in the
 // official API metadata; "!" marks required ones and ".N." stands for
@@ -233,9 +238,17 @@ var specs = map[string]map[string]string{
 		"AuthorizeSecurityGroup": "RegionId! SecurityGroupId! ClientToken Permissions.N.IpProtocol Permissions.N.PortRange Permissions.N.SourceCidrIp " +
 			"Permissions.N.Ipv6SourceCidrIp Permissions.N.SourceGroupId Permissions.N.SourcePrefixListId Permissions.N.Policy Permissions.N.Priority " +
 			"Permissions.N.Description Permissions.N.NicType",
-		"RevokeSecurityGroup": "RegionId! SecurityGroupId! ClientToken SecurityGroupRuleId.N",
-		"DescribeSnapshots":   "RegionId! DiskId InstanceId MaxResults NextToken SnapshotType SourceDiskType Status",
-		"CreateSnapshot":      "DiskId! SnapshotName Description RetentionDays",
+		"RevokeSecurityGroup":              "RegionId! SecurityGroupId! ClientToken SecurityGroupRuleId.N",
+		"DescribeSnapshots":                "RegionId! DiskId InstanceId MaxResults NextToken SnapshotType SourceDiskType Status",
+		"CreateSnapshot":                   "DiskId! SnapshotName Description RetentionDays",
+		"ModifyInstanceAutoRenewAttribute": "RegionId! InstanceId! Duration AutoRenew RenewalStatus PeriodUnit",
+	},
+	aliyun.ProductBSS: {
+		"QueryAccountBalance": "",
+	},
+	aliyun.ProductDomain: {
+		"QueryDomainList": "PageNum! PageSize! ProductDomainType OrderKeyType OrderByType StartExpirationDate EndExpirationDate " +
+			"StartRegistrationDate EndRegistrationDate DomainName QueryType GroupId Lang UserClientIp",
 	},
 	aliyun.ProductSWAS: {
 		"ListRegions":                  "AcceptLanguage",
@@ -291,6 +304,7 @@ var maxPage = map[string]int{
 	"alidns DescribeDomainRecords":           500,
 	"cdn DescribeUserDomains":                500,
 	"cdn DescribeRefreshTasks":               100,
+	"domain QueryDomainList":                 100,
 }
 
 var common = map[string]bool{
@@ -450,6 +464,20 @@ func (f *Cloud) serve(product, action, region string, q map[string]string) (map[
 		return f.serveCMS(action, region, q)
 	case aliyun.ProductDNS:
 		return f.serveDNS(action, q)
+	case aliyun.ProductBSS:
+		amount := strconv.FormatFloat(f.Balance, 'f', 2, 64)
+		return map[string]any{"Code": "Success", "Message": "Successful!", "Success": true, "Data": map[string]any{
+			"AvailableAmount": amount, "AvailableCashAmount": amount, "CreditAmount": "0.00", "MybankCreditAmount": "0.00",
+			"Currency": "CNY", "QuotaLimit": "0.00"}}, nil
+	case aliyun.ProductDomain:
+		from, to := f.pageNumber(map[string]string{"PageSize": q["PageSize"], "PageNumber": q["PageNum"]}, 100, len(f.Registered))
+		list := []map[string]any{}
+		for _, d := range f.Registered[from:to] {
+			list = append(list, map[string]any{"DomainName": d.Name, "ExpirationDate": d.Expires + " 23:59:59", "DomainStatus": "3",
+				"RegistrationDate": "2020-01-01 10:00:00", "ProductId": "2"})
+		}
+		return map[string]any{"TotalItemNum": len(f.Registered), "CurrentPageNum": q["PageNum"], "PageSize": q["PageSize"],
+			"Data": map[string]any{"Domain": list}}, nil
 	}
 	return f.serveCDN(action, q)
 }

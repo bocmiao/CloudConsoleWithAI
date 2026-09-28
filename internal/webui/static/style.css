@@ -1339,3 +1339,14 @@ button.wb-site:hover:not(:disabled) { background: var(--hover); }
 .install-row { display: flex; gap: 10px; }
 .install-port { width: 96px; flex: none; }
 .install-check { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+/* 云服务器 › 账户和续费: balances, and what expires soonest */
+.tiles.acct-tiles { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); margin-bottom: 12px; }
+.acct-tiles .tile .sub a { color: var(--link); text-decoration: none; }
+.acct-due .row { gap: 10px; }
+.acct-name { min-width: 0; }
+.acct-more { margin: -4px 0 20px 4px; }
+@media (max-width: 720px) {
+  .acct-due .row { flex-wrap: wrap; }
+  .acct-due .row .acct-name { flex-basis: calc(100% - 24px); }
+}

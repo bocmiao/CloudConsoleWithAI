@@ -55,6 +55,11 @@ type Fake struct {
 	// FailAction makes calls to one "service Action" fail.
 	FailAction string
 
+	// The account: its balance in fen, what it owes, and the domains
+	// registered with it.
+	BalanceFen, OweFen float64
+	Registered         []tencent.RegisteredDomain
+
 	// Servers: a Lighthouse instance and a CVM instance in ap-guangzhou.
 	Instances map[string]*Instance
 	Firewall  map[string][]tencent.FirewallRule // by instance or security group
@@ -91,6 +96,8 @@ type Fake struct {
 // Instance is a server held by the fake.
 type Instance struct {
 	ID, Name, State, IP, Group, DiskID string
+	RenewFlag                          string // NOTIFY_AND_MANUAL_RENEW when empty
+	ExpiresIn                          time.Duration
 	pending                            string // state reached on the next look
 }
 

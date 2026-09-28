@@ -135,6 +135,7 @@ func (s *Server) routes() {
 	api("GET /api/aliyun/servers", s.aliyunServers)
 	api("GET /api/aliyun/servers/{region}/{instance}", s.aliyunDetail)
 	api("POST /api/aliyun/servers/plan", s.aliyunPlan)
+	api("GET /api/cloud/account", s.cloudAccount)
 	api("POST /api/servers/{id}/security/plan", s.serverSecurityPlan)
 	api("GET /api/servers/{id}/databases", s.serverDatabases)
 	api("GET /api/update", s.updateStatus)
@@ -885,6 +886,11 @@ func (s *Server) aliyunServers(_ http.ResponseWriter, r *http.Request) (any, err
 
 func (s *Server) aliyunDetail(w http.ResponseWriter, r *http.Request) (any, error) {
 	v, m, err := s.app.AliyunDetailPage(r.Context(), r.PathValue("region"), r.PathValue("instance"), pageRead(r))
+	return pageAnswer(w, v, m, err)
+}
+
+func (s *Server) cloudAccount(w http.ResponseWriter, r *http.Request) (any, error) {
+	v, m, err := s.app.CloudAccountPage(r.Context(), pageRead(r))
 	return pageAnswer(w, v, m, err)
 }
 

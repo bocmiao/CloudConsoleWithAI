@@ -57,8 +57,8 @@ func (f *Fake) serveMore(w http.ResponseWriter, service, action, region string, 
 			inst := instance(i.ID)
 			m := map[string]any{"InstanceId": inst.ID, "InstanceName": inst.Name, "InstanceState": inst.State, "CPU": 2, "Memory": 4,
 				"SystemDisk": map[string]any{"DiskId": inst.DiskID, "DiskSize": 60}, "InternetAccessible": map[string]any{"InternetMaxBandwidthOut": 6},
-				"OsName": "Ubuntu Server 24.04 LTS 64bit", "ExpiredTime": time.Now().Add(10 * 24 * time.Hour).UTC().Format(time.RFC3339),
-				"RenewFlag": "NOTIFY_AND_MANUAL_RENEW", "InstanceChargeType": "PREPAID"}
+				"OsName": "Ubuntu Server 24.04 LTS 64bit", "ExpiredTime": time.Now().Add(expiresIn(inst)).UTC().Format(time.RFC3339),
+				"RenewFlag": renewFlag(inst), "InstanceChargeType": "PREPAID"}
 			if service == "lighthouse" {
 				m["PublicAddresses"], m["Zone"] = []string{inst.IP}, "ap-guangzhou-3"
 			} else {
@@ -67,6 +67,33 @@ func (f *Fake) serveMore(w http.ResponseWriter, service, action, region string, 
 			list = append(list, m)
 		}
 		ok(w, map[string]any{"TotalCount": len(list), "InstanceSet": list})
+	case "lighthouse ModifyInstancesRenewFlag", "cvm ModifyInstancesRenewFlag":
+		i := f.Instances[firstID()]
+		flag := str("RenewFlag")
+		if i == nil || !here {
+			fail(w, "InvalidInstanceId.NotFound", "实例不存在。")
+			return true
+		}
+		if flag != tencent.RenewAuto && flag != tencent.RenewManual && flag != "DISABLE_NOTIFY_AND_MANUAL_RENEW" {
+			fail(w, "InvalidParameterValue", "RenewFlag 取值不对。")
+			return true
+		}
+		i.RenewFlag = flag
+		ok(w, nil)
+	case "billing DescribeAccountBalance":
+		ok(w, map[string]any{"Balance": int64(f.BalanceFen), "RealBalance": f.BalanceFen, "CashAccountBalance": f.BalanceFen,
+			"OweAmount": f.OweFen, "FreezeAmount": 0, "Uin": 100000000001})
+	case "domain DescribeDomainNameList":
+		var set []map[string]any
+		for _, d := range f.Registered {
+			auto := 0
+			if d.AutoRenew {
+				auto = 1
+			}
+			set = append(set, map[string]any{"DomainId": "domain-" + d.Name, "DomainName": d.Name, "AutoRenew": auto,
+				"CreationDate": "2020-01-01 10:00:00", "ExpirationDate": d.Expires + " 23:59:59", "Tld": ".com", "BuyStatus": "ok"})
+		}
+		ok(w, map[string]any{"TotalCount": len(set), "DomainSet": set})
 	case "lighthouse DescribeInstancesTrafficPackages":
 		ok(w, map[string]any{"InstanceTrafficPackageSet": []map[string]any{{"InstanceId": "lhins-abc12345",
 			"TrafficPackageSet": []map[string]any{{"TrafficUsed": 900 << 30, "TrafficPackageTotal": 1000 << 30}}}}})
@@ -326,4 +353,18 @@ type SentSMS struct {
 type COSUsage struct {
 	StorageMB      float64
 	TrafficPerHour []float64
+}
+
+func renewFlag(i *Instance) string {
+	if i.RenewFlag == "" {
+		return tencent.RenewManual
+	}
+	return i.RenewFlag
+}
+
+func expiresIn(i *Instance) time.Duration {
+	if i.ExpiresIn == 0 {
+		return 10 * 24 * time.Hour
+	}
+	return i.ExpiresIn
 }

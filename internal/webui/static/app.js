@@ -2290,7 +2290,7 @@ const PALETTE_PAGES = [
   { stats: ['logs', 'overview'], label: '访问统计', icon: 'chart', keys: 'stats visits pv uv 统计 流量' },
   { stats: ['logs', 'security'], label: '安全', icon: 'shield', keys: 'security 封禁 ip 攻击' },
   { tab: 'certs', label: '证书', icon: 'lock', keys: 'certs ssl https 证书 续签' },
-  { tab: 'cloud', label: '云服务器', icon: 'cloud', keys: 'cloud lighthouse cvm ecs aliyun 阿里云 腾讯云 轻量 云服务器 实例 防火墙 安全组 快照 开机 关机 重启 到期' },
+  { tab: 'cloud', label: '云服务器', icon: 'cloud', keys: 'cloud lighthouse cvm ecs aliyun 阿里云 腾讯云 轻量 云服务器 实例 防火墙 安全组 快照 开机 关机 重启 到期 续费 自动续费 余额 欠费 充值 域名到期' },
   { stats: ['eo'], label: 'EdgeOne', icon: 'bolt', keys: 'edgeone eo cdn 缓存 cache' },
   { tab: 'dns', label: '解析', icon: 'globe', keys: 'dns dnspod 解析 域名' },
   { tab: 'storage', label: '存储', icon: 'bucket', keys: 'cos storage bucket 存储桶' },
@@ -2426,6 +2426,7 @@ const HomePage = {
       else if (t.kind === 'notice') emit('go', 'inbox');
       else if (t.kind === 'monitor') emit('ask', `${t.title}（${t.meta}）。帮我排查原因，能修的话给我一份清单。`);
       else if (t.kind === 'update') emit('go', 'settings');
+      else if (t.kind === 'account') emit('go', 'cloud');
       else if (t.kind === 'server') {
         const s = ov.value.servers.find(x => x.id === t.id);
         emit('ask', `服务器 ${s ? s.name : ''} 提示「${s ? s.note : ''}」，帮我看看是怎么回事，要不要处理，怎么处理？`);
@@ -2910,6 +2911,14 @@ const cloudKind = k => ({ lighthouse: '轻量应用服务器', cvm: '云服务�
 // A lightweight server has its own firewall; the others use a security group.
 const cloudLight = k => k === 'lighthouse' || k === 'swas';
 const CLOUD_NAMES = { tencent: '腾讯云', aliyun: '阿里云' };
+// Where to pay: renewing, domains and topping up are done in the cloud's
+// own console.
+const CLOUD_CONSOLE = {
+  tencent: { renew: 'https://console.cloud.tencent.com/account/renew', domain: 'https://console.cloud.tencent.com/domain', recharge: 'https://console.cloud.tencent.com/expense/recharge' },
+  aliyun: { renew: 'https://usercenter2.aliyun.com/renew/manual', domain: 'https://dc.console.aliyun.com/next/index#/domain/list/all-domain', recharge: 'https://usercenter2.aliyun.com/finance/fund-management/recharge' },
+};
+const money = v => (v < 0 ? '-¥' : '¥') + Math.abs(Number(v || 0)).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const dueWords = d => d < 0 ? '已过期' : d === 0 ? '今天到期' : `${d} 天后到期`;
 
 const CloudPage = {
   // configured: Tencent Cloud's keys are set; aliyun: 阿里云's.
@@ -2922,6 +2931,7 @@ const CloudPage = {
     const plan = ref(null), planning = ref(false), formError = ref('');
     const fw = reactive({ open: false, port: '', protocol: 'TCP', who: 'all', cidr: '', description: '' });
     const snap = reactive({ open: false, name: '' });
+    const account = ref(null), aLoading = ref(false), aError = ref(''), showAll = ref(false);
     let seq = 0;
 
     const anyCloud = computed(() => props.configured || props.aliyun);
@@ -2947,6 +2957,31 @@ const CloudPage = {
       else list.value = out;
       loading.value = false;
     }
+    // The accounts' money and what expires: kept ready by Miao Panel.
+    let accSeq = 0;
+    async function loadAccount(force) {
+      if (!anyCloud.value) return;
+      const n = ++accSeq;
+      aLoading.value = true; aError.value = '';
+      try {
+        const d = await pageGet('/api/cloud/account', { force: force === true, fresh: d => { if (n === accSeq) account.value = d; } });
+        if (n === accSeq) account.value = d;
+      } catch (e) { if (n === accSeq) aError.value = e.message; }
+      finally { if (n === accSeq) aLoading.value = false; }
+    }
+    // Everything prepaid and registered, soonest first; what needs the user.
+    const dues = computed(() => {
+      const a = account.value;
+      if (!a) return [];
+      return [...a.servers.map(x => ({ ...x, type: 'server' })), ...a.domains.map(x => ({ ...x, type: 'domain', kind: '域名' }))]
+        .sort((x, y) => x.days - y.days);
+    });
+    const attention = computed(() => dues.value.filter(x => x.level !== 'ok'));
+    const soon = computed(() => dues.value.filter(x => x.days <= 30));
+    const renewURL = x => CLOUD_CONSOLE[x.provider][x.type === 'domain' ? 'domain' : 'renew'];
+    // What needs saying about its renewal: the problem, or how it renews
+    // (unknown for 阿里云's domains).
+    const dueHow = x => x.level !== 'ok' && x.note ? x.note : x.type === 'domain' && x.provider === 'aliyun' ? '' : x.autoRenew ? '自动续费' : '手动续费';
     async function loadDetail(force) {
       const o = open.value;
       if (!o) return;
@@ -2967,9 +3002,9 @@ const CloudPage = {
     }
     function openOne(s) { open.value = { provider: s.provider || 'tencent', region: s.region, id: s.id }; detail.value = null; loadDetail(); }
     function back() { open.value = null; detail.value = null; loadList(); }
-    watch(() => props.active, v => { if (v) { if (!list.value) loadList(); if (open.value) loadDetail(); } }, { immediate: true });
+    watch(() => props.active, v => { if (v) { if (!list.value) loadList(); loadAccount(); if (open.value) loadDetail(); } }, { immediate: true });
     // Other keys, other servers: the list is read again, now or when shown.
-    watch(() => [props.configured, props.aliyun], () => { list.value = null; if (props.active) loadList(); });
+    watch(() => [props.configured, props.aliyun], () => { list.value = null; account.value = null; if (props.active) { loadList(); loadAccount(); } });
     watch(() => props.request, r => { if (r && r.id) openOne(r); }, { immediate: true });
 
     const servers = computed(() => (list.value && list.value.servers) || []);
@@ -2986,10 +3021,11 @@ const CloudPage = {
     const traffic = s => s.trafficTotal ? Math.min(100, Math.round(s.trafficUsed * 100 / s.trafficTotal)) : null;
     const trafficLevel = v => v >= 90 ? 'crit' : v >= 80 ? 'warn' : '';
 
-    async function propose(body) {
+    // A checklist for the server open, or for one in the renewal list.
+    async function propose(body, target = open.value) {
       planning.value = true; formError.value = '';
       try {
-        plan.value = await api('POST', `/api/${open.value.provider}/servers/plan`, { instance: open.value.id, region: open.value.region, ...body });
+        plan.value = await api('POST', `/api/${target.provider}/servers/plan`, { instance: target.id, region: target.region, ...body });
         fw.open = false; snap.open = false;
       } catch (e) { formError.value = e.message; if (!fw.open && !snap.open) notify(e.message, 'error'); }
       finally { planning.value = false; }
@@ -3004,6 +3040,11 @@ const CloudPage = {
     }
     function openSnap() { Object.assign(snap, { open: true, name: '' }); formError.value = ''; }
     function submitSnap() { propose({ op: 'snapshot', name: snap.name.trim() }); }
+    const autoRenew = s => s.renewFlag === 'NOTIFY_AND_AUTO_RENEW';
+    // Automatic renewal can be switched here for prepaid servers, except
+    // 阿里云's lightweight ones.
+    const canRenew = s => !!s && !!s.expiredTime && s.chargeType === 'PREPAID' && s.kind !== 'swas';
+    const renew = (on, target) => propose({ op: on ? 'renew_on' : 'renew_off' }, target || open.value);
     // Closed while it still runs: look again once it has finished.
     let gone = false;
     onUnmounted(() => { gone = true; });
@@ -3017,12 +3058,12 @@ const CloudPage = {
         try {
           const now = await api('GET', `/api/plans/${p.id}`);
           if (now.status === 'running') continue;
-          await loadList(true); loadDetail();
+          await loadList(true); loadDetail(); loadAccount();
         } catch { /* looked at again when the page opens */ }
         return;
       }
     }
-    function planDone() { loadList(true); loadDetail(); }
+    function planDone() { loadList(true); loadDetail(); loadAccount(); }
     const loginPort = r => /^(22|3389)$/.test(String(r.port)) || /\bALL\b/i.test(String(r.port));
     const metricFormat = m => v => (Math.round(v * 10) / 10) + ' ' + (m.unit === '%' ? '%' : m.unit || '');
     const snapState = s => ({ NORMAL: '可用', CREATING: '创建中', ROLLBACKING: '回滚中', FAILED: '失败' }[s.state] || s.state);
@@ -3035,7 +3076,8 @@ const CloudPage = {
     const both = computed(() => props.configured && props.aliyun);
     return { list, loading, error, open, detail, dLoading, dError, plan, planning, formError, fw, snap, servers, serverOf, inst,
       loadList, loadDetail, openOne, back, expiry, traffic, trafficLevel, power, openFirewall, submitFirewall, closeRule, openSnap, submitSnap,
-      closePlan, planDone, loginPort, metricFormat, snapState, ask, cloudState, cloudKind, cloudLight, fmtBytes, anyCloud, providerName, planServer, both, CLOUD_NAMES };
+      closePlan, planDone, loginPort, metricFormat, snapState, ask, cloudState, cloudKind, cloudLight, fmtBytes, anyCloud, providerName, planServer, both, CLOUD_NAMES,
+      account, aLoading, aError, showAll, loadAccount, dues, attention, soon, renewURL, dueHow, autoRenew, canRenew, renew, money, dueWords, CLOUD_CONSOLE };
   },
   template: `
   <div class="cloud-page">
@@ -3047,7 +3089,44 @@ const CloudPage = {
 
     <!-- The instances -->
     <template v-else-if="!open">
-      <div class="page-head"><p>{{ both ? '腾讯云和阿里云' : aliyun ? '阿里云' : '腾讯云' }}账号里的轻量应用服务器和云服务器：到期、流量包、监控、防火墙和快照。开关机、快照和防火墙的修改都会先生成一份清单，确认后才执行。</p></div>
+      <div class="page-head"><p>{{ both ? '腾讯云和阿里云' : aliyun ? '阿里云' : '腾讯云' }}账号的余额和到期，以及账号里的轻量应用服务器和云服务器：流量包、监控、防火墙和快照。开关机、自动续费、快照和防火墙的修改都会先生成一份清单，确认后才执行。</p></div>
+
+      <!-- The accounts: money and what expires -->
+      <div class="group-title group-title-row">账户和续费<fresh-note :data="account"></fresh-note><span class="grow"></span>
+        <span class="spinner inline" v-if="aLoading"></span>
+        <button class="plain icon-only" @click="loadAccount(true)" :disabled="aLoading" title="刷新" aria-label="刷新账户和续费"><ui-icon name="refresh"></ui-icon></button></div>
+      <div class="notice" v-if="aError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ aError }}<button class="plain" @click="loadAccount(true)">重试</button></div>
+      <div class="notice" v-if="aLoading && !account"><span class="spinner"></span>正在读取余额和到期时间……</div>
+      <template v-if="account">
+        <div class="tiles acct-tiles">
+          <div class="tile" v-for="b in account.balances" :key="b.provider">
+            <div class="label">{{ CLOUD_NAMES[b.provider] }}余额</div>
+            <template v-if="b.error"><div class="value tertiary">—</div><div class="sub" :title="b.error">读取失败：{{ b.error }}</div></template>
+            <template v-else>
+              <div class="value num">{{ money(b.available) }}</div>
+              <div class="sub" v-if="b.owed > 0"><span class="st-crit-text">欠费 {{ money(b.owed) }}</span> · <a :href="CLOUD_CONSOLE[b.provider].recharge" target="_blank" rel="noopener">去充值</a></div>
+              <div class="sub" v-else>可用余额 · <a :href="CLOUD_CONSOLE[b.provider].recharge" target="_blank" rel="noopener">充值</a></div>
+            </template>
+          </div>
+          <div class="tile"><div class="label"><ui-icon name="clock"></ui-icon>30 天内到期</div><div class="value num">{{ soon.length }}</div>
+            <div class="sub">{{ attention.length ? attention.length + ' 项需要处理' : soon.length ? '都会自动续费' : '包年包月的服务器和注册的域名' }}</div></div>
+        </div>
+        <div class="notice" v-for="e in account.errors" :key="e"><ui-icon name="warn" class="st-warn"></ui-icon>{{ e }}</div>
+        <div class="group acct-due" v-if="attention.length || showAll">
+          <div class="row" v-for="x in (showAll ? dues : attention)" :key="x.type + x.provider + (x.id || x.name)">
+            <span class="sdot" :class="x.level === 'ok' ? 'good' : x.level"></span>
+            <div class="grow acct-name"><div class="ellipsis">{{ x.name }}<span class="small secondary"> · {{ x.kind }}</span></div>
+              <div class="small tertiary">{{ CLOUD_NAMES[x.provider] }} · {{ x.expires }} 到期<template v-if="dueHow(x)"> · {{ dueHow(x) }}</template></div></div>
+            <span class="small nowrap" :class="x.level !== 'ok' ? 'st-' + x.level + '-text' : 'secondary'">{{ dueWords(x.days) }}</span>
+            <button class="small" v-if="x.type === 'server' && x.canSwitch && !x.autoRenew" @click="renew(true, x)" :disabled="planning">开启自动续费</button>
+            <a class="btn plain small" v-else :href="renewURL(x)" target="_blank" rel="noopener">去续费</a>
+          </div>
+        </div>
+        <div class="acct-more" v-if="dues.length > attention.length">
+          <button class="link small" @click="showAll = !showAll">{{ showAll ? '只看需要处理的' : attention.length ? '查看全部 ' + dues.length + ' 项到期时间' : '查看 ' + dues.length + ' 项到期时间（都不急）' }}</button></div>
+      </template>
+
+      <div class="group-title">服务器</div>
       <div class="stat-bar">
         <span class="small tertiary" v-if="list">{{ servers.length }} 台<span v-if="list.fetchedAt"> · 更新于 {{ new Date(list.fetchedAt).toLocaleTimeString('zh-CN', { hour12: false }) }}</span></span>
         <span class="grow"></span>
@@ -3115,7 +3194,11 @@ const CloudPage = {
           <div class="row"><span class="k">配置</span><span class="v">{{ inst.cpu }} 核 · {{ inst.memoryGB }} GB 内存 · 系统盘 {{ inst.diskGB }} GB<span v-if="inst.bandwidthMbps"> · 带宽 {{ inst.bandwidthMbps }} Mbps</span></span></div>
           <div class="row"><span class="k">系统</span><span class="v">{{ inst.os || '—' }}</span></div>
           <div class="row"><span class="k">IP</span><span class="v mono small">{{ (inst.publicIPs || []).join('、') || '—' }}<span class="tertiary" v-if="(inst.privateIPs || []).length"> · 内网 {{ inst.privateIPs.join('、') }}</span></span></div>
-          <div class="row"><span class="k">到期</span><span class="v"><span :class="expiry(inst).level ? 'st-' + expiry(inst).level + '-text' : ''">{{ expiry(inst).date ? expiry(inst).date + '（' + expiry(inst).text + '）' : expiry(inst).text || '—' }}</span></span></div>
+          <div class="row"><span class="k">到期</span><span class="v"><span :class="expiry(inst).level ? 'st-' + expiry(inst).level + '-text' : ''">{{ expiry(inst).date ? expiry(inst).date + '（' + expiry(inst).text + '）' : expiry(inst).text || '—' }}</span></span>
+            <template v-if="inst.expiredTime">
+              <button class="plain small" v-if="canRenew(inst)" @click="renew(!autoRenew(inst))" :disabled="planning">{{ autoRenew(inst) ? '关闭自动续费' : '开启自动续费' }}</button>
+              <a class="btn plain small" :href="CLOUD_CONSOLE[inst.provider || 'tencent'].renew" target="_blank" rel="noopener">去续费</a>
+            </template></div>
           <div class="row stack" v-if="traffic(inst) != null">
             <div style="display: flex"><span>本月流量包</span><span class="secondary" style="margin-left: auto">已用 {{ fmtBytes(inst.trafficUsed) }} / {{ fmtBytes(inst.trafficTotal) }}</span></div>
             <div class="meter" :class="trafficLevel(traffic(inst))" role="meter" :aria-valuenow="traffic(inst)" aria-valuemin="0" aria-valuemax="100" aria-label="流量包用量"><div :style="{ width: traffic(inst) + '%' }"></div></div>
@@ -5416,7 +5499,7 @@ const NoticePage = {
     const data = ref(null);
     const error = ref('');
     const busy = ref('');
-    const form = reactive({ daily: true, dailyAt: '09:00', alertRisk: true, alertLeak: true, alertCert: true, alertBlock: true });
+    const form = reactive({ daily: true, dailyAt: '09:00', alertRisk: true, alertLeak: true, alertCert: true, alertRenew: true, alertBlock: true });
     const hook = reactive({ url: '', secret: '', editing: false });
     // The form follows what is saved, unless it has changes not saved yet
     // (coming back to the page reloads the list, not your edits).
@@ -5426,7 +5509,7 @@ const NoticePage = {
       data.value = v;
       if (force || !saved || formNow() === saved) {
         Object.assign(form, { daily: v.settings.daily, dailyAt: v.settings.dailyAt, alertRisk: v.settings.alertRisk, alertLeak: v.settings.alertLeak,
-          alertCert: v.settings.alertCert, alertBlock: v.settings.alertBlock });
+          alertCert: v.settings.alertCert, alertRenew: v.settings.alertRenew, alertBlock: v.settings.alertBlock });
         saved = formNow();
       }
       emit('unread', v.unread);
@@ -5498,8 +5581,9 @@ const NoticePage = {
         <div class="row"><label class="check"><input type="checkbox" v-model="form.alertRisk"> 发现新的高风险 IP（还没有封禁的）</label></div>
         <div class="row"><label class="check"><input type="checkbox" v-model="form.alertLeak"> 敏感文件（如 .env、数据库备份）被下载</label></div>
         <div class="row"><label class="check"><input type="checkbox" v-model="form.alertCert"> 证书快到期、已过期或申请失败</label></div>
+        <div class="row"><label class="check"><input type="checkbox" v-model="form.alertRenew"> 云服务器或域名快到期又不会自动续费、账户欠费</label></div>
         <div class="row"><label class="check"><input type="checkbox" v-model="form.alertBlock"> 自动封禁和解封了 IP</label></div>
-        <div class="row"><div class="grow small tertiary">提醒随统计每 20 分钟检查一次，同一个问题一周内只提醒一次（高风险 IP 一天）。日报在设定时间后的第一次检查时生成；Miao Panel 没开着就等下次打开。</div>
+        <div class="row"><div class="grow small tertiary">提醒随统计每 20 分钟检查一次，同一个问题一周内只提醒一次（高风险 IP 和欠费一天）。日报在设定时间后的第一次检查时生成；Miao Panel 没开着就等下次打开。</div>
           <button @click="reportNow" :disabled="!!busy"><span class="spinner inline" v-if="busy === 'report'"></span>现在生成一份日报</button>
           <button class="primary" @click="saveSettings" :disabled="!!busy">保存</button></div>
       </div>
