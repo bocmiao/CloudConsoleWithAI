@@ -136,6 +136,8 @@ func (s *Server) routes() {
 	api("GET /api/aliyun/servers/{region}/{instance}", s.aliyunDetail)
 	api("POST /api/aliyun/servers/plan", s.aliyunPlan)
 	api("POST /api/servers/{id}/security/plan", s.serverSecurityPlan)
+	api("GET /api/servers/{id}/databases", s.serverDatabases)
+	api("POST /api/servers/{id}/apps/plan", s.serverAppsPlan)
 	api("GET /api/visits/sources", s.visitSources)
 	api("GET /api/visits", s.getVisits)
 	api("GET /api/visits/blocked", s.blockedIPs)
@@ -902,6 +904,26 @@ func (s *Server) cloudPlan(_ http.ResponseWriter, r *http.Request) (any, error) 
 		return nil, err
 	}
 	return s.app.ProposeCloud(r.Context(), req)
+}
+
+func (s *Server) serverDatabases(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	return s.app.ServerDatabases(r.Context(), id)
+}
+
+func (s *Server) serverAppsPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	var req app.AppRequest
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.ProposeServerApps(r.Context(), id, req)
 }
 
 func (s *Server) serverSecurityPlan(_ http.ResponseWriter, r *http.Request) (any, error) {

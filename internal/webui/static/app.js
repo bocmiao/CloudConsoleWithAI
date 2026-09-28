@@ -2693,7 +2693,7 @@ const ServerOverview = {
 };
 
 const ServerApps = {
-  props: { profile: Object, collectedAt: String },
+  props: { profile: Object, collectedAt: String, server: Number, serverName: String, adapter: String },
   emits: ['ask'],
   setup(props) {
     const p = computed(() => props.profile || {});
@@ -2702,11 +2702,59 @@ const ServerApps = {
     const services = computed(() => p.value.services || { running: [], failed: [] });
     const panelApps = computed(() => (p.value.panel && p.value.panel.apps) || []);
     const runtimes = computed(() => (p.value.panel && p.value.panel.runtimes) || []);
-    return { p, programs, containers, services, panelApps, runtimes, gbText, whenText };
+
+    // Changes, each a checklist.
+    const plan = ref(null), planning = ref(false), formError = ref('');
+    async function propose(body) {
+      planning.value = true; formError.value = '';
+      try {
+        plan.value = await api('POST', `/api/servers/${props.server}/apps/plan`, body);
+        dbForm.open = false;
+        return true;
+      } catch (e) { if (dbForm.open) formError.value = e.message; else notify(e.message, 'error'); return false; }
+      finally { planning.value = false; }
+    }
+    const svc = ref('');
+    const restartService = name => propose({ op: 'service_restart', name });
+    const restartContainer = c => propose({ op: 'container_restart', name: c.name });
+
+    // MySQL on 1Panel.
+    const dbs = reactive({ apps: null, loading: false, error: '' });
+    async function loadDBs() {
+      if (props.adapter !== '1panel' || !props.server) return;
+      dbs.loading = true; dbs.error = '';
+      try { dbs.apps = await api('GET', `/api/servers/${props.server}/databases`); }
+      catch (e) { dbs.error = e.message; } finally { dbs.loading = false; }
+    }
+    watch(() => props.server, () => { dbs.apps = null; loadDBs(); }, { immediate: true });
+    const dbForm = reactive({ open: false, app: '', name: '', user: '', access: '%' });
+    function openDB(app) { formError.value = ''; Object.assign(dbForm, { open: true, app: app.app, name: '', user: '', access: '%' }); }
+    const createDB = () => propose({ op: 'db_create', app: dbForm.app, name: dbForm.name.trim(), user: dbForm.user.trim(), access: dbForm.access });
+    const backupDB = (app, d) => propose({ op: 'db_backup', app: app.app, name: d.name });
+    function deleteDB(app, d) {
+      if (!confirm(`删除数据库 ${d.name} 和它的用户 ${d.user}？会先生成一份清单：删除前先备份，删除后不能一键撤销。`)) return;
+      propose({ op: 'db_delete', app: app.app, name: d.name });
+    }
+    async function closePlan() {
+      const pl = plan.value;
+      plan.value = null;
+      if (!pl) return;
+      for (let i = 0; i < 100; i++) {
+        await new Promise(r => setTimeout(r, 3000));
+        try {
+          const now = await api('GET', `/api/plans/${pl.id}`);
+          if (now.status === 'running') continue;
+          loadDBs();
+        } catch { /* looked at again when the tab opens */ }
+        return;
+      }
+    }
+    return { p, programs, containers, services, panelApps, runtimes, gbText, whenText, plan, planning, formError, svc, restartService, restartContainer,
+      dbs, loadDBs, dbForm, openDB, createDB, backupDB, deleteDB, closePlan };
   },
   template: `
   <div class="wb-apps">
-    <p class="small tertiary">来自{{ collectedAt ? ' ' + whenText(collectedAt) + '的' : '最近一次' }}识别（只读）。要更新，点「重新识别」。</p>
+    <p class="small tertiary">来自{{ collectedAt ? ' ' + whenText(collectedAt) + '的' : '最近一次' }}识别。要更新，点「重新识别」。重启和数据库的修改都会先生成清单，确认后才执行。</p>
 
     <div class="group-title">占内存最多的程序</div>
     <div class="group">
@@ -2727,10 +2775,11 @@ const ServerApps = {
         <div class="row secondary" v-else-if="!containers.length">没有容器</div>
         <div class="table-wrap" v-else>
           <table class="table">
-            <thead><tr><th>容器</th><th>镜像</th><th>状态</th><th class="num">内存</th><th class="num">CPU</th></tr></thead>
+            <thead><tr><th>容器</th><th>镜像</th><th>状态</th><th class="num">内存</th><th class="num">CPU</th><th><span class="sr-only">操作</span></th></tr></thead>
             <tbody><tr v-for="c in containers" :key="c.name"><td>{{ c.name }}<div class="small tertiary" v-if="c.ports">{{ c.ports }}</div></td><td class="secondary">{{ c.image }}</td>
               <td class="nowrap"><span class="sdot" :class="c.running ? 'good' : 'off'"></span>{{ c.status }}</td>
-              <td class="num nowrap">{{ c.mem ? c.mem.split(' / ')[0] : '—' }}</td><td class="num">{{ c.cpu || '—' }}</td></tr></tbody>
+              <td class="num nowrap">{{ c.mem ? c.mem.split(' / ')[0] : '—' }}</td><td class="num">{{ c.cpu || '—' }}</td>
+              <td class="site-ops"><button class="link small" @click="restartContainer(c)" :disabled="planning">重启</button></td></tr></tbody>
           </table>
         </div>
       </div>
@@ -2742,7 +2791,33 @@ const ServerApps = {
         <span class="v">{{ services.failed.join('、') }}</span>
         <button @click="$emit('ask', '这台服务器上的服务 ' + services.failed.join('、') + ' 启动失败，帮我查一下原因并修复')">让 AI 排查</button></div>
       <div class="row"><span class="k">正在运行</span><span class="v"><span class="tags" v-if="services.running && services.running.length"><span class="tag" v-for="s in services.running" :key="s">{{ s }}</span></span><template v-else>—</template></span></div>
+      <div class="row" v-if="(services.running && services.running.length) || (services.failed && services.failed.length)"><span class="k">重启服务</span>
+        <span class="v"><select v-model="svc" aria-label="要重启的服务"><option value="">选择服务</option>
+          <option v-for="s in [...(services.failed || []), ...(services.running || [])]" :key="s" :value="s">{{ s }}</option></select></span>
+        <button @click="restartService(svc)" :disabled="!svc || planning">生成清单</button></div>
     </div>
+
+    <template v-if="adapter === '1panel'">
+      <div class="group-title">数据库</div>
+      <div class="notice" v-if="dbs.error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ dbs.error }}</div>
+      <div class="notice" v-if="dbs.loading && !dbs.apps"><span class="spinner"></span>正在读取数据库……</div>
+      <div class="group" v-if="dbs.apps && !dbs.apps.length"><div class="row secondary">1Panel 里没有安装 MySQL 或 MariaDB</div></div>
+      <template v-for="a in dbs.apps || []" :key="a.app">
+        <div class="group">
+          <div class="row"><span class="grow"><b>{{ a.app }}</b><span class="small secondary"> · {{ a.kind === 'mariadb' ? 'MariaDB' : 'MySQL' }} {{ a.version }}</span>
+            <span class="small block" v-if="!a.running"><span class="sdot crit"></span>没有运行</span></span>
+            <button class="plain small" @click="openDB(a)" :disabled="planning"><ui-icon name="plus"></ui-icon>新建数据库</button></div>
+          <div class="row small secondary" v-if="a.error"><ui-icon name="alert" class="st-crit"></ui-icon><span class="grow">{{ a.error }}</span></div>
+          <div class="row" v-for="d in a.databases" :key="d.name">
+            <span class="grow"><b>{{ d.name }}</b><span class="small tertiary block">用户 {{ d.user }} · {{ d.access === '%' ? '任何地址可连' : d.access === 'localhost' ? '只能本机连' : d.access }}<template v-if="d.note"> · {{ d.note }}</template></span></span>
+            <button class="plain small" @click="backupDB(a, d)" :disabled="planning">备份</button>
+            <button class="link small danger" @click="deleteDB(a, d)" :disabled="planning">删除</button>
+          </div>
+          <div class="row small secondary" v-if="!a.databases.length && !a.error">还没有数据库</div>
+        </div>
+      </template>
+      <p class="small tertiary" v-if="dbs.apps && dbs.apps.length">密码在 1Panel「数据库」页面查看和修改；Miao Panel 不保存数据库密码。</p>
+    </template>
 
     <template v-if="panelApps.length || runtimes.length || (p.databases && p.databases.length) || (p.wordpress && p.wordpress.length) || (p.java && p.java.length)">
       <div class="group-title">面板应用和运行环境</div>
@@ -2754,13 +2829,39 @@ const ServerApps = {
         <div class="row" v-for="j in p.java" :key="j"><span class="k">Java</span><span class="v small">{{ j }}</span></div>
       </div>
     </template>
+
+    <!-- A new database -->
+    <div class="sheet-mask" v-if="dbForm.open" @click.self="dbForm.open = false">
+      <div class="sheet" role="dialog" aria-label="新建数据库">
+        <h2>新建数据库</h2>
+        <p>在 {{ dbForm.app }} 里新建数据库和用户，字符集 utf8mb4。密码随机生成，在 1Panel「数据库」页面查看。</p>
+        <div class="group">
+          <div class="row form"><span class="k">数据库名</span><span class="v"><input v-model="dbForm.name" placeholder="字母、数字和下划线，例如 shop" aria-label="数据库名" autocomplete="off" spellcheck="false"></span></div>
+          <div class="row form"><span class="k">用户名</span><span class="v"><input v-model="dbForm.user" :placeholder="dbForm.name || '不填和数据库名一样'" aria-label="用户名" autocomplete="off" spellcheck="false"></span></div>
+          <div class="row form"><span class="k">谁能连接</span><span class="v"><select v-model="dbForm.access" aria-label="谁能连接"><option value="%">任何地址（容器里的应用要连就选这个）</option><option value="localhost">只能在 MySQL 容器里连</option></select></span></div>
+        </div>
+        <div class="notice" v-if="formError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ formError }}</div>
+        <div class="sheet-actions"><button @click="dbForm.open = false">取消</button>
+          <button class="primary" @click="createDB" :disabled="planning || !dbForm.name.trim()">生成清单</button></div>
+      </div>
+    </div>
+
+    <!-- The checklist to confirm -->
+    <div class="sheet-mask" v-if="plan" @click.self="closePlan">
+      <div class="sheet plan-sheet" role="dialog" aria-label="确认清单">
+        <h2>{{ plan.title }}</h2>
+        <p>勾选后点「执行」，确认后才会生效。</p>
+        <plan-card :plan="plan" :server-name="serverName" @done="loadDBs"></plan-card>
+        <div class="sheet-actions"><button @click="closePlan">关闭</button></div>
+      </div>
+    </div>
   </div>`,
 };
 
 // 云服务 › 云服务器: the lightweight and full servers in the Tencent Cloud
 // and 阿里云 accounts, their expiry and traffic package, and one instance's
-// monitoring, firewall and snapshots. Starting, stopping, rebooting, snapshots and firewall changes
-// are checklists, confirmed first.
+// monitoring, firewall and snapshots. Starting, stopping, rebooting,
+// snapshots and firewall changes are checklists, confirmed first.
 const CLOUD_STATES = { RUNNING: ['good', '运行中'], STOPPED: ['off', '已关机'], STARTING: ['warn', '正在开机'], STOPPING: ['warn', '正在关机'],
   REBOOTING: ['warn', '正在重启'], PENDING: ['warn', '创建中'], SHUTDOWN: ['off', '已关机'], TERMINATING: ['off', '正在退还'],
   RESETTING: ['warn', '正在重置'], UPGRADING: ['warn', '正在升级'], DISABLED: ['off', '已停用'] };

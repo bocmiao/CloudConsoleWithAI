@@ -488,6 +488,8 @@ func applyPanel(ctx context.Context, env *Env, r Resolved, progress Progress) Ou
 			return applySiteStatus(ctx, env, r.Values, out, report)
 		case "site_backup":
 			return applySiteBackup(ctx, env, r.Values, out, report)
+		case "mysql_db_create", "mysql_db_delete":
+			return applyMySQLDB(ctx, env, r.Impl.Panel == "mysql_db_create", r.Values, out, report)
 		case "backup_schedule":
 			return applyBackupSchedule(ctx, env, r.Values, out, report)
 		case "backup_unschedule":
@@ -700,6 +702,8 @@ func undoPanel(ctx context.Context, env *Env, r Resolved, undo map[string]string
 			err = undoCertAutoRenew(ctx, env.OnePanel, undo)
 		case "site_status":
 			err = undoSiteStatus(ctx, env.OnePanel, undo)
+		case "mysql_db_create":
+			err = undoMySQLCreate(ctx, env, undo)
 		case "backup_schedule":
 			err = undoBackupSchedule(ctx, env.OnePanel, undo)
 		case "backup_unschedule":

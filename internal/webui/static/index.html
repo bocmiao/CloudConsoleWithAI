@@ -175,7 +175,8 @@
               </div>
             </div>
           </template>
-          <server-apps v-if="serverTab === 'apps' && current.profile" :profile="p" :collected-at="current.collectedAt" @ask="askAI"></server-apps>
+          <server-apps v-if="serverTab === 'apps' && current.profile" :profile="p" :collected-at="current.collectedAt" :server="current.server.id"
+            :server-name="current.server.name" :adapter="current.server.adapter" @ask="askAI"></server-apps>
           <exec-log v-if="serverTab === 'history'" :server="current.server.id" :key="'x' + current.server.id"></exec-log>
 
           <template v-if="serverTab === 'connection'">

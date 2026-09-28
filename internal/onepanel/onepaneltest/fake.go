@@ -75,6 +75,10 @@ type Fake struct {
 	backups  []map[string]any
 	// Jobs are 1Panel's scheduled tasks.
 	Jobs []map[string]any
+	// MySQL adds an installed MySQL app named mysql.
+	MySQL bool
+	// DBs are MySQL databases: name, username, database (the app), id.
+	DBs []map[string]any
 	// FailRestore makes restoring a backup fail, as a damaged file does.
 	FailRestore bool
 	tasks       map[string]string // task id → Success or Failed
@@ -222,8 +226,12 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case p == "/apps/installed/search":
-		reply(map[string]any{"total": 1, "items": []map[string]any{{"id": 2, "name": "openresty", "appKey": "openresty", "status": "Running",
-			"version": "1.27.1.2", "httpPort": f.HTTPPort, "httpsPort": f.HTTPSPort}}})
+		apps := []map[string]any{{"id": 2, "name": "openresty", "appKey": "openresty", "status": "Running",
+			"version": "1.27.1.2", "httpPort": f.HTTPPort, "httpsPort": f.HTTPSPort}}
+		if f.MySQL {
+			apps = append(apps, map[string]any{"id": 3, "name": "mysql", "appKey": "mysql", "status": "Running", "version": "8.4.3", "container": "1Panel-mysql-abcd"})
+		}
+		reply(map[string]any{"total": len(apps), "items": apps})
 	case p == "/websites/list":
 		var out []map[string]any
 		for _, s := range f.Sites {
@@ -508,6 +516,20 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		m["errorLogPath"] = "/opt/1panel/www/sites/" + s.Alias + "/log/error.log"
 		reply(m)
 	case p == "/backups/backup":
+		if body["type"] == "mysql" {
+			for _, d := range f.DBs {
+				if d["name"] == body["detailName"] && d["database"] == body["name"] {
+					f.backups = append([]map[string]any{{"id": f.id(), "createdAt": time.Now().Format(time.RFC3339), "taskID": body["taskID"],
+						"status": "Success", "fileDir": "database/mysql/" + str(body["name"]) + "/" + str(body["detailName"]),
+						"fileName": fmt.Sprintf("%s_%d.sql.gz", body["detailName"], f.nextID), "name": body["name"], "detailName": body["detailName"],
+						"accountType": "LOCAL", "downloadAccountID": 1, "description": body["description"]}}, f.backups...)
+					reply(nil)
+					return
+				}
+			}
+			bad("ErrRecordNotFound")
+			return
+		}
 		if body["type"] != "website" {
 			bad("unsupported backup type")
 			return
@@ -564,6 +586,49 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		bad("ErrRecordNotFound")
+	case p == "/databases/search":
+		out := []map[string]any{}
+		for _, d := range f.DBs {
+			if d["database"] == body["database"] {
+				out = append(out, d)
+			}
+		}
+		reply(map[string]any{"total": len(out), "items": out})
+	case p == "/databases":
+		if str(body["name"]) == "" || str(body["database"]) == "" || str(body["format"]) == "" || str(body["permission"]) == "" || body["from"] != "local" {
+			bad("name, database, format, permission and from are required")
+			return
+		}
+		for _, d := range f.DBs {
+			if d["name"] == body["name"] && d["database"] == body["database"] {
+				bad("ErrRecordExist")
+				return
+			}
+		}
+		body["id"], body["mysqlName"], body["createdAt"] = f.id(), body["database"], time.Now().Format(time.RFC3339)
+		delete(body, "password")
+		f.DBs = append(f.DBs, body)
+		reply(nil)
+	case p == "/databases/del":
+		if body["deleteBackup"] != false || str(body["type"]) == "" {
+			bad("bad delete request")
+			return
+		}
+		kept := f.DBs[:0]
+		found := false
+		for _, d := range f.DBs {
+			if num(d["id"]) == num(body["id"]) && d["database"] == body["database"] {
+				found = true
+				continue
+			}
+			kept = append(kept, d)
+		}
+		f.DBs = kept
+		if !found {
+			bad("ErrRecordNotFound")
+			return
+		}
+		reply(nil)
 	case p == "/logs/tasks/search":
 		out := []map[string]any{}
 		if st, ok := f.tasks[str(body["taskID"])]; ok {
@@ -646,6 +711,14 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		f.Jobs = kept
 		reply(nil)
+	case p == "/backups/record/size":
+		out := []map[string]any{}
+		for _, b := range f.backups {
+			if b["name"] == body["name"] && b["detailName"] == body["detailName"] {
+				out = append(out, map[string]any{"id": b["id"], "size": 2048})
+			}
+		}
+		reply(out)
 	case p == "/backups/record/search":
 		var out []map[string]any
 		for _, b := range f.backups {

@@ -1546,3 +1546,9 @@ Web 版除了「用户名 + 密码」，可以用邮箱或手机收到的验证�
 - **网站页**：宝塔服务器和 1Panel 服务器一起列出，详情用同样的页面（`panel` 字段说是哪个面板）：域名、HTTPS、反向代理、伪静态（套用宝塔自己的模板）、配置文件、日志、备份。宝塔做不到或者接口没有的（HSTS、HTTP/3、选已有证书、新建和删除网站、定时备份、恢复网站备份）不显示。
 - **清单**：用同一批操作名（`site.status`、`site.domain.*`、`site.https.set`、`cert.issue`、`site.proxy.*`、`site.conf.set`、`site.rewrite.set`、`site.backup`），宝塔服务器上走 `bt_*` 的实现。改配置文件和伪静态时宝塔自己先 nginx -t，Miao Panel 再整体测一次，不通过就写回原来的内容；申请证书只支持 HTTP 验证，原来就开着 HTTPS 的网站申请后不能一键撤销（接口读不到原证书的私钥）。清单和记录里的文字说宝塔和 Nginx，不说 1Panel。
 - **AI**：`panel_websites`、`panel_website` 对宝塔服务器同样能用，提示词说明了宝塔能做和不能做的。
+
+### 应用标签：重启和数据库（已完成）
+
+- 服务器的「应用」标签不再只读：每个 Docker 容器旁边有「重启」，系统服务可以选一个重启（`container.restart`、`service.restart`，SSH、防火墙、面板这类关键服务仍然不允许），都先生成清单（`POST /api/servers/{id}/apps/plan`）。
+- 1Panel 服务器多一个「数据库」：列出每个 MySQL/MariaDB 应用里的数据库（用户、谁能连接、备注），可以新建（数据库和同名用户，utf8mb4，密码随机生成、不经过 Miao Panel 也不记下来，在 1Panel 里查看；撤销时先备份再删除）、备份（`backup.create` 加 `database`）和删除（`mysql.db.delete`，R3，先备份再删，不能撤销）。
+- AI 也能用 `mysql.db.create`、`mysql.db.delete`；提示词告诉它看不到也不要问数据库密码。
