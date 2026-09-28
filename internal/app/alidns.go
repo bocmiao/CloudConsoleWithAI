@@ -183,6 +183,9 @@ func (a *App) proposeAliDNS(ctx context.Context, req DNSRequest) (PlanView, erro
 			return PlanView{}, err
 		}
 		params["record_id"] = orig.ID
+		if req.Remark == "" && orig.Remark != "" {
+			params["clear_remark"] = "yes" // the page sends the remark it shows
+		}
 		title = "修改解析：" + name
 		reason = fmt.Sprintf("把 %s 的 %s 改为 %s %s。执行后按 TTL 几分钟内在各地生效，可以一键改回。", fullName(orig.Name, req.Domain), aliText(orig), name, now)
 		step = core.Step{Capability: "aliyun.dns.record.modify", Summary: fmt.Sprintf("把 %s 的 %s 改为 %s", fullName(orig.Name, req.Domain), aliText(orig), now), Params: params}
@@ -301,7 +304,7 @@ func (a *App) toolAliyunDNS(ctx context.Context, raw json.RawMessage) (string, e
 	}
 	fmt.Fprintf(&b, "%s 的解析记录（阿里云云解析）：\n", v.Domain)
 	for _, r := range v.Records {
-		fmt.Fprintf(&b, "- id=%s %s %s %s 线路=%s TTL=%d", r.RID, r.Name, r.Type, r.Value, r.Line, r.TTL)
+		fmt.Fprintf(&b, "- id=\"%s\" %s %s %s 线路=%s TTL=%d", r.RID, r.Name, r.Type, r.Value, r.Line, r.TTL)
 		if r.Type == "MX" {
 			fmt.Fprintf(&b, " 优先级=%d", r.MX)
 		}

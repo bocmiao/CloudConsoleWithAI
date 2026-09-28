@@ -19,11 +19,16 @@ import (
 // runTimeout bounds one plan run.
 const runTimeout = 30 * time.Minute
 
-// serverLocks makes sure only one plan changes a server at a time.
+// serverLocks makes sure only one plan changes a server at a time, and
+// that none starts while Miao Panel is being updated.
 type serverLocks struct {
 	mu   sync.Mutex
 	busy map[int64]bool
+	shut bool // an update is on its way: nothing new starts
 }
+
+// errUpdating is why a checklist cannot start during an update.
+var errUpdating = userErr("Miao Panel 正在更新，重新启动后再执行")
 
 func (l *serverLocks) try(id int64) bool {
 	l.mu.Lock()
@@ -31,7 +36,7 @@ func (l *serverLocks) try(id int64) bool {
 	if l.busy == nil {
 		l.busy = map[int64]bool{}
 	}
-	if l.busy[id] {
+	if l.busy[id] || l.shut {
 		return false
 	}
 	l.busy[id] = true
@@ -42,6 +47,29 @@ func (l *serverLocks) release(id int64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.busy, id)
+}
+
+// close stops new checklists from starting, if none is running.
+func (l *serverLocks) close() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.busy) > 0 {
+		return false
+	}
+	l.shut = true
+	return true
+}
+
+func (l *serverLocks) reopen() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.shut = false
+}
+
+func (l *serverLocks) closed() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.shut
 }
 
 // anyBusy says whether some checklist is running or being undone.
@@ -312,6 +340,9 @@ func (a *App) executePlan(id int64, selected []int, who string) (PlanView, error
 		}
 	}
 	if !a.locks.try(sv.ID) {
+		if a.locks.closed() {
+			return v, errUpdating
+		}
 		if sv.ID == 0 {
 			return v, userErr("正在执行另一份腾讯云清单，请等它完成")
 		}
@@ -465,6 +496,9 @@ func (a *App) UndoStep(ctx context.Context, planID int64, idx int) (PlanView, er
 		return v, userErr("这个清单对应的服务器已经被删除了")
 	}
 	if !a.locks.try(sv.ID) {
+		if a.locks.closed() {
+			return v, errUpdating
+		}
 		return v, userErr("这台服务器上正在执行其他操作，请稍后再试")
 	}
 	defer a.locks.release(sv.ID)

@@ -42,7 +42,8 @@ func TestDomainsAndRecordsPaging(t *testing.T) {
 		t.Fatalf("unknown domain: %v", err)
 	}
 	info, err := c.DomainInfo(ctx, "example.com")
-	if err != nil || info.MinTTL != 600 || info.EditionCode != "mianfei" || len(info.Lines) != len(aliyun.Lines) || info.Lines[1] != (aliyun.Line{Code: "telecom", Name: "电信"}) {
+	if err != nil || info.MinTTL != 600 || info.EditionCode != "mianfei" || len(info.Lines) != len(aliyun.Lines)+1 || info.Lines[1] != (aliyun.Line{Code: "telecom", Name: "电信"}) ||
+		info.Lines[len(info.Lines)-1] != (aliyun.Line{Code: "cn_region_xibei", Name: "中国地区_西北"}) { // the name shown, with its parent
 		t.Fatalf("info = %+v, %v", info, err)
 	}
 }

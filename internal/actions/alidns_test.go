@@ -63,6 +63,32 @@ func TestAlidnsRecords(t *testing.T) {
 		t.Fatalf("undo delete: %+v", u)
 	}
 	aliRun(t, env, "aliyun.dns.record.delete", map[string]any{"domain": "example.com", "record_id": "123"}, StatusRefused)
+	// Undoing again finds it done already.
+	if u := Undo(ctx, env, r4, out4.Undo); u.Status != StatusUndone || len(aliRecords(t, env, "api")) != 1 {
+		t.Fatalf("undo delete again: %+v", u)
+	}
+
+	// A line only the domain's edition has, by the name the page shows.
+	r5, out5 := aliRun(t, env, "aliyun.dns.record.add", map[string]any{"domain": "example.com", "subdomain": "nw", "type": "A", "value": "203.0.113.11", "line": "中国地区_西北", "remark": "西北机房"}, StatusDone)
+	if got = aliRecords(t, env, "nw"); len(got) != 1 || got[0].Line != "cn_region_xibei" || got[0].Remark != "西北机房" {
+		t.Fatalf("regional = %+v", got)
+	}
+	// Clearing the remark.
+	aliRun(t, env, "aliyun.dns.record.modify", map[string]any{"domain": "example.com", "record_id": got[0].ID, "subdomain": "nw", "type": "A", "value": "203.0.113.11", "clear_remark": "yes"}, StatusDone)
+	if got = aliRecords(t, env, "nw"); got[0].Remark != "" {
+		t.Fatalf("remark = %q", got[0].Remark)
+	}
+	if u := Undo(ctx, env, r5, out5.Undo); u.Status != StatusUndone || len(aliRecords(t, env, "nw")) != 0 {
+		t.Fatalf("undo regional: %+v", u)
+	}
+	if u := Undo(ctx, env, r5, out5.Undo); u.Status != StatusUndone {
+		t.Fatalf("undo regional again: %+v", u)
+	}
+
+	// Record IDs are too big for JSON numbers.
+	if _, err := Resolve("aliyun.dns.record.delete", map[string]any{"domain": "example.com", "record_id": float64(1847365210987654321)}, "*"); err == nil {
+		t.Error("a rounded record ID was accepted")
+	}
 }
 
 func TestAlidnsSet(t *testing.T) {

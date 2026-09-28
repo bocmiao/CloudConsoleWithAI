@@ -178,6 +178,9 @@ func (a *App) Rollback(ctx context.Context, id int64) (ExecView, error) {
 		return execView(e), userErr("%s", msg)
 	}
 	if !a.locks.try(e.ServerID) {
+		if a.locks.closed() {
+			return execView(e), errUpdating
+		}
 		return execView(e), userErr("这台服务器上正在执行其他操作，请稍后再试")
 	}
 	defer a.locks.release(e.ServerID)

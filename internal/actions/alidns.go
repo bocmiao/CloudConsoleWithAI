@@ -41,6 +41,44 @@ func AliLineName(code string) string {
 	return code
 }
 
+// aliLine turns a line's name or code into its code, asking the domain's
+// edition for the lines beyond the usual ones (中国地区_西北 and so on).
+func aliLine(ctx context.Context, c *aliyun.Client, domain, line string) string {
+	for _, l := range aliyun.Lines {
+		if line == "" || l.Name == line || l.Code == line {
+			return AliLineCode(line)
+		}
+	}
+	if info, err := c.DomainInfo(ctx, domain); err == nil {
+		for _, l := range info.Lines {
+			if l.Name == line || l.Code == line {
+				return l.Code
+			}
+		}
+	}
+	return line
+}
+
+// gone and there say an undo already happened, in part: the record it
+// deletes is not there, or the one it adds back is.
+func gone(err error) bool  { return err == nil || aliyun.IsCode(err, "DomainRecordNotBelongToUser") }
+func there(err error) bool { return err == nil || aliyun.IsCode(err, "DomainRecordDuplicate") }
+
+// aliPutBack adds deleted records back, saying which could not be.
+func aliPutBack(ctx context.Context, c *aliyun.Client, domain string, removed []aliyun.Record) error {
+	var lost []string
+	for _, r := range removed {
+		r.ID = ""
+		if _, err := c.AddRecord(ctx, domain, r); !there(err) {
+			lost = append(lost, fmt.Sprintf("%s（%v）", aliRecordText(r), err))
+		}
+	}
+	if len(lost) > 0 {
+		return fmt.Errorf("没能加回：%s，请在阿里云控制台手动添加", strings.Join(lost, "；"))
+	}
+	return nil
+}
+
 func aliRecordText(r aliyun.Record) string {
 	s := r.Type + " " + r.Value
 	if r.Type == "MX" {
@@ -82,6 +120,7 @@ func aliDNSApply(ctx context.Context, env *Env, op string, v map[string]string, 
 	switch op {
 	case "ali_dns_add":
 		r := aliRecordOf(v)
+		r.Line = aliLine(ctx, c, domain, v["line"])
 		name := fullName(r.Name, domain)
 		all, err := c.Records(ctx, domain)
 		if err != nil {
@@ -96,11 +135,14 @@ func aliDNSApply(ctx context.Context, env *Env, op string, v map[string]string, 
 		}
 		report("正在给 %s 添加 %s", name, aliRecordText(r))
 		id, err := c.AddRecord(ctx, domain, r)
-		if err != nil {
+		if err != nil && id == "" {
 			return refused(out, "添加失败：%v", err)
 		}
 		out.Undo["domain"], out.Undo["added"] = domain, id
 		out.Result = map[string]string{"record_id": id}
+		if err != nil {
+			report("记录已添加，但备注没有设置成：%v", err)
+		}
 		report("完成：已添加，按 TTL 几分钟内在各地生效")
 	case "ali_dns_modify":
 		old, err := aliFindRecord(ctx, c, domain, v["record_id"])
@@ -111,7 +153,7 @@ func aliDNSApply(ctx context.Context, env *Env, op string, v map[string]string, 
 		n := aliRecordOf(v)
 		r.Name, r.Type, r.Value = n.Name, n.Type, n.Value
 		if v["line"] != "" {
-			r.Line = n.Line
+			r.Line = aliLine(ctx, c, domain, v["line"])
 		}
 		if v["ttl"] != "" {
 			r.TTL = n.TTL
@@ -119,19 +161,25 @@ func aliDNSApply(ctx context.Context, env *Env, op string, v map[string]string, 
 		if r.Type == "MX" {
 			r.Priority = n.Priority
 		}
-		if v["remark"] != "" {
-			r.Remark = n.Remark
+		remark := old.Remark
+		switch {
+		case v["clear_remark"] == "yes":
+			remark = ""
+		case v["remark"] != "":
+			remark = n.Remark
 		}
 		report("正在把 %s 的 %s 改为 %s", fullName(old.Name, domain), aliRecordText(old), aliRecordText(r))
+		// The record first, the remark after: a remark that does not take
+		// does not undo the change.
 		if err := c.UpdateRecord(ctx, r); err != nil {
 			return refused(out, "修改失败：%v", err)
 		}
-		if r.Remark != old.Remark {
-			if err := c.SetRecordRemark(ctx, r.ID, r.Remark); err != nil {
+		out.Undo["domain"], out.Undo["before"] = domain, save(old)
+		if remark != old.Remark {
+			if err := c.SetRecordRemark(ctx, r.ID, remark); err != nil {
 				report("记录已修改，但备注没有改成：%v", err)
 			}
 		}
-		out.Undo["domain"], out.Undo["before"] = domain, save(old)
 		report("完成：已修改，按 TTL 几分钟内在各地生效")
 	case "ali_dns_delete":
 		old, err := aliFindRecord(ctx, c, domain, v["record_id"])
@@ -186,16 +234,20 @@ func aliDNSApply(ctx context.Context, env *Env, op string, v map[string]string, 
 			return *out
 		}
 		var removed []aliyun.Record
+		rollBack := func(what string, err error) Outcome {
+			if backErr := aliPutBack(ctx, c, domain, removed); backErr != nil {
+				out.Status = StatusFailed
+				out.logf("%s：%v；%v", what, err, backErr)
+				return *out
+			}
+			out.Status = StatusRolledBack
+			out.logf("%s：%v（删掉的已加回，和原来一样）", what, err)
+			return *out
+		}
 		for _, r := range old {
 			report("正在删除 %s 原来的 %s", name, aliRecordText(r))
 			if err := c.DeleteRecord(ctx, r.ID); err != nil {
-				for _, back := range removed {
-					back.ID = ""
-					_, _ = c.AddRecord(ctx, domain, back)
-				}
-				out.Status = StatusRolledBack
-				out.logf("删除原来的记录失败：%v（已删除的已加回）", err)
-				return *out
+				return rollBack("删除原来的记录失败", err)
 			}
 			removed = append(removed, r)
 		}
@@ -203,13 +255,7 @@ func aliDNSApply(ctx context.Context, env *Env, op string, v map[string]string, 
 		report("正在添加 %s 的 %s %s", name, typ, value)
 		id, err := c.AddRecord(ctx, domain, aliyun.Record{Name: sub, Type: typ, Value: value, Line: aliyun.DefaultLine, TTL: ttl})
 		if err != nil {
-			for _, back := range removed {
-				back.ID = ""
-				_, _ = c.AddRecord(ctx, domain, back)
-			}
-			out.Status = StatusRolledBack
-			out.logf("添加失败：%v（原来的记录已加回）", err)
-			return *out
+			return rollBack("添加失败", err)
 		}
 		b, _ := json.Marshal(removed)
 		out.Undo["domain"], out.Undo["added"], out.Undo["removed"] = domain, id, string(b)
@@ -232,7 +278,10 @@ func aliDNSUndo(ctx context.Context, c *aliyun.Client, op string, undo map[strin
 	}
 	switch op {
 	case "ali_dns_add":
-		return c.DeleteRecord(ctx, undo["added"])
+		if err := c.DeleteRecord(ctx, undo["added"]); !gone(err) {
+			return err
+		}
+		return nil
 	case "ali_dns_modify":
 		r, err := readBack("before")
 		if err != nil {
@@ -247,30 +296,24 @@ func aliDNSUndo(ctx context.Context, c *aliyun.Client, op string, undo map[strin
 		if err != nil {
 			return err
 		}
-		enabled := r.Status != "disabled"
 		r.ID = ""
-		id, err := c.AddRecord(ctx, domain, r)
-		if err == nil && !enabled {
-			err = c.SetRecordStatus(ctx, id, false)
+		// AddRecord pauses it again when it was paused.
+		if _, err := c.AddRecord(ctx, domain, r); !there(err) {
+			return err
 		}
-		return err
+		return nil
 	case "ali_dns_status":
 		return c.SetRecordStatus(ctx, undo["record_id"], undo["enabled"] == "true")
 	case "ali_dns_set":
-		if err := c.DeleteRecord(ctx, undo["added"]); err != nil {
+		// Each part may have happened in an earlier try.
+		if err := c.DeleteRecord(ctx, undo["added"]); !gone(err) {
 			return err
 		}
 		var removed []aliyun.Record
 		if err := json.Unmarshal([]byte(undo["removed"]), &removed); err != nil {
 			return err
 		}
-		for _, r := range removed {
-			r.ID = ""
-			if _, err := c.AddRecord(ctx, domain, r); err != nil {
-				return err
-			}
-		}
-		return nil
+		return aliPutBack(ctx, c, domain, removed)
 	}
 	return fmt.Errorf("未知的阿里云操作 %s", op)
 }
@@ -287,6 +330,9 @@ func init() {
 			{Name: "ttl", Kind: "int", Min: 1, Max: 86400, Desc: "TTL（秒），免费版最小 600"},
 			{Name: "mx", Kind: "int", Min: 1, Max: 50, Desc: "MX 优先级，1 到 50，数字越小越优先（MX 记录用）"},
 			{Name: "remark", Kind: "text", Desc: "备注"},
+		}
+		if !add {
+			ps = append(ps, Param{Name: "clear_remark", Kind: "enum", Enum: []string{"yes"}, Desc: "yes 清空备注"})
 		}
 		if add {
 			ps[3].Desc += "，不填是默认"

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -31,12 +32,12 @@ type UpdateView struct {
 	Latest    *update.Release `json:"latest,omitempty"`
 	Newer     bool            `json:"newer"`
 	CheckedAt string          `json:"checkedAt,omitempty"`
-	Error     string          `json:"error,omitempty"`
+	Error     string          `json:"error"`
 	Enabled   bool            `json:"enabled"`  // the daily look
 	CanApply  bool            `json:"canApply"` // one click can update here
-	Why       string          `json:"why,omitempty"`
+	Why       string          `json:"why"`
 	OS        string          `json:"os"`
-	Applying  bool            `json:"applying,omitempty"`
+	Applying  bool            `json:"applying"`
 }
 
 func (a *App) updateEnabled() bool {
@@ -46,15 +47,7 @@ func (a *App) updateEnabled() bool {
 
 // UpdateStatus says what is known about updates now.
 func (a *App) UpdateStatus() UpdateView {
-	a.upd.mu.Lock()
-	defer a.upd.mu.Unlock()
-	v := UpdateView{Current: a.Version, Latest: a.upd.latest, Error: a.upd.err, Enabled: a.updateEnabled(), OS: runtime.GOOS + "/" + runtime.GOARCH, Applying: a.upd.applying}
-	if !a.upd.checkedAt.IsZero() {
-		v.CheckedAt = a.upd.checkedAt.UTC().Format(time.RFC3339)
-	}
-	if v.Latest != nil {
-		v.Newer = update.Newer(v.Latest.Version, a.Version)
-	}
+	v := UpdateView{Current: a.Version, Enabled: a.updateEnabled(), OS: runtime.GOOS + "/" + runtime.GOARCH}
 	exe, exeErr := a.updateExe()
 	switch {
 	case update.InDocker():
@@ -67,6 +60,15 @@ func (a *App) UpdateStatus() UpdateView {
 		v.Why = "Miao Panel 不能写入程序所在的目录 " + filepath.Dir(exe) + "，请按部署文档的升级步骤下载新版本替换（systemd 版用 sudo install）"
 	default:
 		v.CanApply = true
+	}
+	a.upd.mu.Lock()
+	defer a.upd.mu.Unlock()
+	v.Latest, v.Error, v.Applying = a.upd.latest, a.upd.err, a.upd.applying
+	if !a.upd.checkedAt.IsZero() {
+		v.CheckedAt = a.upd.checkedAt.UTC().Format(time.RFC3339)
+	}
+	if v.Latest != nil {
+		v.Newer = update.Newer(v.Latest.Version, a.Version)
 	}
 	return v
 }
@@ -117,66 +119,68 @@ func (a *App) SetUpdateCheck(on bool) (UpdateView, error) {
 	return a.UpdateStatus(), nil
 }
 
-// ApplyUpdate downloads the newest release for this system, checks it,
-// puts it in place of the program and restarts into it.
+// ApplyUpdate starts updating to the newest release. In the background
+// it downloads this system's program, checks it, puts it in place and
+// restarts into it; the page follows along through UpdateStatus. No
+// checklist may be running, and none starts until then.
 func (a *App) ApplyUpdate(ctx context.Context) (UpdateView, error) {
 	v := a.UpdateStatus()
 	if !v.CanApply {
 		return v, userErr("%s", v.Why)
+	}
+	if v.Latest == nil || !v.Newer {
+		var err error
+		if v, err = a.CheckUpdate(ctx); err != nil {
+			return v, err
+		}
+		if !v.Newer {
+			return v, userErr("已经是最新版本了")
+		}
+	}
+	exe, err := a.updateExe()
+	if err != nil {
+		return v, userErr("找不到程序文件：%v", err)
 	}
 	a.upd.mu.Lock()
 	if a.upd.applying {
 		a.upd.mu.Unlock()
 		return v, userErr("正在更新，请稍等")
 	}
-	if a.locks.anyBusy() {
+	if !a.locks.close() {
 		a.upd.mu.Unlock()
 		return v, userErr("有清单正在执行，等它完成再更新")
 	}
-	a.upd.applying = true
+	a.upd.applying, a.upd.err = true, ""
 	a.upd.mu.Unlock()
-	done := func() { a.upd.mu.Lock(); a.upd.applying = false; a.upd.mu.Unlock() }
+	go a.runUpdate(*v.Latest, exe)
+	return a.UpdateStatus(), nil
+}
 
-	if v.Latest == nil || !v.Newer {
-		if v, err := a.CheckUpdate(ctx); err != nil || !v.Newer {
-			done()
-			if err != nil {
-				return v, err
-			}
-			return v, userErr("已经是最新版本了")
-		}
+func (a *App) runUpdate(rel update.Release, exe string) {
+	fail := func(msg string) {
+		a.locks.reopen()
+		a.upd.mu.Lock()
+		a.upd.applying, a.upd.err = false, msg
+		a.upd.mu.Unlock()
 	}
-	v = a.UpdateStatus()
-	exe, err := a.updateExe()
+	// However slow the line to GitHub: the program is some 30 MB.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+	next, err := a.updater().Download(ctx, rel, runtime.GOOS, runtime.GOARCH, filepath.Dir(exe))
 	if err != nil {
-		done()
-		return v, userErr("找不到程序文件：%v", err)
-	}
-	next, err := a.updater().Download(ctx, *v.Latest, runtime.GOOS, runtime.GOARCH, filepath.Dir(exe))
-	if err != nil {
-		done()
-		return v, userErr("%v", err)
+		fail(err.Error())
+		return
 	}
 	if err := update.Install(exe, next); err != nil {
-		done()
-		return v, userErr("%v", err)
+		_ = os.Remove(next)
+		fail(err.Error())
+		return
 	}
-	_ = a.Store.Audit("user", "update", a.Version+" → "+v.Latest.Version, "")
-	// Answer first, then restart into the new program.
-	go func() {
-		time.Sleep(1500 * time.Millisecond)
-		// A checklist started meanwhile finishes first.
-		for i := 0; i < 600 && a.locks.anyBusy(); i++ {
-			time.Sleep(time.Second)
-		}
-		if err := a.Restart(); err != nil {
-			a.upd.mu.Lock()
-			a.upd.err, a.upd.applying = "新版本已经装好，但没能自动重启："+err.Error()+"。请手动重新打开 Miao Panel", false
-			a.upd.mu.Unlock()
-		}
-	}()
-	v = a.UpdateStatus()
-	return v, nil
+	_ = a.Store.Audit("user", "update", a.Version+" → "+rel.Version, "")
+	time.Sleep(1500 * time.Millisecond) // the page hears it is ready first
+	if err := a.Restart(exe); err != nil {
+		fail("新版本已经装好，但没能自动重启：" + err.Error() + "。请手动重新打开 Miao Panel")
+	}
 }
 
 // UpdateLoop looks for a new version a minute after starting and then

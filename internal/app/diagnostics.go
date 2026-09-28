@@ -20,7 +20,11 @@ import (
 // servers with their addresses masked, and the recent failures. The user
 // saves it and can read it before sending it anywhere.
 
-var ipv4Re = regexp.MustCompile(`\b(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}\b`)
+var (
+	ipv4Re = regexp.MustCompile(`\b(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}\b`)
+	// Four groups or more, or a "::": clock times like 10:18:43 stay.
+	ipv6Re = regexp.MustCompile(`(?i)\b([0-9a-f]{1,4})(?::[0-9a-f]{1,4}){3,7}\b|\b([0-9a-f]{1,4})(?::[0-9a-f]{1,4})*::(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?`)
+)
 
 // maskHost keeps enough of an address to tell servers apart.
 func maskHost(h string) string {
@@ -37,9 +41,23 @@ func maskHost(h string) string {
 	return "*." + strings.Join(parts[len(parts)-2:], ".")
 }
 
-// maskText hides IPv4 addresses in free text.
+// maskText hides IP addresses in free text.
 func maskText(s string) string {
-	return ipv4Re.ReplaceAllString(s, "$1.$2.*.*")
+	s = ipv4Re.ReplaceAllString(s, "$1.$2.*.*")
+	return ipv6Re.ReplaceAllString(s, "$1$2:*")
+}
+
+// masker hides addresses in free text, the servers' own (names such as
+// blog.example.com included) first.
+func masker(servers []store.Server) func(string) string {
+	var pairs []string
+	for _, sv := range servers {
+		if h := strings.TrimSpace(sv.Host); h != "" {
+			pairs = append(pairs, h, maskHost(h))
+		}
+	}
+	r := strings.NewReplacer(pairs...)
+	return func(s string) string { return maskText(r.Replace(s)) }
 }
 
 type diagServer struct {
@@ -98,20 +116,21 @@ func (a *App) Diagnostics(w io.Writer) error {
 	info["settings"] = set
 
 	servers := []diagServer{}
-	if list, err := a.Store.ListServers(); err == nil {
-		for _, sv := range list {
-			d := diagServer{ID: sv.ID, Name: sv.Name, Host: maskHost(sv.Host), Adapter: sv.Adapter, AuthKind: sv.AuthKind}
-			if v, err := a.Profile(sv.ID); err == nil && v.Profile != nil {
-				d.OS, d.Panel, d.Profiled = v.Profile.OS, v.Profile.Panel.Version, v.CollectedAt
-			}
-			if s, err := a.OnePanel(sv.ID); err == nil {
-				d.OnePanel = s.HasKey
-			}
-			if s, err := a.BT(sv.ID); err == nil {
-				d.BT = s.HasKey
-			}
-			servers = append(servers, d)
+	list, _ := a.Store.ListServers()
+	mask := masker(list)
+	for _, sv := range list {
+		// A server added without a name is named after its address.
+		d := diagServer{ID: sv.ID, Name: mask(sv.Name), Host: maskHost(sv.Host), Adapter: sv.Adapter, AuthKind: sv.AuthKind}
+		if v, err := a.Profile(sv.ID); err == nil && v.Profile != nil {
+			d.OS, d.Panel, d.Profiled = v.Profile.OS, v.Profile.Panel.Version, v.CollectedAt
 		}
+		if s, err := a.OnePanel(sv.ID); err == nil {
+			d.OnePanel = s.HasKey
+		}
+		if s, err := a.BT(sv.ID); err == nil {
+			d.BT = s.HasKey
+		}
+		servers = append(servers, d)
 	}
 	info["servers"] = servers
 	if err := put("miaopanel.json", info); err != nil {
@@ -121,13 +140,13 @@ func (a *App) Diagnostics(w io.Writer) error {
 	execs := []diagExec{}
 	if list, err := a.Store.ListExec(false, 200); err == nil {
 		for _, e := range list {
-			d := diagExec{At: e.StartedAt, Server: e.ServerName, Kind: e.Kind, Title: maskText(e.Title), Capability: e.Capability, Via: e.Via, Status: e.Status}
+			d := diagExec{At: e.StartedAt, Server: mask(e.ServerName), Kind: e.Kind, Title: mask(e.Title), Capability: e.Capability, Via: e.Via, Status: e.Status}
 			if e.Status != "done" && e.Status != "undone" {
 				out := e.Output
 				if r := []rune(out); len(r) > 1500 {
 					out = string(r[len(r)-1500:])
 				}
-				d.Output = maskText(out)
+				d.Output = mask(out)
 			}
 			execs = append(execs, d)
 		}
@@ -137,7 +156,8 @@ func (a *App) Diagnostics(w io.Writer) error {
 	}
 	incidents, _ := a.Store.Incidents(time.Now().Add(-7*24*time.Hour).UTC().Format(time.RFC3339), 200)
 	for i := range incidents {
-		incidents[i].Target, incidents[i].Name = maskText(incidents[i].Target), maskText(incidents[i].Name)
+		in := &incidents[i]
+		in.Target, in.Name, in.Reason = mask(in.Target), mask(in.Name), mask(in.Reason)
 	}
 	if incidents == nil {
 		incidents = []store.Incident{}

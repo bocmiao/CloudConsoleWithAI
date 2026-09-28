@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -254,6 +255,25 @@ func aliSame(r, want aliyun.FirewallRule) bool {
 	return strings.EqualFold(r.Protocol, want.Protocol) && r.Port == want.Port && r.Source == want.Source && strings.EqualFold(r.Policy, "accept")
 }
 
+// aliCovers says whether a rule other than want still lets want's
+// traffic in: a port range or protocol around it, from anywhere or from
+// the same source.
+func aliCovers(r, want aliyun.FirewallRule) bool {
+	if !strings.EqualFold(r.Policy, "accept") || aliSame(r, want) {
+		return false
+	}
+	p, w := strings.ToUpper(r.Protocol), strings.ToUpper(want.Protocol)
+	if p != w && p != "ALL" && !(p == "TCP+UDP" && (w == "TCP" || w == "UDP")) {
+		return false
+	}
+	if r.Source != want.Source && r.Source != "0.0.0.0/0" && r.Source != "" {
+		return false
+	}
+	lo, _, _ := strings.Cut(want.Port, "-")
+	port, _ := strconv.Atoi(lo)
+	return r.Port == "" || portCovers(r.Port, port)
+}
+
 func aliRuleText(r aliyun.FirewallRule) string {
 	port := r.Port
 	if port == "" {
@@ -308,6 +328,11 @@ func aliFirewallClose(ctx context.Context, env *Env, v map[string]string, out *O
 	if err != nil {
 		return refused(out, "读取防火墙规则失败：%v", err)
 	}
+	for _, r := range rules {
+		if aliCovers(r, want) {
+			return refused(out, "规则 %s 也放行这个端口，只删 %s 端口还是开着；请先在阿里云控制台检查那条规则", aliRuleText(r), aliRuleText(want))
+		}
+	}
 	var removed []aliyun.FirewallRule
 	for _, r := range rules {
 		if !aliSame(r, want) {
@@ -315,9 +340,17 @@ func aliFirewallClose(ctx context.Context, env *Env, v map[string]string, out *O
 		}
 		report("正在删除 %s 的规则 %s", aliServerText(s), aliRuleText(r))
 		if err := c.DeleteFirewallRule(ctx, s, r); err != nil {
+			var lost []string
 			for _, back := range removed {
 				back.ID = ""
-				_ = c.AddFirewallRule(ctx, s, back)
+				if err := c.AddFirewallRule(ctx, s, back); err != nil {
+					lost = append(lost, aliRuleText(back))
+				}
+			}
+			if len(lost) > 0 {
+				out.Status = StatusFailed
+				out.logf("删除失败：%v；已删除的规则 %s 没能加回，请在阿里云控制台手动添加", err, strings.Join(lost, "、"))
+				return *out
 			}
 			out.Status = StatusRolledBack
 			out.logf("删除失败：%v（已删除的规则已加回）", err)

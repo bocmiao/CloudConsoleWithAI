@@ -695,6 +695,11 @@ func paramValue(p Param, raw any) (string, error) {
 		if v != math.Trunc(v) {
 			return "", fmt.Errorf("参数 %s 需要是整数", p.Name)
 		}
+		if math.Abs(v) > 1<<53 {
+			// JSON numbers this big have lost their last digits (阿里云's
+			// record IDs are): they must come as strings.
+			return "", fmt.Errorf("参数 %s 的数字太大，会失真，请用字符串传（加引号）", p.Name)
+		}
 		s = strconv.FormatInt(int64(v), 10)
 	case int:
 		s = strconv.Itoa(v)

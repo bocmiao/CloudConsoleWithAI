@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -70,25 +71,34 @@ func TestUpdates(t *testing.T) {
 	a.UpdateExe = filepath.Join(dir, "miaopanel")
 	_ = os.WriteFile(a.UpdateExe, []byte("old program"), 0o755)
 	var restarted atomic.Int32
-	a.Restart = func() error { restarted.Add(1); return nil }
+	var restartedAs atomic.Value
+	a.Restart = func(exe string) error { restartedAs.Store(exe); restarted.Add(1); return nil }
 	a.locks.try(7) // a checklist running on some server
 	if _, err := a.ApplyUpdate(ctx); err == nil || !strings.Contains(err.Error(), "清单") {
 		t.Fatalf("updated while a checklist runs: %v", err)
 	}
 	a.locks.release(7)
-	if _, err := a.ApplyUpdate(ctx); err != nil {
-		t.Fatal(err)
+	if v, err := a.ApplyUpdate(ctx); err != nil || !v.Applying {
+		t.Fatalf("apply = %+v, %v", v, err)
 	}
-	if b, _ := os.ReadFile(a.UpdateExe); !bytes.Equal(b, program) {
-		t.Fatalf("installed %q", b)
+	// No checklist starts until the program restarts.
+	if a.locks.try(8) {
+		t.Fatal("a checklist could start during the update")
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for restarted.Load() == 0 && time.Now().Before(deadline) {
 		time.Sleep(50 * time.Millisecond)
 	}
-	if restarted.Load() != 1 {
-		t.Error("did not restart")
+	if restarted.Load() != 1 || restartedAs.Load() != a.UpdateExe {
+		t.Fatalf("restarted %d times as %v", restarted.Load(), restartedAs.Load())
 	}
+	if b, _ := os.ReadFile(a.UpdateExe); !bytes.Equal(b, program) {
+		t.Fatalf("installed %q", b)
+	}
+	if ents, _ := os.ReadDir(dir); len(ents) != 1 {
+		t.Errorf("left behind: %v", ents)
+	}
+	a.locks.reopen() // as the restarted program would be
 
 	if v, _ := a.SetUpdateCheck(false); v.Enabled {
 		t.Error("still on")
@@ -107,6 +117,10 @@ func TestDiagnostics(t *testing.T) {
 	if _, err := a.SaveTencent("AKIDabcdefghijklmnop1234", "secretkeysecretkey1234"); err != nil {
 		t.Fatal(err)
 	}
+	// Named after its address, and down with the address in the reason.
+	unnamed, _ := a.Store.AddServer(store.Server{Name: "198.51.100.7", Host: "198.51.100.7", Port: 22, Username: "root", AuthKind: "password"})
+	_, _, _ = a.Store.OpenIncident("server", strconv.FormatInt(unnamed.ID, 10), unnamed.Name,
+		"连不上（dial tcp 198.51.100.7:22: connect: connection refused）; v6 2408:8756:c52:1a0::21 at 10:18:43")
 	var buf bytes.Buffer
 	if err := a.Diagnostics(&buf); err != nil {
 		t.Fatal(err)
@@ -128,12 +142,13 @@ func TestDiagnostics(t *testing.T) {
 	if strings.Join(names, ",") != "miaopanel.json,recent-activity.json,incidents.json,README.txt" {
 		t.Errorf("files = %v", names)
 	}
-	for _, secret := range []string{"hunter2-secret", "secretkeysecretkey1234", "AKIDabcdefghijklmnop1234", "203.0.113.45"} {
+	for _, secret := range []string{"hunter2-secret", "secretkeysecretkey1234", "AKIDabcdefghijklmnop1234", "203.0.113.45", "198.51.100.7", "2408:8756"} {
 		if strings.Contains(text, secret) {
 			t.Errorf("the bundle has %q", secret)
 		}
 	}
-	if !strings.Contains(text, `"host": "203.0.*.*"`) || !strings.Contains(text, `"tencent": true`) || !strings.Contains(text, `"version": "v0.2.0"`) {
+	if !strings.Contains(text, `"host": "203.0.*.*"`) || !strings.Contains(text, `"tencent": true`) || !strings.Contains(text, `"version": "v0.2.0"`) ||
+		!strings.Contains(text, "10:18:43") || !strings.Contains(text, "2408:*") {
 		t.Errorf("bundle = %s", text)
 	}
 }

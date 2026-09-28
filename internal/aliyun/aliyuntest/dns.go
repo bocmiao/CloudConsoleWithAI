@@ -5,8 +5,11 @@ import (
 	"strings"
 )
 
-var dnsLines = [][2]string{{"default", "默认"}, {"telecom", "电信"}, {"unicom", "联通"}, {"mobile", "移动"}, {"edu", "教育网"},
-	{"oversea", "境外"}, {"baidu", "百度"}, {"biying", "必应"}, {"google", "谷歌"}}
+// dnsLines are code, name and the name shown (paid editions' regions
+// show their parent too).
+var dnsLines = [][3]string{{"default", "默认", "默认"}, {"telecom", "电信", "电信"}, {"unicom", "联通", "联通"}, {"mobile", "移动", "移动"},
+	{"edu", "教育网", "教育网"}, {"oversea", "境外", "境外"}, {"baidu", "百度", "百度"}, {"biying", "必应", "必应"}, {"google", "谷歌", "谷歌"},
+	{"cn_region_xibei", "西北", "中国地区_西北"}}
 
 var recordTypes = map[string]bool{"A": true, "AAAA": true, "CNAME": true, "MX": true, "TXT": true, "NS": true, "SRV": true,
 	"CAA": true, "REDIRECT_URL": true, "FORWARD_URL": true}
@@ -117,7 +120,7 @@ func (f *Cloud) serveDNS(action string, q map[string]string) (map[string]any, *a
 		if q["NeedDetailAttributes"] == "true" {
 			var lines []map[string]any
 			for _, l := range dnsLines {
-				lines = append(lines, map[string]any{"LineCode": l[0], "LineName": l[1], "LineDisplayName": l[1], "FatherCode": ""})
+				lines = append(lines, map[string]any{"LineCode": l[0], "LineName": l[1], "LineDisplayName": l[2], "FatherCode": ""})
 			}
 			m["MinTtl"], m["LineType"], m["RecordLines"] = d.MinTTL, "region_province", map[string]any{"RecordLine": lines}
 			m["AvailableTtls"] = map[string]any{"AvailableTtl": []string{strconv.Itoa(d.MinTTL), "1800", "3600", "86400"}}

@@ -51,7 +51,10 @@ func (c *Checker) client() *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
 	}
-	return &http.Client{Timeout: 5 * time.Minute}
+	// No overall timeout: the program is some 30 MB and lines to GitHub
+	// can be slow; callers bound the whole with their context.
+	return &http.Client{Transport: &http.Transport{Proxy: http.ProxyFromEnvironment,
+		TLSHandshakeTimeout: 30 * time.Second, ResponseHeaderTimeout: time.Minute}}
 }
 
 // Latest reads the newest release.

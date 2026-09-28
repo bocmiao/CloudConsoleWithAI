@@ -930,25 +930,12 @@ func (s *Server) updateSettings(_ http.ResponseWriter, r *http.Request) (any, er
 }
 
 func (s *Server) updateApply(_ http.ResponseWriter, r *http.Request) (any, error) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Minute)
-	defer cancel()
-	return s.app.ApplyUpdate(ctx)
+	return s.app.ApplyUpdate(r.Context())
 }
 
 // diagnosticsLink hands out a one-time link to the diagnostics bundle.
 func (s *Server) diagnosticsLink(_ http.ResponseWriter, _ *http.Request) (any, error) {
-	b := make([]byte, 18)
-	if _, err := rand.Read(b); err != nil {
-		return nil, err
-	}
-	tok := base64.RawURLEncoding.EncodeToString(b)
-	s.dlMu.Lock()
-	if s.dl == nil {
-		s.dl = map[string]download{}
-	}
-	s.dl[tok] = download{diag: true, expires: time.Now().Add(2 * time.Minute)}
-	s.dlMu.Unlock()
-	return map[string]string{"url": "/dl/" + tok}, nil
+	return s.newDownload(download{diag: true})
 }
 
 func (s *Server) serverDatabases(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -1387,22 +1374,29 @@ func (s *Server) downloadLink(_ http.ResponseWriter, r *http.Request) (any, erro
 	if err := decode(r, &req); err != nil {
 		return nil, err
 	}
+	return s.newDownload(download{server: id, path: req.Path})
+}
+
+// newDownload hands out a one-time link, good for two minutes, and drops
+// the expired ones.
+func (s *Server) newDownload(d download) (any, error) {
 	b := make([]byte, 18)
 	if _, err := rand.Read(b); err != nil {
 		return nil, err
 	}
 	tok := base64.RawURLEncoding.EncodeToString(b)
 	s.dlMu.Lock()
+	defer s.dlMu.Unlock()
 	if s.dl == nil {
 		s.dl = map[string]download{}
 	}
-	for k, d := range s.dl {
-		if time.Now().After(d.expires) {
+	for k, old := range s.dl {
+		if time.Now().After(old.expires) {
 			delete(s.dl, k)
 		}
 	}
-	s.dl[tok] = download{server: id, path: req.Path, expires: time.Now().Add(2 * time.Minute)}
-	s.dlMu.Unlock()
+	d.expires = time.Now().Add(2 * time.Minute)
+	s.dl[tok] = d
 	return map[string]string{"url": "/dl/" + tok}, nil
 }
 

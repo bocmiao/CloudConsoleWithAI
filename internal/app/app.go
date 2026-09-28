@@ -40,7 +40,7 @@ type App struct {
 	Version string
 	// Restart starts the program again (after an update); nil where it
 	// cannot restart itself.
-	Restart func() error
+	Restart func(exe string) error
 	// Updater finds and fetches new releases; tests point it elsewhere.
 	Updater *update.Checker
 	// UpdateExe is the program file an update replaces; tests set it.

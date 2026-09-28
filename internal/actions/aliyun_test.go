@@ -107,6 +107,10 @@ func TestAliyunFirewall(t *testing.T) {
 			t.Fatalf("%s: undo close: %+v", id, u)
 		}
 		aliRun(t, env, "aliyun.firewall.close", map[string]any{"instance": id, "region": "cn-hangzhou", "port": "22"}, StatusRefused)
+		// A range still letting 9001 in: closing just 9001 is refused.
+		aliRun(t, env, "aliyun.firewall.open", map[string]any{"instance": id, "region": "cn-hangzhou", "port": "9000-9100"}, StatusDone)
+		aliRun(t, env, "aliyun.firewall.open", map[string]any{"instance": id, "region": "cn-hangzhou", "port": "9001"}, StatusDone)
+		aliRun(t, env, "aliyun.firewall.close", map[string]any{"instance": id, "region": "cn-hangzhou", "port": "9001"}, StatusRefused)
 	}
 	if _, err := Resolve("aliyun.firewall.open", map[string]any{"instance": aliECS, "region": "cn-hangzhou", "port": "80,443"}, ""); err == nil {
 		t.Error("a port list was accepted")
