@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bocmiao/CloudConsoleWithAI/internal/aliyun"
+	"github.com/bocmiao/CloudConsoleWithAI/internal/btpanel"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/onepanel"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/sshx"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/tencent"
@@ -32,6 +34,10 @@ type Env struct {
 	PanelApps []string
 	// Cloud is set when Tencent Cloud credentials are configured.
 	Cloud *tencent.Client
+	// Aliyun is set when 阿里云 credentials are configured.
+	Aliyun *aliyun.Client
+	// BT is set when the server's 宝塔 API is configured.
+	BT *btpanel.Client
 	// Reconnect replaces SSH after a dropped connection while waiting.
 	Reconnect func(ctx context.Context) (sshx.Conn, error)
 	// PollInterval defaults to one second.
@@ -83,6 +89,8 @@ func Apply(ctx context.Context, env *Env, r Resolved, progress Progress) Outcome
 		return out
 	case r.Impl.Cloud != "":
 		return applyCloud(ctx, env, r, progress)
+	case strings.HasPrefix(r.Impl.Panel, "bt_"):
+		return applyBT(ctx, env, r, progress)
 	}
 	return applyPanel(ctx, env, r, progress)
 }
@@ -151,6 +159,8 @@ func Undo(ctx context.Context, env *Env, r Resolved, undo map[string]string) Out
 		return runScript(ctx, env, r, "undo", undo, nil)
 	case r.Impl.Cloud != "":
 		return undoCloud(ctx, env, r, undo)
+	case strings.HasPrefix(r.Impl.Panel, "bt_"):
+		return undoBT(ctx, env, r, undo)
 	}
 	return undoPanel(ctx, env, r, undo)
 }
@@ -425,13 +435,17 @@ func parseProtocol(text string) Outcome {
 
 // ---- 1Panel API ----
 
+// secretField is a JSON field whose value never goes into the record: a
+// new database's password, a certificate's private key.
+var secretField = regexp.MustCompile(`"(password|passwd|privateKey|private_key|secret|secretKey)"\s*:\s*"(?:[^"\\]|\\.)*"`)
+
 // tracePanel records every 1Panel API request an operation makes.
 func tracePanel(env *Env, run func() Outcome) Outcome {
 	var cmds []string
 	env.OnePanel.Trace = func(method, path string, body []byte) {
 		line := method + " " + path
 		if len(body) > 0 {
-			line += " " + string(body)
+			line += " " + secretField.ReplaceAllString(string(body), `"$1":"（不记录）"`)
 		}
 		cmds = append(cmds, line)
 	}
@@ -474,6 +488,36 @@ func applyPanel(ctx context.Context, env *Env, r Resolved, progress Progress) Ou
 			return applyCertRenew(ctx, env, r.Values, out, report)
 		case "cert_autorenew":
 			return applyCertAutoRenew(ctx, env, r.Values, out, report)
+		case "site_status":
+			return applySiteStatus(ctx, env, r.Values, out, report)
+		case "site_backup":
+			return applySiteBackup(ctx, env, r.Values, out, report)
+		case "mysql_db_create", "mysql_db_delete":
+			return applyMySQLDB(ctx, env, r.Impl.Panel == "mysql_db_create", r.Values, out, report)
+		case "backup_schedule":
+			return applyBackupSchedule(ctx, env, r.Values, out, report)
+		case "backup_unschedule":
+			return applyBackupUnschedule(ctx, env, r.Values, out, report)
+		case "site_restore":
+			return applySiteRestore(ctx, env, r.Values, out, report)
+		case "site_domain_add":
+			return applySiteDomainAdd(ctx, env, r.Values, out, report)
+		case "site_domain_remove":
+			return applySiteDomainRemove(ctx, env, r.Values, out, report)
+		case "site_https":
+			return applySiteHTTPS(ctx, env, r.Values, out, report)
+		case "site_proxy_set":
+			return applySiteProxySet(ctx, env, r.Values, out, report)
+		case "site_proxy_remove":
+			return applySiteProxyRemove(ctx, env, r.Values, out, report)
+		case "site_proxy_status":
+			return applySiteProxyStatus(ctx, env, r.Values, out, report)
+		case "site_conf":
+			return applySiteConf(ctx, env, r.Values, out, report)
+		case "site_rewrite":
+			return applySiteRewrite(ctx, env, r.Values, out, report)
+		case "site_delete":
+			return applySiteDelete(ctx, env, r.Values, out, report)
 		}
 		out.Status = StatusFailed
 		out.logf("未知的面板操作 %s", r.Impl.Panel)
@@ -660,6 +704,30 @@ func undoPanel(ctx context.Context, env *Env, r Resolved, undo map[string]string
 			err = undoCertIssue(ctx, env.OnePanel, undo)
 		case "cert_autorenew":
 			err = undoCertAutoRenew(ctx, env.OnePanel, undo)
+		case "site_status":
+			err = undoSiteStatus(ctx, env.OnePanel, undo)
+		case "mysql_db_create":
+			err = undoMySQLCreate(ctx, env, undo)
+		case "backup_schedule":
+			err = undoBackupSchedule(ctx, env.OnePanel, undo)
+		case "backup_unschedule":
+			err = undoBackupUnschedule(ctx, env.OnePanel, undo)
+		case "site_domain_add":
+			err = undoSiteDomainAdd(ctx, env.OnePanel, undo)
+		case "site_domain_remove":
+			err = undoSiteDomainRemove(ctx, env.OnePanel, undo)
+		case "site_https":
+			err = undoSiteHTTPS(ctx, env.OnePanel, undo)
+		case "site_proxy_set":
+			err = undoSiteProxySet(ctx, env.OnePanel, undo)
+		case "site_proxy_remove":
+			err = undoSiteProxyRemove(ctx, env.OnePanel, undo)
+		case "site_proxy_status":
+			err = undoSiteProxyStatus(ctx, env.OnePanel, undo)
+		case "site_conf":
+			err = undoSiteConf(ctx, env.OnePanel, undo)
+		case "site_rewrite":
+			err = undoSiteRewrite(ctx, env.OnePanel, undo)
 		case "java_heap":
 			id, _ := strconv.ParseUint(undo["install_id"], 10, 64)
 			var cfg onepanel.ContainerConfig
@@ -1047,31 +1115,10 @@ func applyBackup(ctx context.Context, env *Env, v map[string]string, out *Outcom
 		for {
 			rec, found, err := c.FindBackup(ctx, j.kind, j.name, j.detail, task)
 			if err == nil && found && rec.Status == "Success" {
-				if strings.TrimSpace(rec.FileDir) == "" || strings.TrimSpace(rec.FileName) == "" {
+				size, err := checkBackup(ctx, env, j.kind, j.name, j.detail, rec)
+				if err != nil {
 					out.Status = StatusFailed
-					out.logf("1Panel 报告备份%s成功，但没有返回备份文件位置；请在 1Panel「备份」里核对", j.label)
-					return *out
-				}
-				var size int64
-				var sizeErr error
-				for attempt := 0; attempt < 3; attempt++ {
-					size, sizeErr = c.BackupSize(ctx, j.kind, j.name, j.detail, rec.ID)
-					if sizeErr == nil && size > 0 {
-						break
-					}
-					if attempt < 2 {
-						select {
-						case <-ctx.Done():
-							out.Status = StatusFailed
-							out.logf("核对备份%s文件大小时连接中断", j.label)
-							return *out
-						case <-time.After(pollEvery(env)):
-						}
-					}
-				}
-				if sizeErr != nil || size <= 0 {
-					out.Status = StatusFailed
-					out.logf("1Panel 报告备份%s成功，但无法确认文件有内容（%s/%s）：大小 %d，错误 %v；请在 1Panel「备份」里核对", j.label, rec.FileDir, rec.FileName, size, sizeErr)
+					out.logf("备份%s：%v", j.label, err)
 					return *out
 				}
 				report("已备份%s：%s/%s（%d 字节）", j.label, rec.FileDir, rec.FileName, size)

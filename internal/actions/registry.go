@@ -227,6 +227,7 @@ func init() {
 			{Name: "group", Kind: "name", Required: true},
 			{Name: "admin_cidr", Kind: "cidr", Required: true, Desc: "管理者当前可达的公网 IP/32 或固定网段，不能是全网"},
 			{Name: "ssh_port", Kind: "int", Min: 1, Max: 65535, Required: true},
+			{Name: "panel_port", Kind: "int", Min: 1, Max: 65535, Desc: "面板（1Panel、宝塔）自己的端口，识别环境时读到的"},
 		},
 		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "firewall_tighten", Downtime: "只保留 80/443 全网可达，SSH 和管理端口仅管理网段可达；其他服务可能中断",
 			Undo: "恢复原来的全端口放行规则并删除本次新增的规则"}},
@@ -694,6 +695,11 @@ func paramValue(p Param, raw any) (string, error) {
 		if v != math.Trunc(v) {
 			return "", fmt.Errorf("参数 %s 需要是整数", p.Name)
 		}
+		if math.Abs(v) > 1<<53 {
+			// JSON numbers this big have lost their last digits (阿里云's
+			// record IDs are): they must come as strings.
+			return "", fmt.Errorf("参数 %s 的数字太大，会失真，请用字符串传（加引号）", p.Name)
+		}
 		s = strconv.FormatInt(int64(v), 10)
 	case int:
 		s = strconv.Itoa(v)
@@ -740,6 +746,11 @@ func paramValue(p Param, raw any) (string, error) {
 	case "instance":
 		if !instanceRe.MatchString(s) {
 			return "", fmt.Errorf("参数 %s 要是腾讯云实例 ID（lhins- 或 ins- 开头），%q 不是", p.Name, s)
+		}
+		return s, nil
+	case "aliinstance":
+		if !aliInstanceRe.MatchString(s) {
+			return "", fmt.Errorf("参数 %s 要是阿里云实例 ID（i- 开头，或 32 位十六进制），%q 不是", p.Name, s)
 		}
 		return s, nil
 	case "region":
@@ -839,6 +850,13 @@ func paramValue(p Param, raw any) (string, error) {
 	case "json":
 		if len(s) > 20000 || !json.Valid([]byte(s)) {
 			return "", fmt.Errorf("参数 %s 要是 JSON（最多 20000 个字符）", p.Name)
+		}
+		return s, nil
+	case "conf":
+		// A whole config file: lines and tabs, no other control characters.
+		s = strings.ReplaceAll(s, "\r\n", "\n")
+		if len(s) > 128<<10 || strings.ContainsFunc(s, func(r rune) bool { return (r < 0x20 && r != '\n' && r != '\t') || r == 0x7f }) {
+			return "", fmt.Errorf("参数 %s 太长（最多 128KB）或含有控制字符", p.Name)
 		}
 		return s, nil
 	case "text":

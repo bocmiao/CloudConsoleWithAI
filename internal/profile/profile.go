@@ -29,6 +29,9 @@ type Profile struct {
 	Java      []string `json:"java"`
 	Databases []string `json:"databases"`
 	Docker    Docker   `json:"docker"`
+	// The programs using the most memory, and the systemd services.
+	Programs []Program `json:"programs"`
+	Services Services  `json:"services"`
 
 	Findings []Finding `json:"findings"`
 
@@ -64,8 +67,9 @@ type Panel struct {
 
 // Docker summarizes the container runtime.
 type Docker struct {
-	Status     string   `json:"status"` // "", "no", "unreachable", or the server version
-	Containers []string `json:"containers"`
+	Status     string      `json:"status"` // "", "no", "unreachable", or the server version
+	Containers []string    `json:"containers"`
+	List       []Container `json:"list"` // the containers with their image, state and use
 }
 
 // Finding is a health or security observation shown to the user.
@@ -84,6 +88,9 @@ func Parse(raw string) *Profile {
 	p.parseApps()
 	p.parseDB()
 	p.parseDocker()
+	p.parseContainers()
+	p.parsePrograms()
+	p.parseServices()
 	p.findings()
 	return p
 }

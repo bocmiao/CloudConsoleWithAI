@@ -13,14 +13,16 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
-	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
@@ -55,6 +57,7 @@ type Server struct {
 type download struct {
 	server  int64
 	path    string
+	diag    bool // the diagnostics bundle, not a server's file
 	expires time.Time
 }
 
@@ -76,8 +79,7 @@ func NewServer(a *app.App, au *auth.Service, version string) *Server {
 
 func (s *Server) routes() {
 	s.mux = http.NewServeMux()
-	static, _ := fs.Sub(webui.Static, "static")
-	s.mux.Handle("GET /", http.FileServerFS(static))
+	s.mux.Handle("GET /", webui.Handler())
 	s.authRoutes()
 
 	api := func(pattern string, h func(w http.ResponseWriter, r *http.Request) (any, error)) {
@@ -124,12 +126,42 @@ func (s *Server) routes() {
 	api("POST /api/settings/tencent/test", s.testTencent)
 	api("GET /api/tencent/servers", s.tencentServers)
 	api("GET /api/servers/{id}/cloud", s.serverCloud)
+	api("GET /api/tencent/servers/{region}/{instance}", s.cloudDetail)
+	api("POST /api/tencent/servers/plan", s.cloudPlan)
+	api("GET /api/settings/aliyun", s.getAliyun)
+	api("PUT /api/settings/aliyun", s.putAliyun)
+	api("DELETE /api/settings/aliyun", s.deleteAliyun)
+	api("POST /api/settings/aliyun/test", s.testAliyun)
+	api("GET /api/aliyun/servers", s.aliyunServers)
+	api("GET /api/aliyun/servers/{region}/{instance}", s.aliyunDetail)
+	api("POST /api/aliyun/servers/plan", s.aliyunPlan)
 	api("POST /api/servers/{id}/security/plan", s.serverSecurityPlan)
+	api("GET /api/servers/{id}/databases", s.serverDatabases)
+	api("GET /api/update", s.updateStatus)
+	api("POST /api/update/check", s.updateCheck)
+	api("PUT /api/update/settings", s.updateSettings)
+	api("POST /api/update/apply", s.updateApply)
+	api("POST /api/diagnostics/link", s.diagnosticsLink)
+	api("POST /api/servers/{id}/apps/plan", s.serverAppsPlan)
 	api("GET /api/visits/sources", s.visitSources)
 	api("GET /api/visits", s.getVisits)
 	api("GET /api/visits/blocked", s.blockedIPs)
 	api("POST /api/visits/block", s.blockIPs)
 	api("POST /api/servers/{id}/realip", s.proposeRealIP)
+	api("GET /api/overview", s.overview)
+	api("GET /api/monitor", s.monitor)
+	api("PUT /api/monitor/settings", s.monitorSettings)
+	api("POST /api/monitor/check", s.monitorCheck)
+	api("GET /api/monitor/site", s.monitorSite)
+	api("GET /api/servers/{id}/metrics", s.serverMetrics)
+	api("GET /api/websites", s.websites)
+	api("GET /api/servers/{id}/websites/{sid}", s.website)
+	api("GET /api/servers/{id}/websites/{sid}/log", s.websiteLog)
+	api("GET /api/servers/{id}/websites/{sid}/rewrite", s.websiteRewrite)
+	api("GET /api/servers/{id}/websites/{sid}/backups", s.websiteBackups)
+	api("POST /api/servers/{id}/websites/{sid}/backups/{bid}/fetch", s.websiteBackupFetch)
+	big("POST /api/websites/plan", 1<<20, s.websitePlan)
+	api("POST /api/eo/cache/plan", s.eoCachePlan)
 	api("GET /api/dns/domains", s.dnsDomains)
 	api("GET /api/dns/records", s.dnsRecords)
 	api("GET /api/dns/lines", s.dnsLines)
@@ -171,6 +203,9 @@ func (s *Server) routes() {
 	api("GET /api/servers/{id}/onepanel", s.getOnePanel)
 	api("PUT /api/servers/{id}/onepanel", s.putOnePanel)
 	api("POST /api/servers/{id}/onepanel/test", s.testOnePanel)
+	api("GET /api/servers/{id}/btpanel", s.getBT)
+	api("PUT /api/servers/{id}/btpanel", s.putBT)
+	api("POST /api/servers/{id}/btpanel/test", s.testBT)
 	api("GET /api/audit", s.audit)
 	api("GET /api/usage", s.usage)
 }
@@ -284,6 +319,138 @@ func pathID(r *http.Request) (int64, error) {
 		return 0, &app.UserError{Msg: "服务器编号不对"}
 	}
 	return id, nil
+}
+
+func siteID(r *http.Request) (uint, error) {
+	n, err := strconv.ParseUint(r.PathValue("sid"), 10, 32)
+	if err != nil || n == 0 {
+		return 0, &app.UserError{Msg: "网站编号不对"}
+	}
+	return uint(n), nil
+}
+
+func (s *Server) monitor(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.MonitorPage(r.Context())
+}
+
+func (s *Server) monitorSettings(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req app.MonitorSettings
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.SaveMonitorSettings(req)
+}
+
+func (s *Server) monitorCheck(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.CheckNow(r.Context())
+}
+
+func (s *Server) monitorSite(_ http.ResponseWriter, r *http.Request) (any, error) {
+	hours, _ := strconv.Atoi(r.URL.Query().Get("hours"))
+	return s.app.SiteHistory(r.URL.Query().Get("url"), hours)
+}
+
+func (s *Server) serverMetrics(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	hours, _ := strconv.Atoi(r.URL.Query().Get("hours"))
+	return s.app.ServerHistory(id, hours)
+}
+
+func (s *Server) overview(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.Overview(r.Context())
+}
+
+func (s *Server) websites(_ http.ResponseWriter, r *http.Request) (any, error) {
+	server, _ := strconv.ParseInt(r.URL.Query().Get("server"), 10, 64)
+	return s.app.Websites(r.Context(), server)
+}
+
+func (s *Server) website(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	sid, err := siteID(r)
+	if err != nil {
+		return nil, err
+	}
+	return s.app.Website(r.Context(), id, sid)
+}
+
+func (s *Server) websiteBackups(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	sid, err := siteID(r)
+	if err != nil {
+		return nil, err
+	}
+	return s.app.SiteBackups(r.Context(), id, sid)
+}
+
+// websiteBackupFetch gets a backup's file ready on the server and returns
+// its path, which the page then downloads like any file.
+func (s *Server) websiteBackupFetch(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	sid, err := siteID(r)
+	if err != nil {
+		return nil, err
+	}
+	bid, err := strconv.ParseUint(r.PathValue("bid"), 10, 64)
+	if err != nil {
+		return nil, &app.UserError{Msg: "备份编号不对"}
+	}
+	path, err := s.app.BackupPath(r.Context(), id, sid, uint(bid))
+	return map[string]string{"path": path}, err
+}
+
+func (s *Server) websiteLog(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	sid, err := siteID(r)
+	if err != nil {
+		return nil, err
+	}
+	lines, _ := strconv.Atoi(r.URL.Query().Get("lines"))
+	return s.app.WebsiteLog(r.Context(), id, sid, r.URL.Query().Get("type"), lines)
+}
+
+func (s *Server) websiteRewrite(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	sid, err := siteID(r)
+	if err != nil {
+		return nil, err
+	}
+	text, err := s.app.WebsiteRewriteTemplate(r.Context(), id, sid, r.URL.Query().Get("name"))
+	return map[string]string{"content": text}, err
+}
+
+func (s *Server) websitePlan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req app.SiteRequest
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.ProposeWebsite(r.Context(), req)
+}
+
+func (s *Server) eoCachePlan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req app.EOCacheRequest
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.ProposeEOCache(r.Context(), req)
 }
 
 func (s *Server) info(_ http.ResponseWriter, _ *http.Request) (any, error) {
@@ -403,25 +570,52 @@ func (s *Server) listTerminals(_ http.ResponseWriter, _ *http.Request) (any, err
 
 // terminalOutput streams what the terminal prints, as raw bytes: the
 // recent backlog, then new output as it comes, until the shell ends.
+// terminalOutput streams a terminal's output as server-sent events: each
+// piece base64-encoded, with the offset after it as the event id so a page
+// that loses the connection can pick up where it was (?from=offset);
+// "reset" first when the stream does not start where the page asked, so it
+// clears the screen before the replay; a comment line every few seconds
+// so proxies do not close an idle stream; and "end" when the shell ended.
+// X-Accel-Buffering stops Nginx (1Panel, 宝塔) from holding the output
+// back until a buffer fills.
 func (s *Server) terminalOutput(w http.ResponseWriter, r *http.Request) (any, error) {
+	from := int64(-1)
+	if v := r.URL.Query().Get("from"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			from = n
+		}
+	}
 	rc := http.NewResponseController(w)
 	started := false
-	err := s.app.TerminalOutput(r.Context(), r.PathValue("tid"), func(p []byte) error {
+	ended, err := s.app.TerminalOutput(r.Context(), r.PathValue("tid"), from, func(p []byte, next int64) error {
+		var b bytes.Buffer
 		if !started {
 			started = true
-			w.Header().Set("Content-Type", "application/octet-stream")
-			w.Header().Set("Cache-Control", "no-store")
+			h := w.Header()
+			h.Set("Content-Type", "text/event-stream")
+			h.Set("Cache-Control", "no-cache, no-store, no-transform")
+			h.Set("X-Accel-Buffering", "no")
 			w.WriteHeader(http.StatusOK)
+			if next != from {
+				b.WriteString("event: reset\ndata:\n\n")
+			}
 		}
 		if len(p) > 0 {
-			if _, err := w.Write(p); err != nil {
-				return err
-			}
+			fmt.Fprintf(&b, "id: %d\ndata: %s\n\n", next, base64.StdEncoding.EncodeToString(p))
+		} else if b.Len() == 0 {
+			b.WriteString(": ping\n\n")
+		}
+		if _, err := w.Write(b.Bytes()); err != nil {
+			return err
 		}
 		return rc.Flush()
 	})
 	if err != nil && !started {
 		return nil, err
+	}
+	if ended && started {
+		_, _ = io.WriteString(w, "event: end\ndata:\n\n")
+		_ = rc.Flush()
 	}
 	return streamed{}, nil
 }
@@ -567,11 +761,11 @@ func (s *Server) dnsDomains(_ http.ResponseWriter, r *http.Request) (any, error)
 }
 
 func (s *Server) dnsRecords(_ http.ResponseWriter, r *http.Request) (any, error) {
-	return s.app.DNSRecords(r.Context(), r.URL.Query().Get("domain"))
+	return s.app.DNSRecords(r.Context(), r.URL.Query().Get("domain"), r.URL.Query().Get("provider"))
 }
 
 func (s *Server) dnsLines(_ http.ResponseWriter, r *http.Request) (any, error) {
-	return s.app.DNSLines(r.Context(), r.URL.Query().Get("domain"))
+	return s.app.DNSLines(r.Context(), r.URL.Query().Get("domain"), r.URL.Query().Get("provider"))
 }
 
 func (s *Server) dnsPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -651,6 +845,46 @@ func (s *Server) tencentServers(_ http.ResponseWriter, r *http.Request) (any, er
 	return s.app.TencentServers(r.Context(), r.URL.Query().Get("refresh") == "1")
 }
 
+func (s *Server) getAliyun(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return s.app.Aliyun(), nil
+}
+
+func (s *Server) putAliyun(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req struct {
+		AccessKeyID     string `json:"accessKeyId"`
+		AccessKeySecret string `json:"accessKeySecret"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.SaveAliyun(req.AccessKeyID, req.AccessKeySecret)
+}
+
+func (s *Server) deleteAliyun(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return s.app.ClearAliyun(), nil
+}
+
+func (s *Server) testAliyun(_ http.ResponseWriter, r *http.Request) (any, error) {
+	info, err := s.app.TestAliyun(r.Context())
+	return map[string]string{"info": info}, err
+}
+
+func (s *Server) aliyunServers(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.AliyunServers(r.Context(), r.URL.Query().Get("refresh") == "1")
+}
+
+func (s *Server) aliyunDetail(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.AliyunDetail(r.Context(), r.PathValue("region"), r.PathValue("instance"))
+}
+
+func (s *Server) aliyunPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req app.CloudRequest
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.ProposeAliyun(r.Context(), req)
+}
+
 func (s *Server) serverCloud(_ http.ResponseWriter, r *http.Request) (any, error) {
 	id, err := pathID(r)
 	if err != nil {
@@ -663,6 +897,65 @@ func (s *Server) serverCloud(_ http.ResponseWriter, r *http.Request) (any, error
 		return map[string]string{"error": err.Error()}, nil
 	}
 	return map[string]any{"instance": cs}, nil
+}
+
+func (s *Server) cloudDetail(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.CloudDetail(r.Context(), r.PathValue("region"), r.PathValue("instance"))
+}
+
+func (s *Server) cloudPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req app.CloudRequest
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.ProposeCloud(r.Context(), req)
+}
+
+func (s *Server) updateStatus(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return s.app.UpdateStatus(), nil
+}
+
+func (s *Server) updateCheck(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.CheckUpdate(r.Context())
+}
+
+func (s *Server) updateSettings(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.SetUpdateCheck(req.Enabled)
+}
+
+func (s *Server) updateApply(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.ApplyUpdate(r.Context())
+}
+
+// diagnosticsLink hands out a one-time link to the diagnostics bundle.
+func (s *Server) diagnosticsLink(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return s.newDownload(download{diag: true})
+}
+
+func (s *Server) serverDatabases(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	return s.app.ServerDatabases(r.Context(), id)
+}
+
+func (s *Server) serverAppsPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	var req app.AppRequest
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.ProposeServerApps(r.Context(), id, req)
 }
 
 func (s *Server) serverSecurityPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -786,6 +1079,7 @@ func (s *Server) chatStream(w http.ResponseWriter, r *http.Request) (any, error)
 	var req struct {
 		ConversationID string `json:"conversationId"`
 		Message        string `json:"message"`
+		Page           string `json:"page"`
 	}
 	if err := decode(r, &req); err != nil {
 		return nil, err
@@ -802,13 +1096,14 @@ func (s *Server) chatStream(w http.ResponseWriter, r *http.Request) (any, error)
 			started = true
 			w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("X-Accel-Buffering", "no")
 			w.WriteHeader(http.StatusOK)
 		}
 		data, _ := json.Marshal(v)
 		_, _ = w.Write(append(data, '\n'))
 		_ = rc.Flush()
 	}
-	reply, err := s.app.ChatStream(ctx, req.ConversationID, req.Message, func(e app.ChatEvent) { send(e) })
+	reply, err := s.app.ChatStream(ctx, req.ConversationID, req.Message, req.Page, func(e app.ChatEvent) { send(e) })
 	if err != nil && !started {
 		return nil, err // nothing sent yet: an ordinary error response
 	}
@@ -888,7 +1183,8 @@ func (s *Server) undoPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
 }
 
 func (s *Server) execLogs(_ http.ResponseWriter, r *http.Request) (any, error) {
-	return s.app.ExecLogs(r.URL.Query().Get("changes") == "1")
+	server, _ := strconv.ParseInt(r.URL.Query().Get("server"), 10, 64)
+	return s.app.ExecLogs(r.URL.Query().Get("changes") == "1", server)
 }
 
 func (s *Server) execEntry(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -936,6 +1232,38 @@ func (s *Server) testOnePanel(_ http.ResponseWriter, r *http.Request) (any, erro
 		return nil, err
 	}
 	info, err := s.app.TestOnePanel(r.Context(), id)
+	return map[string]string{"info": info}, err
+}
+
+func (s *Server) getBT(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	return s.app.BT(id)
+}
+
+func (s *Server) putBT(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	var req struct {
+		app.BTSettings
+		APIKey string `json:"apiKey"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.SaveBT(id, req.BTSettings, req.APIKey)
+}
+
+func (s *Server) testBT(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	info, err := s.app.TestBT(r.Context(), id)
 	return map[string]string{"info": info}, err
 }
 
@@ -1046,22 +1374,29 @@ func (s *Server) downloadLink(_ http.ResponseWriter, r *http.Request) (any, erro
 	if err := decode(r, &req); err != nil {
 		return nil, err
 	}
+	return s.newDownload(download{server: id, path: req.Path})
+}
+
+// newDownload hands out a one-time link, good for two minutes, and drops
+// the expired ones.
+func (s *Server) newDownload(d download) (any, error) {
 	b := make([]byte, 18)
 	if _, err := rand.Read(b); err != nil {
 		return nil, err
 	}
 	tok := base64.RawURLEncoding.EncodeToString(b)
 	s.dlMu.Lock()
+	defer s.dlMu.Unlock()
 	if s.dl == nil {
 		s.dl = map[string]download{}
 	}
-	for k, d := range s.dl {
-		if time.Now().After(d.expires) {
+	for k, old := range s.dl {
+		if time.Now().After(old.expires) {
 			delete(s.dl, k)
 		}
 	}
-	s.dl[tok] = download{server: id, path: req.Path, expires: time.Now().Add(2 * time.Minute)}
-	s.dlMu.Unlock()
+	d.expires = time.Now().Add(2 * time.Minute)
+	s.dl[tok] = d
 	return map[string]string{"url": "/dl/" + tok}, nil
 }
 
@@ -1077,6 +1412,15 @@ func (s *Server) downloadFile(w http.ResponseWriter, r *http.Request) {
 	s.dlMu.Unlock()
 	if !ok || time.Now().After(d.expires) {
 		http.Error(w, "下载链接已失效，请回到 Miao Panel 重新点下载。", http.StatusForbidden)
+		return
+	}
+	if d.diag {
+		w.Header().Set("Content-Type", "application/zip")
+		w.Header().Set("Content-Disposition", "attachment; filename=miaopanel-diagnostics-"+time.Now().Format("20060102-1504")+".zip")
+		w.Header().Set("Cache-Control", "no-store")
+		if err := s.app.Diagnostics(w); err != nil {
+			log.Println("diagnostics:", err)
+		}
 		return
 	}
 	started := false

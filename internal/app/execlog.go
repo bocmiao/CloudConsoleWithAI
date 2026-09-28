@@ -136,8 +136,8 @@ func execView(e store.ExecLog) ExecView {
 }
 
 // ExecLogs lists what Miao Panel ran on servers, newest first.
-func (a *App) ExecLogs(changesOnly bool) ([]ExecView, error) {
-	list, err := a.Store.ListExec(changesOnly, 500)
+func (a *App) ExecLogs(changesOnly bool, serverID int64) ([]ExecView, error) {
+	list, err := a.Store.ListServerExec(serverID, changesOnly, 500)
 	if err != nil {
 		return nil, err
 	}
@@ -178,6 +178,9 @@ func (a *App) Rollback(ctx context.Context, id int64) (ExecView, error) {
 		return execView(e), userErr("%s", msg)
 	}
 	if !a.locks.try(e.ServerID) {
+		if a.locks.closed() {
+			return execView(e), errUpdating
+		}
 		return execView(e), userErr("这台服务器上正在执行其他操作，请稍后再试")
 	}
 	defer a.locks.release(e.ServerID)
@@ -207,7 +210,7 @@ func (a *App) rollback(ctx context.Context, e *store.ExecLog) (store.ExecLog, er
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	sv := store.Server{ID: e.ServerID, Name: e.ServerName}
-	env := &actions.Env{Cloud: a.tencentClient(), PollInterval: a.PollInterval}
+	env := &actions.Env{Cloud: a.tencentClient(), Aliyun: a.aliyunClient(), PollInterval: a.PollInterval}
 	if r.Impl.NeedsServer() {
 		if sv, env, err = a.env(ctx, e.ServerID); err != nil {
 			return store.ExecLog{}, friendlySSHError(err)

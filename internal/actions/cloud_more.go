@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -132,6 +133,17 @@ func applyFirewallOpen(ctx context.Context, env *Env, v map[string]string, out *
 	return *out
 }
 
+// LoginPortIn returns the remote login port (SSH 22, Windows remote
+// desktop 3389) that a port or range covers, or 0.
+func LoginPortIn(port string) int {
+	for _, p := range []int{22, 3389} {
+		if portCovers(port, p) {
+			return p
+		}
+	}
+	return 0
+}
+
 func applyFirewallClose(ctx context.Context, env *Env, v map[string]string, out *Outcome, report func(string, ...any)) Outcome {
 	c := env.Cloud
 	s, err := findInstance(ctx, c, v["region"], v["instance"])
@@ -141,12 +153,10 @@ func applyFirewallClose(ctx context.Context, env *Env, v map[string]string, out 
 		return *out
 	}
 	want := firewallRule(v)
-	for _, p := range []int{22, 3389} {
-		if portCovers(want.Port, p) {
-			out.Status = StatusRefused
-			out.logf("端口 %d 是远程登录用的，关掉会连不上服务器，不允许在这里关闭", p)
-			return *out
-		}
+	if p := LoginPortIn(want.Port); p != 0 {
+		out.Status = StatusRefused
+		out.logf("端口 %d 是远程登录用的，关掉会连不上服务器，不允许在这里关闭", p)
+		return *out
 	}
 	group, rules, err := cloudRules(ctx, c, s)
 	if err != nil {
@@ -205,11 +215,35 @@ func undoFirewall(ctx context.Context, c *tencent.Client, undo map[string]string
 	return nil
 }
 
-func publicSensitiveRule(r tencent.FirewallRule, sshPort int) bool {
+// AdminPorts are the ports only the admin's network may reach after
+// tightening: SSH, the panel's own port, and the usual panel and admin
+// ports (13940 for 1Panel, 8090 and 8080).
+func AdminPorts(sshPort, panelPort int) []int {
+	out := []int{sshPort}
+	for _, p := range []int{panelPort, 13940, 8090, 8080} {
+		if p > 0 && !slices.Contains(out, p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// AdminNetwork reads the admin's network: IPv4, and no wider than a /16,
+// so the admin ports do not end up open to a large part of the internet.
+func AdminNetwork(s string) (*net.IPNet, bool) {
+	ip, network, err := net.ParseCIDR(strings.TrimSpace(s))
+	if err != nil || ip.To4() == nil {
+		return nil, false
+	}
+	ones, _ := network.Mask.Size()
+	return network, ones >= 16
+}
+
+func publicSensitiveRule(r tencent.FirewallRule, admin []int) bool {
 	if !strings.EqualFold(r.Action, "ACCEPT") || (r.CidrBlock != "0.0.0.0/0" && r.Ipv6 != "::/0") {
 		return false
 	}
-	for _, p := range []int{sshPort, 13940, 8090, 8080, 3306} {
+	for _, p := range append(slices.Clone(admin), 3306) {
 		if portCovers(r.Port, p) {
 			return true
 		}
@@ -236,14 +270,14 @@ func privateRuleSource(r tencent.FirewallRule) bool {
 	return false
 }
 
-func unapprovedSensitiveRule(r tencent.FirewallRule, sshPort int, adminCIDR string) bool {
+func unapprovedSensitiveRule(r tencent.FirewallRule, admin []int, adminCIDR string) bool {
 	if !strings.EqualFold(r.Action, "ACCEPT") {
 		return false
 	}
 	if portCovers(r.Port, 3306) {
 		return !privateRuleSource(r)
 	}
-	for _, port := range []int{sshPort, 13940, 8090, 8080} {
+	for _, port := range admin {
 		if portCovers(r.Port, port) {
 			return !privateRuleSource(r) && r.CidrBlock != adminCIDR
 		}
@@ -253,7 +287,7 @@ func unapprovedSensitiveRule(r tencent.FirewallRule, sshPort int, adminCIDR stri
 
 // FirewallTightenRules rejects ingress that would remain public after tightening.
 // Proposal and execution both use it so the checklist matches what can run.
-func FirewallTightenRules(rules []tencent.FirewallRule, sshPort int, adminCIDR string) ([]tencent.FirewallRule, error) {
+func FirewallTightenRules(rules []tencent.FirewallRule, admin []int, adminCIDR string) ([]tencent.FirewallRule, error) {
 	var remove []tencent.FirewallRule
 	broad := 0
 	for _, r := range rules {
@@ -262,14 +296,14 @@ func FirewallTightenRules(rules []tencent.FirewallRule, sshPort int, adminCIDR s
 			remove = append(remove, r)
 			continue
 		}
-		if !publicSensitiveRule(r, sshPort) {
-			if unapprovedSensitiveRule(r, sshPort, adminCIDR) {
+		if !publicSensitiveRule(r, admin) {
+			if unapprovedSensitiveRule(r, admin, adminCIDR) {
 				return nil, fmt.Errorf("另有非管理来源可访问管理端口或 3306：%s，请先单独检查它", ruleText(r))
 			}
 			continue
 		}
 		allowedExact := false
-		for _, p := range []int{sshPort, 13940, 8090, 8080, 3306} {
+		for _, p := range append(slices.Clone(admin), 3306) {
 			if r.Port == strconv.Itoa(p) {
 				allowedExact = true
 				break
@@ -301,10 +335,10 @@ func applyFirewallTighten(ctx context.Context, env *Env, v map[string]string, ou
 		out.logf("安全组绑定情况已变化，或实例绑定了多个安全组；请重新检查后生成清单")
 		return *out
 	}
-	ip, network, err := net.ParseCIDR(v["admin_cidr"])
-	if err != nil || ip.To4() == nil || network.String() == "0.0.0.0/0" {
+	network, ok := AdminNetwork(v["admin_cidr"])
+	if !ok {
 		out.Status = StatusRefused
-		out.logf("管理来源必须是明确的 IPv4 网段，例如 203.0.113.4/32")
+		out.logf("管理来源必须是明确的 IPv4 网段（/16 或更小），例如 203.0.113.4/32")
 		return *out
 	}
 	sshPort, err := strconv.Atoi(v["ssh_port"])
@@ -313,13 +347,15 @@ func applyFirewallTighten(ctx context.Context, env *Env, v map[string]string, ou
 		out.logf("SSH 端口无效，请重新生成清单")
 		return *out
 	}
+	panelPort, _ := strconv.Atoi(v["panel_port"])
+	admin := AdminPorts(sshPort, panelPort)
 	rules, err := c.SecurityGroupIngress(ctx, s.Region, v["group"])
 	if err != nil {
 		out.Status = StatusRefused
 		out.logf("读取安全组失败：%v", err)
 		return *out
 	}
-	remove, err := FirewallTightenRules(rules, sshPort, network.String())
+	remove, err := FirewallTightenRules(rules, admin, network.String())
 	if err != nil {
 		out.Status = StatusRefused
 		out.logf("安全组检查失败：%v", err)
@@ -348,7 +384,11 @@ func applyFirewallTighten(ctx context.Context, env *Env, v map[string]string, ou
 		}
 		return first
 	}
-	for _, spec := range []struct{ port, source string }{{"80", "0.0.0.0/0"}, {"443", "0.0.0.0/0"}, {strconv.Itoa(sshPort), network.String()}, {"13940", network.String()}, {"8090", network.String()}, {"8080", network.String()}} {
+	specs := []struct{ port, source string }{{"80", "0.0.0.0/0"}, {"443", "0.0.0.0/0"}}
+	for _, p := range admin {
+		specs = append(specs, struct{ port, source string }{strconv.Itoa(p), network.String()})
+	}
+	for _, spec := range specs {
 		r := tencent.FirewallRule{Protocol: "TCP", Port: spec.port, CidrBlock: spec.source, Action: "ACCEPT", Description: "Miao Panel security tightening", Index: broadIndex}
 		found := false
 		for _, old := range rules {
@@ -390,7 +430,7 @@ func applyFirewallTighten(ctx context.Context, env *Env, v map[string]string, ou
 	after, err := c.SecurityGroupIngress(ctx, s.Region, v["group"])
 	if err == nil {
 		for _, r := range after {
-			if unapprovedSensitiveRule(r, sshPort, network.String()) {
+			if unapprovedSensitiveRule(r, admin, network.String()) {
 				err = fmt.Errorf("管理端口或 3306 仍可被非授权来源访问：%s", ruleText(r))
 				break
 			}

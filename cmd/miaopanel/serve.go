@@ -24,6 +24,7 @@ import (
 	"github.com/bocmiao/CloudConsoleWithAI/internal/config"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/secrets"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/store"
+	"github.com/bocmiao/CloudConsoleWithAI/internal/update"
 )
 
 // The web edition: "miaopanel serve" runs Miao Panel on a server, reached
@@ -61,6 +62,8 @@ func serveMain(args []string) error {
 	sec := secrets.OpenFile(dir) // a server has no desktop keychain
 	a := app.New(st, sec)
 	a.CacheDir = filepath.Join(dir, "cache")
+	a.Version, a.Restart = version, restartSelf
+	update.CleanUp()
 	au := auth.New(st, sec, dir)
 	api.ConnectSenders(a, au) // login codes go out by the app's mail and SMS settings
 
@@ -77,7 +80,7 @@ func serveMain(args []string) error {
 	if *cert != "" {
 		scheme = "https"
 	}
-	log.Printf("Miao Panel（喵面板）Web 版 %s 已启动：%s://%s ，数据目录 %s", version, scheme, ln.Addr(), dir)
+	log.Printf("Miao Panel Web 版 %s 已启动：%s://%s ，数据目录 %s", version, scheme, ln.Addr(), dir)
 	if host, _, _ := net.SplitHostPort(*listen); scheme == "http" && !isLoopback(host) {
 		log.Printf("注意：正在用 HTTP 接受其他机器的连接，密码会明文传输。请在前面加一个 HTTPS 反向代理（1Panel、宝塔、Nginx、Caddy），或者用 --tls-cert/--tls-key")
 	}
@@ -92,6 +95,8 @@ func serveMain(args []string) error {
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
 	go a.KeepWarm(ctx, 20*time.Minute)
+	go a.Monitor(ctx)
+	go a.UpdateLoop(ctx)
 	go func() {
 		t := time.NewTicker(time.Hour)
 		defer t.Stop()

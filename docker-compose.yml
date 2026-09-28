@@ -1,4 +1,4 @@
-# Miao Panel（喵面板）Web 版：docker compose up -d
+# Miao Panel Web 版：docker compose up -d
 # 详细说明（HTTPS、反向代理、忘记密码、升级）见 docs/DEPLOY.md
 services:
   miaopanel:

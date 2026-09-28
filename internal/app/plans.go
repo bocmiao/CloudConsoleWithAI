@@ -19,11 +19,16 @@ import (
 // runTimeout bounds one plan run.
 const runTimeout = 30 * time.Minute
 
-// serverLocks makes sure only one plan changes a server at a time.
+// serverLocks makes sure only one plan changes a server at a time, and
+// that none starts while Miao Panel is being updated.
 type serverLocks struct {
 	mu   sync.Mutex
 	busy map[int64]bool
+	shut bool // an update is on its way: nothing new starts
 }
+
+// errUpdating is why a checklist cannot start during an update.
+var errUpdating = userErr("Miao Panel 正在更新，重新启动后再执行")
 
 func (l *serverLocks) try(id int64) bool {
 	l.mu.Lock()
@@ -31,7 +36,7 @@ func (l *serverLocks) try(id int64) bool {
 	if l.busy == nil {
 		l.busy = map[int64]bool{}
 	}
-	if l.busy[id] {
+	if l.busy[id] || l.shut {
 		return false
 	}
 	l.busy[id] = true
@@ -42,6 +47,36 @@ func (l *serverLocks) release(id int64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.busy, id)
+}
+
+// close stops new checklists from starting, if none is running.
+func (l *serverLocks) close() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.busy) > 0 {
+		return false
+	}
+	l.shut = true
+	return true
+}
+
+func (l *serverLocks) reopen() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.shut = false
+}
+
+func (l *serverLocks) closed() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.shut
+}
+
+// anyBusy says whether some checklist is running or being undone.
+func (l *serverLocks) anyBusy() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.busy) > 0
 }
 
 // prepareSteps fills in, for each step, whether it can run on the server
@@ -212,7 +247,13 @@ func (a *App) env(ctx context.Context, id int64) (store.Server, *actions.Env, er
 		c.Close()
 		return sv, nil, err
 	}
-	env.Cloud = a.tencentClient()
+	if sv.Adapter == "bt" {
+		if env.BT, err = a.btClient(id, c); err != nil {
+			c.Close()
+			return sv, nil, err
+		}
+	}
+	env.Cloud, env.Aliyun = a.tencentClient(), a.aliyunClient()
 	return sv, env, nil
 }
 
@@ -299,6 +340,9 @@ func (a *App) executePlan(id int64, selected []int, who string) (PlanView, error
 		}
 	}
 	if !a.locks.try(sv.ID) {
+		if a.locks.closed() {
+			return v, errUpdating
+		}
 		if sv.ID == 0 {
 			return v, userErr("正在执行另一份腾讯云清单，请等它完成")
 		}
@@ -368,7 +412,7 @@ func (a *App) runPlan(planID, serverID int64, who string) {
 			needServer = true
 		}
 	}
-	env := &actions.Env{Cloud: a.tencentClient(), PollInterval: a.PollInterval}
+	env := &actions.Env{Cloud: a.tencentClient(), Aliyun: a.aliyunClient(), PollInterval: a.PollInterval}
 	if needServer {
 		if sv, env, err = a.env(ctx, serverID); err != nil {
 			fail(friendlySSHError(err).Error())
@@ -401,7 +445,7 @@ func (a *App) runPlan(planID, serverID int64, who string) {
 			title += "（" + pt + "）"
 		}
 		entry := a.startExec(store.ExecLog{
-			ServerID: sv.ID, ServerName: sv.Name, Adapter: sv.Adapter, Origin: OriginPlan, Kind: store.ExecChange,
+			ServerID: sv.ID, ServerName: serverNameFor(sv, st.Capability), Adapter: sv.Adapter, Origin: OriginPlan, Kind: store.ExecChange,
 			Title: title, Note: st.Summary, Capability: st.Capability, Params: st.Params, Via: r.Impl.Via,
 			Reversible: r.Cap.Reversible, PlanID: v.ID, StepIdx: i,
 		})
@@ -452,6 +496,9 @@ func (a *App) UndoStep(ctx context.Context, planID int64, idx int) (PlanView, er
 		return v, userErr("这个清单对应的服务器已经被删除了")
 	}
 	if !a.locks.try(sv.ID) {
+		if a.locks.closed() {
+			return v, errUpdating
+		}
 		return v, userErr("这台服务器上正在执行其他操作，请稍后再试")
 	}
 	defer a.locks.release(sv.ID)
@@ -463,7 +510,7 @@ func (a *App) UndoStep(ctx context.Context, planID int64, idx int) (PlanView, er
 	} else {
 		// Run before the execution log existed: the step has what we need.
 		e = store.ExecLog{
-			ServerID: sv.ID, ServerName: sv.Name, Adapter: sv.Adapter, Kind: store.ExecChange, Title: st.Title,
+			ServerID: sv.ID, ServerName: serverNameFor(sv, st.Capability), Adapter: sv.Adapter, Kind: store.ExecChange, Title: st.Title,
 			Capability: st.Capability, Params: st.Params, Via: st.Via, Status: st.Status, Undo: st.Undo,
 			Reversible: st.Reversible, PlanID: planID, StepIdx: idx,
 		}

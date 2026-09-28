@@ -3,9 +3,11 @@ package main
 import (
 	"errors"
 	"net/url"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"time"
 	"unsafe"
 
 	webview2 "github.com/jchv/go-webview2"
@@ -73,6 +75,12 @@ func findWindow() uintptr {
 func singleInstance() (bool, func()) {
 	name, _ := windows.UTF16PtrFromString(`Local\MiaoPanel-single-instance`)
 	h, err := windows.CreateMutex(nil, false, name)
+	// Started by an update: the old program is on its way out.
+	for i := 0; i < 100 && errors.Is(err, windows.ERROR_ALREADY_EXISTS) && os.Getenv("MIAO_WAIT_PID") != ""; i++ {
+		_ = windows.CloseHandle(h)
+		time.Sleep(200 * time.Millisecond)
+		h, err = windows.CreateMutex(nil, false, name)
+	}
 	if errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
 		if w := findWindow(); w != 0 {
 			_, _, _ = procShowWindow.Call(w, swRestore)

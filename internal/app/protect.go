@@ -77,6 +77,9 @@ func (a *App) proposePlan(ctx context.Context, actor string, serverID int64, tit
 		}
 	}
 	a.fillRealIP(steps)
+	if err := a.fillSiteDiffs(ctx, sv, steps); err != nil {
+		return store.Plan{}, nil, err
+	}
 	steps = prepareSteps(steps, sv.Adapter)
 	data, err := json.Marshal(steps)
 	if err != nil {

@@ -334,7 +334,7 @@ func TestExecLogAndRollback(t *testing.T) {
 		t.Fatalf("step = %+v", st)
 	}
 
-	logs, err := a.ExecLogs(false)
+	logs, err := a.ExecLogs(false, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,7 +378,7 @@ func TestExecLogAndRollback(t *testing.T) {
 	if _, err := a.UndoPlan(ctx, planID); err == nil {
 		t.Fatal("nothing left to undo, UndoPlan should say so")
 	}
-	if changes, _ := a.ExecLogs(true); len(changes) != 2 {
+	if changes, _ := a.ExecLogs(true, 0); len(changes) != 2 {
 		t.Fatalf("changes only = %+v", changes)
 	}
 }
@@ -658,7 +658,7 @@ func TestTencentCloudPlanWithoutServer(t *testing.T) {
 	if recs := f.Lookup("example.com", "blog"); len(recs) != 1 || recs[0].Type != "A" || f.Domain("blog.example.com") != nil {
 		t.Fatalf("after undo: records=%+v domain=%+v", recs, f.Domain("blog.example.com"))
 	}
-	logs, _ := a.ExecLogs(false)
+	logs, _ := a.ExecLogs(false, 0)
 	var reads, rollbacks int
 	for _, l := range logs {
 		if l.Kind == store.ExecRead && l.ServerName == "腾讯云" {

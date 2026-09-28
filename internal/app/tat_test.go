@@ -74,7 +74,7 @@ func TestServerThroughTAT(t *testing.T) {
 	if _, err := a.Rollback(ctx, st.LogID); err != nil {
 		t.Fatal(err)
 	}
-	logs, _ := a.ExecLogs(false)
+	logs, _ := a.ExecLogs(false, 0)
 	sawVia := false
 	for _, e := range logs {
 		sawVia = sawVia || (e.Title == "测试连接" && e.Via == "腾讯云自动化助手")

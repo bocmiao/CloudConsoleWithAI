@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Miao Panel</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23007aff'/%3E%3Cpath d='M16 7l9 5-9 5-9-5zM7 17l9 5 9-5' fill='none' stroke='white' stroke-width='2' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='115' fill='%23ffffff'/%3E%3Crect x='4' y='4' width='504' height='504' rx='111' fill='none' stroke='rgba(0,0,0,0.12)' stroke-width='8'/%3E%3Cpath transform='translate(96 99) scale(0.625)' fill='%23242428' d='M 103 438 C 79 438 64 422 66 398 L 79 174 C 81 136 88 99 103 73 C 107 66 114 65 120 72 L 246 221 Q 256 234 266 221 L 392 72 C 398 65 405 66 409 73 C 424 99 431 136 433 174 L 446 398 C 448 422 433 438 409 438 H 365 C 343 438 332 426 332 406 V 280 L 282 338 Q 256 365 230 338 L 180 280 V 406 C 180 426 169 438 147 438 Z'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
 <script src="vue.global.prod.js"></script>
 <script src="app.js" defer></script>
@@ -14,39 +14,57 @@
 
   <!-- On a phone the sidebar opens from this button -->
   <button class="phone-menu" ref="navBtn" @click="navOpen = !navOpen" :aria-expanded="navOpen ? 'true' : 'false'" aria-controls="side-nav"
-    :aria-label="unread ? `菜单（${unread} 条未读通知）` : '菜单'"><ui-icon name="menu"></ui-icon><span class="phone-dot" v-if="unread" aria-hidden="true">{{ unread > 99 ? '99+' : unread }}</span></button>
+    :aria-label="inboxCount ? `菜单（${inboxCount} 件待处理）` : '菜单'"><ui-icon name="menu"></ui-icon><span class="phone-dot" v-if="inboxCount" aria-hidden="true">{{ inboxCount > 99 ? '99+' : inboxCount }}</span></button>
   <div class="nav-scrim" v-if="navOpen" @click="closeNav"></div>
 
   <!-- Sidebar -->
   <aside class="sidebar" id="side-nav" ref="navEl" tabindex="-1" :class="{open: navOpen}" aria-label="导航">
-    <div class="app-title"><span class="app-mark"><ui-icon name="layers"></ui-icon></span>Miao Panel</div>
+    <div class="app-title"><span class="app-mark"><miao-logo></miao-logo></span>Miao Panel</div>
+    <button class="side-search" @click="palette = true; closeNav()"><ui-icon name="search"></ui-icon><span class="grow">搜索</span><span class="side-kbd">{{ modKey }}K</span></button>
 
     <div class="side-section">
-      <div class="side-item" :class="{active: tab === 'chat'}" @click="go('chat')"><ui-icon name="sparkles"></ui-icon>AI 助手</div>
-      <div class="side-item" :class="{active: tab === 'stats'}" @click="go('stats')"><ui-icon name="chart"></ui-icon>网站统计</div>
-      <div class="side-item" :class="{active: tab === 'certs'}" @click="go('certs')"><ui-icon name="lock"></ui-icon>证书</div>
-      <div class="side-item" :class="{active: tab === 'dns'}" @click="go('dns')"><ui-icon name="globe"></ui-icon>解析</div>
-      <div class="side-item" :class="{active: tab === 'storage'}" @click="go('storage')"><ui-icon name="bucket"></ui-icon>存储</div>
-      <div class="side-item" :class="{active: tab === 'terminal'}" @click="go('terminal')"><ui-icon name="prompt"></ui-icon>终端</div>
-      <div class="side-item" :class="{active: tab === 'files'}" @click="go('files')"><ui-icon name="folder"></ui-icon>文件</div>
-      <div class="side-item" :class="{active: tab === 'plans'}" @click="go('plans')"><ui-icon name="bulb"></ui-icon>建议</div>
-      <div class="side-item" :class="{active: tab === 'logs'}" @click="go('logs')"><ui-icon name="terminal"></ui-icon>日志</div>
-      <div class="side-item" :class="{active: tab === 'notices'}" @click="go('notices')"><ui-icon name="bell"></ui-icon>通知<span class="badge crit side-badge" v-if="unread">{{ unread > 99 ? '99+' : unread }}</span></div>
+      <div class="side-item" :class="{active: tab === 'home'}" @click="go('home')"><ui-icon name="home"></ui-icon><span class="grow">总览</span></div>
+      <div class="side-item" :class="{active: tab === 'chat'}" @click="go('chat')"><ui-icon name="sparkles"></ui-icon><span class="grow">AI 助手</span></div>
+      <div class="side-item" :class="{active: tab === 'inbox'}" @click="go('inbox')"><ui-icon name="inbox"></ui-icon><span class="grow">待处理</span>
+        <span class="side-count" v-if="inboxCount">{{ inboxCount > 99 ? '99+' : inboxCount }}</span></div>
+      <div class="side-item" :class="{active: tab === 'monitor'}" @click="go('monitor')"><ui-icon name="pulse"></ui-icon><span class="grow">监控</span>
+        <span class="side-count crit" v-if="monitorDown">{{ monitorDown }}</span></div>
     </div>
 
     <div class="side-section">
       <div class="side-label">服务器
         <button class="plain icon-only" title="添加服务器" aria-label="添加服务器" @click="openAdd"><ui-icon name="plus"></ui-icon></button>
       </div>
-      <div class="side-item" v-for="s in servers" :key="s.id" :class="{active: tab === 'servers' && s.id === selectedId}" @click="select(s.id)">
-        <ui-icon name="server"></ui-icon>
-        <div class="meta"><span>{{ s.name }}</span><span class="small tertiary">{{ adapterName(s.adapter) }} · {{ s.host }}</span></div>
+      <div class="side-item side-server" v-for="s in servers" :key="s.id" :class="{active: tab === 'servers' && s.id === selectedId}" @click="select(s.id)">
+        <span class="sdot" :class="serverDot(s.id)"></span>
+        <div class="meta grow"><span>{{ s.name }}</span><span :class="{warn: serverDot(s.id) === 'warn' || serverDot(s.id) === 'crit'}">{{ serverMeta(s) }}</span></div>
       </div>
       <div class="side-empty" v-if="!servers.length">还没有服务器</div>
+      <div class="side-item" v-if="servers.length" :class="{active: tab === 'terminal'}" @click="go('terminal')"><ui-icon name="prompt"></ui-icon><span class="grow">终端</span></div>
+      <div class="side-item" v-if="servers.length" :class="{active: tab === 'files'}" @click="go('files')"><ui-icon name="folder"></ui-icon><span class="grow">文件</span></div>
+    </div>
+
+    <div class="side-section">
+      <div class="side-label">网站</div>
+      <div class="side-item" :class="{active: tab === 'sites'}" @click="go('sites')"><ui-icon name="window"></ui-icon><span class="grow">网站管理</span></div>
+      <div class="side-item" :class="{active: tab === 'stats' && statsView === 'logs' && visitSection !== 'security'}" @click="openStats('logs', 'overview')"><ui-icon name="chart"></ui-icon><span class="grow">访问统计</span></div>
+      <div class="side-item" :class="{active: tab === 'stats' && statsView === 'logs' && visitSection === 'security'}" @click="openStats('logs', 'security')"><ui-icon name="shield"></ui-icon><span class="grow">安全</span>
+        <span class="side-count crit" v-if="overview && overview.security && overview.security.known && overview.security.unblocked">{{ overview.security.unblocked }}</span></div>
+      <div class="side-item" :class="{active: tab === 'certs'}" @click="go('certs')"><ui-icon name="lock"></ui-icon><span class="grow">证书</span>
+        <span class="side-count" :class="{crit: overview.certs.level === 'crit'}" v-if="overview && overview.certs && overview.certs.attention">{{ overview.certs.attention }}</span></div>
+    </div>
+
+    <div class="side-section">
+      <div class="side-label">云服务</div>
+      <div class="side-item" :class="{active: tab === 'cloud'}" @click="go('cloud')"><ui-icon name="cloud"></ui-icon><span class="grow">云服务器</span></div>
+      <div class="side-item" :class="{active: tab === 'stats' && statsView === 'eo'}" @click="openStats('eo')"><ui-icon name="bolt"></ui-icon><span class="grow">EdgeOne</span></div>
+      <div class="side-item" :class="{active: tab === 'dns'}" @click="go('dns')"><ui-icon name="globe"></ui-icon><span class="grow">解析</span></div>
+      <div class="side-item" :class="{active: tab === 'storage'}" @click="go('storage')"><ui-icon name="bucket"></ui-icon><span class="grow">存储</span></div>
     </div>
 
     <div class="sidebar-foot">
-      <div class="side-item" :class="{active: tab === 'settings'}" @click="go('settings')"><ui-icon name="sliders"></ui-icon>设置</div>
+      <div class="side-item" :class="{active: tab === 'logs'}" @click="go('logs')"><ui-icon name="history"></ui-icon><span class="grow">记录</span></div>
+      <div class="side-item" :class="{active: tab === 'settings'}" @click="go('settings')"><ui-icon name="gear"></ui-icon><span class="grow">设置</span></div>
       <div class="side-user" v-if="me"><ui-icon name="lock"></ui-icon><span class="grow">{{ me.name }}</span>
         <button class="plain small" @click="logout" title="退出登录">退出</button></div>
       <div class="spend" title="本月 AI 花费（估算）">本月 AI 花费 {{ spendText }}</div>
@@ -54,27 +72,34 @@
   </aside>
 
   <!-- Main -->
-  <div class="main">
+  <div class="main" :class="{ 'beside-ai': aiPanel && tab !== 'chat' }">
 
-    <!-- Server -->
+    <!-- 总览 -->
+    <template v-if="tab === 'home'">
+      <header class="toolbar"><h1>总览</h1></header>
+      <div class="page wide">
+        <home-page :overview="overview" :servers="servers" :ai-ready="ai.hasKey" :active="tab === 'home'" @refresh="loadOverview" @ask="askAI"
+          @go="go" @server="select" @stats="openStats" @plan="openInbox('todo')" @add="openAdd" @log="openLog"></home-page>
+      </div>
+    </template>
+
+    <!-- Server: the workbench, in tabs -->
     <template v-if="tab === 'servers'">
       <header class="toolbar">
-        <h1>{{ current ? '服务器概览' : '开始使用' }}</h1>
+        <h1>{{ current ? current.server.name : '开始使用' }}</h1>
         <div class="spacer"></div>
         <div class="actions" v-if="current">
-          <button @click="testConn" :disabled="busy"><ui-icon name="plug"></ui-icon>测试连接</button>
           <button @click="openTerminal(current.server.id)"><ui-icon name="prompt"></ui-icon>终端</button>
           <button @click="openFiles(current.server.id)" v-if="current.server.authKind !== 'tat'"><ui-icon name="folder"></ui-icon>文件</button>
-          <button @click="askAbout" :disabled="!current.profile"><ui-icon name="bubble"></ui-icon>问 AI</button>
+          <button @click="askAbout" :disabled="!current.profile"><ui-icon name="sparkles"></ui-icon>问 AI</button>
           <button class="primary" @click="discover" :disabled="busy"><ui-icon name="refresh"></ui-icon>{{ current.profile ? '重新识别' : '识别环境' }}</button>
-          <button class="plain destructive icon-only" title="删除服务器" aria-label="删除服务器" @click="removeServer" :disabled="busy"><ui-icon name="trash"></ui-icon></button>
         </div>
       </header>
 
       <div class="page">
         <!-- Welcome -->
         <div class="welcome" v-if="!servers.length">
-          <div class="app-mark"><ui-icon name="layers"></ui-icon></div>
+          <div class="app-mark"><miao-logo></miao-logo></div>
           <h2>用大白话管理你的服务器</h2>
           <p>看状态、找问题、问 AI。三步开始：</p>
           <div class="group">
@@ -96,110 +121,115 @@
         </div>
 
         <template v-if="current">
-          <div class="page-head">
-            <h2>{{ current.server.name }}</h2>
-            <p><template v-if="current.server.authKind === 'tat'">{{ current.server.host }} · 腾讯云自动化助手</template><template v-else>{{ current.server.username }}@{{ current.server.host }}:{{ current.server.port }}</template>
-              <span v-if="current.collectedAt"> · 识别于 {{ fmtTime(current.collectedAt) }}</span></p>
+          <div class="wb-head">
+            <div class="wb-title"><h2>{{ current.server.name }}</h2>
+              <span class="wb-state"><span class="sdot" :class="serverDot(current.server.id)"></span>{{ serverStateText(current.server.id) }}</span></div>
+            <div class="wb-facts"><span v-for="f in serverFacts" :key="f.k" :class="{ 'st-warn-text': f.warn }"><span class="tertiary">{{ f.k }}</span>{{ f.v }}</span></div>
           </div>
+          <nav class="segmented wb-tabs" role="tablist" aria-label="服务器">
+            <button v-for="t in SERVER_TABS" :key="t.id" role="tab" :aria-selected="serverTab === t.id" :class="{on: serverTab === t.id}" @click="serverTab = t.id">{{ t.text }}</button>
+          </nav>
 
           <div class="notice" v-if="busy"><span class="spinner"></span>{{ busyText }}</div>
-
-          <div class="group" v-if="!current.profile && !busy">
+          <div class="group" v-if="!current.profile && !busy && serverTab !== 'connection' && serverTab !== 'history'">
             <div class="row">
               <ui-icon name="info" class="lg" style="color: var(--accent)"></ui-icon>
               <div class="grow">这台服务器还没识别过。点击「识别环境」，会登录服务器运行一个<b>只读</b>检查脚本（大约十几秒），看看上面装了什么、运行得怎么样。</div>
             </div>
           </div>
 
-          <template v-if="cloud">
-            <div class="group-title">腾讯云</div>
+          <server-overview v-if="serverTab === 'overview' && current.profile" :view="current" :cloud="cloud" :busy="busy" :active="tab === 'servers' && serverTab === 'overview'"
+            @ask="askAI" @tab="t => serverTab = t" @site="openServerSite" @discover="discover" @log="openLog"></server-overview>
+          <div v-show="serverTab === 'sites'" v-if="seenServerSites">
+            <site-page v-if="current.server.adapter === '1panel' || current.server.adapter === 'bt'" :key="'s' + current.server.id" :server="current.server.id" :servers="servers" :active="tab === 'servers' && serverTab === 'sites'"
+              :request="serverSitesRequest" @ask="askAI" @server="serverTab = 'connection'" @context="v => serverSiteContext = v"></site-page>
+            <div class="group" v-else>
+              <div class="row"><ui-icon name="info" class="lg" style="color: var(--accent)"></ui-icon>
+                <div class="grow">网站管理支持 1Panel 和宝塔。{{ adapterName(current.server.adapter) }} 服务器上识别到的网站：
+                  <span class="tags" v-if="p && p.websites && p.websites.length"><span class="tag" v-for="w in p.websites" :key="w">{{ w }}</span></span><template v-else>没有</template></div></div>
+            </div>
+          </div>
+          <template v-if="serverTab === 'security'">
+            <div class="group" v-if="current.server.adapter === '1panel'">
+              <div class="row"><ui-icon name="info" style="color: var(--accent)"></ui-icon><span class="grow small secondary">网站目录和配置的备份、每日定时备份和恢复，在「网站」里打开一个网站的「备份」。</span>
+                <button class="plain small" @click="serverTab = 'sites'">打开网站</button></div>
+            </div>
             <div class="group">
-              <div class="row"><span class="k">实例</span><span class="v">{{ cloud.kind === 'lighthouse' ? '轻量应用服务器' : '云服务器 CVM' }} · {{ cloud.name }} · {{ cloud.id }}</span></div>
-              <div class="row"><span class="k">地域和配置</span><span class="v">{{ cloud.regionName }} · {{ cloud.cpu }} 核 {{ cloud.memoryGB }}GB · 系统盘 {{ cloud.diskGB }}GB · 带宽 {{ cloud.bandwidthMbps }}Mbps</span></div>
-              <div class="row" v-if="cloud.expiredTime"><span class="k">到期时间</span>
-                <span class="v" :class="{'st-warn': daysTo(cloud.expiredTime) < 15}">
-                  <ui-icon v-if="daysTo(cloud.expiredTime) < 15" name="warn" style="vertical-align: -3px"></ui-icon>
-                  {{ fmtTime(cloud.expiredTime) }}（{{ daysTo(cloud.expiredTime) < 0 ? '已过期' : '还剩 ' + daysTo(cloud.expiredTime) + ' 天' }}）· {{ cloud.renewFlag === 'NOTIFY_AND_AUTO_RENEW' ? '自动续费' : '没有开自动续费' }}</span></div>
-              <div class="row stack" v-if="cloud.trafficTotal">
-                <div style="display: flex"><span>本月流量包</span><span class="secondary" style="margin-left: auto">已用 {{ fmtBytes(cloud.trafficUsed) }} / {{ fmtBytes(cloud.trafficTotal) }}</span></div>
-                <div class="meter" :class="meterClass(Math.round(cloud.trafficUsed * 100 / cloud.trafficTotal))" role="meter" :aria-valuenow="Math.round(cloud.trafficUsed * 100 / cloud.trafficTotal)" aria-valuemin="0" aria-valuemax="100" aria-label="流量包用量" style="margin-bottom: 2px"><div :style="{width: Math.min(100, cloud.trafficUsed * 100 / cloud.trafficTotal) + '%'}"></div></div>
+              <div class="row stack security-block">
+                <b>数据库、Halo 与整盘快照</b>
+                <span class="small secondary">先在 1Panel 备份数据库和 Halo，再创建腾讯云快照。每一步会出现在确认清单中；CVM 快照可能产生费用。</span>
+                <div class="row form"><label class="k" for="security-db-app">数据库应用</label><span class="v"><input id="security-db-app" v-model="securityForm.databaseApp" placeholder="1Panel 中的应用名，例如 mysql"></span></div>
+                <div class="row form"><label class="k" for="security-halo-app">Halo 应用</label><span class="v"><input id="security-halo-app" v-model="securityForm.haloApp" placeholder="1Panel 中的应用名，例如 halo"></span></div>
+                <div><button @click="proposeSecurity('backup')" :disabled="busy || !cloud || current.server.adapter !== '1panel'">生成备份清单</button> <button @click="proposeSecurity('snapshot')" :disabled="busy || !cloud">仅创建快照</button><span class="small secondary" v-if="!cloud || current.server.adapter !== '1panel'"> 完整备份需要腾讯云实例和 1Panel API</span></div>
+              </div>
+              <div class="row stack security-block" v-if="cloud && cloud.kind === 'cvm' && cloud.securityGroups && cloud.securityGroups.length">
+                <b>收紧安全组 {{ cloud.securityGroups[0] }}</b>
+                <span class="small secondary">先补端口规则，再移除全端口放行。80/443 对外开放；SSH 端口 {{ current.server.port }}、面板端口和 13940、8090、8080 仅管理网段（/16 或更小）可访问；3306 不对外开放。若站点依赖其他端口，请先检查回源配置。</span>
+                <div class="row form"><label class="k" for="security-admin-cidr">管理网段</label><span class="v"><input id="security-admin-cidr" v-model="securityForm.adminCidr" placeholder="你的公网 IP/32，例如 203.0.113.4/32" autocomplete="off" spellcheck="false"></span></div>
+                <div><button @click="proposeSecurity('firewall')" :disabled="busy || !securityForm.adminCidr.trim()">生成安全组清单</button></div>
+              </div>
+              <div class="row stack security-block">
+                <b>SSH 登录加固</b>
+                <span class="small secondary">关闭密码和 root 直连前，先用非 root 用户的密钥添加并测试连接。执行时设置 5 分钟自动恢复保险，并重新连接验证。</span>
+                <div><button @click="proposeSecurity('ssh')" :disabled="busy || current.server.authKind !== 'key' || current.server.username === 'root'">生成 SSH 加固清单</button><span class="small secondary" v-if="current.server.authKind !== 'key' || current.server.username === 'root'"> 当前连接方式不满足前提</span></div>
               </div>
             </div>
           </template>
+          <server-apps v-if="serverTab === 'apps' && current.profile" :profile="p" :collected-at="current.collectedAt" :server="current.server.id"
+            :server-name="current.server.name" :adapter="current.server.adapter" @ask="askAI"></server-apps>
+          <exec-log v-if="serverTab === 'history'" :server="current.server.id" :key="'x' + current.server.id"></exec-log>
 
-
-          <template v-if="p">
-            <div class="tiles">
-              <div class="tile">
-                <div class="label"><ui-icon name="memory"></ui-icon>内存使用</div>
-                <div class="value">{{ memPct }}%</div>
-                <div class="meter" :class="meterClass(memPct)" role="meter" :aria-valuenow="memPct" aria-valuemin="0" aria-valuemax="100" aria-label="内存使用率"><div :style="{width: memPct + '%'}"></div></div>
-                <div class="sub">可用 {{ mb(p.memory.availableMB) }} / 共 {{ mb(p.memory.totalMB) }}</div>
-              </div>
-              <div class="tile">
-                <div class="label"><ui-icon name="disk"></ui-icon>系统盘</div>
-                <div class="value">{{ rootDisk ? rootDisk.usePct + '%' : '—' }}</div>
-                <div class="meter" v-if="rootDisk" :class="meterClass(rootDisk.usePct)" role="meter" :aria-valuenow="rootDisk.usePct" aria-valuemin="0" aria-valuemax="100" aria-label="系统盘使用率"><div :style="{width: rootDisk.usePct + '%'}"></div></div>
-                <div class="sub" v-if="rootDisk">已用 {{ rootDisk.used }} / 共 {{ rootDisk.size }}</div>
-              </div>
-              <div class="tile">
-                <div class="label"><ui-icon name="cpu"></ui-icon>CPU</div>
-                <div class="value">{{ p.cpuCores || '—' }} 核</div>
-                <div class="sub" style="margin-top: 14px">负载 {{ p.load || '—' }}</div>
-              </div>
-              <div class="tile">
-                <div class="label"><ui-icon name="layers"></ui-icon>环境</div>
-                <div class="value sm">{{ adapterName(p.adapter) }}</div>
-                <div class="sub">{{ envSub }}</div>
-              </div>
-            </div>
-
-            <div class="group-title">需要注意</div>
+          <template v-if="serverTab === 'connection'">
+            <div class="group-title">连接</div>
             <div class="group">
-              <div class="finding ok" v-if="!p.findings || !p.findings.length">
-                <ui-icon name="check"></ui-icon><div><div class="title">一切正常</div><div class="detail">没有发现需要处理的问题</div></div>
-              </div>
-              <div v-for="(f, i) in p.findings" :key="i" class="finding" :class="levelClass(f.level)">
-                <ui-icon :name="levelIcon(f.level)"></ui-icon>
-                <div><div class="title">{{ f.title }}<span class="level">{{ levelName(f.level) }}</span></div><div class="detail">{{ f.detail }}</div></div>
-              </div>
+              <template v-if="current.server.authKind === 'tat'">
+                <div class="row"><span class="k">方式</span><span class="v">腾讯云自动化助手（不用 SSH）</span></div>
+                <div class="row"><span class="k">实例</span><span class="v small mono">{{ current.server.instanceId }} · {{ current.server.region }}</span></div>
+              </template>
+              <template v-else>
+                <div class="row"><span class="k">地址</span><span class="v">{{ current.server.username }}@{{ current.server.host }}:{{ current.server.port }}</span></div>
+                <div class="row"><span class="k">登录方式</span><span class="v">{{ current.server.authKind === 'key' ? '密钥' : '密码' }}</span></div>
+                <div class="row"><span class="k">服务器指纹</span><span class="v small mono ellipsis" :title="current.server.hostKey">{{ current.server.hostKey || '—' }}</span></div>
+              </template>
+              <div class="row" v-if="current.collectedAt"><span class="k">识别于</span><span class="v">{{ fmtTime(current.collectedAt) }}</span></div>
+              <div class="row"><span class="grow small secondary">连不上时先测试一下；删除只是不再用 Miao Panel 管理，不影响服务器本身。</span>
+                <button @click="testConn" :disabled="busy"><ui-icon name="plug"></ui-icon>测试连接</button>
+                <button class="destructive" @click="removeServer" :disabled="busy"><ui-icon name="trash"></ui-icon>删除服务器</button></div>
             </div>
 
-            <div class="two-col">
-              <div>
-                <div class="group-title">系统</div>
-                <div class="group">
-                  <div class="row"><span class="k">操作系统</span><span class="v">{{ p.os || '未知' }}</span></div>
-                  <div class="row"><span class="k">内核</span><span class="v">{{ p.kernel }}</span></div>
-                  <div class="row"><span class="k">swap</span><span class="v">{{ p.memory.swapTotalMB ? mb(p.memory.swapTotalMB) + '，已用 ' + mb(p.memory.swapUsedMB) : '没有' }}</span></div>
-                  <div class="row" v-if="current.server.authKind !== 'tat'"><span class="k">服务器指纹</span><span class="v small mono ellipsis" :title="current.server.hostKey">{{ current.server.hostKey || '—' }}</span></div>
-                  <div class="row" v-else><span class="k">连接方式</span><span class="v small">腾讯云自动化助手（{{ current.server.instanceId }}）</span></div>
-                </div>
+            <template v-if="cloud">
+              <div class="group-title">腾讯云</div>
+              <div class="group">
+                <div class="row"><span class="k">实例</span><span class="v">{{ cloud.kind === 'lighthouse' ? '轻量应用服务器' : '云服务器 CVM' }} · {{ cloud.name }} · {{ cloud.id }}</span></div>
+                <div class="row"><span class="k">地域和配置</span><span class="v">{{ cloud.regionName }} · {{ cloud.cpu }} 核 {{ cloud.memoryGB }}GB · 系统盘 {{ cloud.diskGB }}GB · 带宽 {{ cloud.bandwidthMbps }}Mbps</span></div>
+                <div class="row"><span class="grow small secondary">防火墙、快照、开关机和监控在「云服务 › 云服务器」里。</span>
+                  <button @click="openCloud(cloud)"><ui-icon name="cloud"></ui-icon>打开</button></div>
+              </div>
+            </template>
 
-                <div class="group-title">存储</div>
-                <div class="group">
-                  <div class="row stack" v-for="d in p.disks" :key="d.mount">
-                    <div style="display: flex"><span>{{ d.mount }}</span><span class="secondary" style="margin-left: auto">{{ d.used }} / {{ d.size }} · {{ d.usePct }}%</span></div>
-                    <div class="meter" :class="meterClass(d.usePct)" role="meter" :aria-valuenow="d.usePct" aria-valuemin="0" aria-valuemax="100" :aria-label="d.mount + ' 使用率'" style="margin-bottom: 2px"><div :style="{width: d.usePct + '%'}"></div></div>
+            <template v-if="p">
+              <div class="two-col">
+                <div>
+                  <div class="group-title">系统</div>
+                  <div class="group">
+                    <div class="row"><span class="k">操作系统</span><span class="v">{{ p.os || '未知' }}</span></div>
+                    <div class="row"><span class="k">内核</span><span class="v">{{ p.kernel }}</span></div>
+                    <div class="row"><span class="k">swap</span><span class="v">{{ p.memory.swapTotalMB ? mb(p.memory.swapTotalMB) + '，已用 ' + mb(p.memory.swapUsedMB) : '没有' }}</span></div>
+                    <div class="row"><span class="k">Web 服务</span><span class="v">{{ p.webServer || '未发现' }}</span></div>
+                    <div class="row"><span class="k">Docker</span><span class="v">{{ dockerText }}</span></div>
                   </div>
-                  <div class="row secondary" v-if="!p.disks || !p.disks.length">没有磁盘信息</div>
+                </div>
+                <div>
+                  <div class="group-title">存储</div>
+                  <div class="group">
+                    <div class="row stack" v-for="d in p.disks" :key="d.mount">
+                      <div style="display: flex"><span>{{ d.mount }}</span><span class="secondary" style="margin-left: auto">{{ d.used }} / {{ d.size }} · {{ d.usePct }}%</span></div>
+                      <div class="meter" :class="meterClass(d.usePct)" role="meter" :aria-valuenow="d.usePct" aria-valuemin="0" aria-valuemax="100" :aria-label="d.mount + ' 使用率'" style="margin-bottom: 2px"><div :style="{width: d.usePct + '%'}"></div></div>
+                    </div>
+                    <div class="row secondary" v-if="!p.disks || !p.disks.length">没有磁盘信息</div>
+                  </div>
                 </div>
               </div>
-
-              <div>
-                <div class="group-title">网站和应用</div>
-                <div class="group">
-                  <div class="row"><span class="k">Web 服务</span><span class="v">{{ p.webServer || '未发现' }}</span></div>
-                  <div class="row"><span class="k">网站</span><span class="v"><span class="tags" v-if="p.websites && p.websites.length"><span class="tag" v-for="w in p.websites" :key="w">{{ w }}</span></span><template v-else>未发现</template></span></div>
-                  <div class="row" v-if="p.panel && p.panel.apps && p.panel.apps.length"><span class="k">面板应用</span><span class="v"><span class="tags"><span class="tag" v-for="a in p.panel.apps" :key="a">{{ a }}</span></span></span></div>
-                  <div class="row" v-if="p.panel && p.panel.runtimes && p.panel.runtimes.length"><span class="k">PHP 运行环境</span><span class="v">{{ p.panel.runtimes.join('、') }}</span></div>
-                  <div class="row" v-for="w in p.wordpress" :key="w"><span class="k">WordPress</span><span class="v small">{{ w }}</span></div>
-                  <div class="row" v-for="j in p.java" :key="j"><span class="k">Java</span><span class="v small">{{ j }}</span></div>
-                  <div class="row"><span class="k">数据库</span><span class="v">{{ p.databases && p.databases.length ? p.databases.join('、') : '未发现' }}</span></div>
-                  <div class="row"><span class="k">Docker</span><span class="v">{{ dockerText }}</span></div>
-                </div>
-              </div>
-            </div>
 
             <template v-if="current.server.adapter === '1panel'">
               <div class="group-title">1Panel 接口</div>
@@ -212,27 +242,15 @@
               </div>
             </template>
 
-            <div class="group-title">安全与备份</div>
-            <div class="group">
-              <div class="row stack security-block">
-                <b>数据库、Halo 与整盘快照</b>
-                <span class="small secondary">先在 1Panel 备份数据库和 Halo，再创建腾讯云快照。每一步会出现在确认清单中；CVM 快照可能产生费用。</span>
-                <div class="row form"><label class="k" for="security-db-app">数据库应用</label><span class="v"><input id="security-db-app" v-model="securityForm.databaseApp" placeholder="1Panel 中的应用名，例如 mysql"></span></div>
-                <div class="row form"><label class="k" for="security-halo-app">Halo 应用</label><span class="v"><input id="security-halo-app" v-model="securityForm.haloApp" placeholder="1Panel 中的应用名，例如 halo"></span></div>
-                <div><button @click="proposeSecurity('backup')" :disabled="busy || !cloud || current.server.adapter !== '1panel'">生成备份清单</button> <button @click="proposeSecurity('snapshot')" :disabled="busy || !cloud">仅创建快照</button><span class="small secondary" v-if="!cloud || current.server.adapter !== '1panel'"> 完整备份需要腾讯云实例和 1Panel API</span></div>
+            <template v-if="current.server.adapter === 'bt'">
+              <div class="group-title">宝塔接口</div>
+              <div class="group">
+                <div class="row stack small secondary">用来管理宝塔面板上的网站：域名、HTTPS、反向代理、伪静态和配置文件。在宝塔「面板设置 → API 接口」里开启接口，IP 白名单填 <b>127.0.0.1</b>，再把接口密钥粘贴到这里。请求在服务器本机发出（经 SSH，或用自动化助手在服务器上运行 curl），面板端口不需要对外开放。</div>
+                <div class="row form"><span class="k">面板端口</span><span class="v"><input type="number" v-model.number="bt.port" aria-label="宝塔面板端口"><span class="small secondary block" v-if="bt.port">识别到的端口，一般不用改</span></span></div>
+                <div class="row form"><span class="k">接口密钥</span><span class="v"><input type="password" v-model="bt.apiKey" :placeholder="bt.hasKey ? '已保存（留空表示不修改）' : '从宝塔复制'" autocomplete="off" aria-label="宝塔接口密钥"></span></div>
+                <div class="row"><span class="grow small secondary">{{ bt.info || (bt.hasKey ? '已配置' : '还没有配置') }}</span><button @click="testBT" :disabled="busy || !bt.hasKey">测试</button><button class="primary" @click="saveBT" :disabled="busy || !bt.port || (!bt.apiKey && !bt.hasKey)">保存</button></div>
               </div>
-              <div class="row stack security-block" v-if="cloud && cloud.kind === 'cvm' && cloud.securityGroups && cloud.securityGroups.length">
-                <b>收紧安全组 {{ cloud.securityGroups[0] }}</b>
-                <span class="small secondary">先补端口规则，再移除全端口放行。80/443 对外开放；SSH 端口 {{ current.server.port }}、13940、8090、8080 仅管理网段可访问；3306 不对外开放。若站点依赖其他端口，请先检查回源配置。</span>
-                <div class="row form"><label class="k" for="security-admin-cidr">管理网段</label><span class="v"><input id="security-admin-cidr" v-model="securityForm.adminCidr" placeholder="你的公网 IP/32，例如 203.0.113.4/32" autocomplete="off" spellcheck="false"></span></div>
-                <div><button @click="proposeSecurity('firewall')" :disabled="busy || !securityForm.adminCidr.trim()">生成安全组清单</button></div>
-              </div>
-              <div class="row stack security-block">
-                <b>SSH 登录加固</b>
-                <span class="small secondary">关闭密码和 root 直连前，先用非 root 用户的密钥添加并测试连接。执行时设置 5 分钟自动恢复保险，并重新连接验证。</span>
-                <div><button @click="proposeSecurity('ssh')" :disabled="busy || current.server.authKind !== 'key' || current.server.username === 'root'">生成 SSH 加固清单</button><span class="small secondary" v-if="current.server.authKind !== 'key' || current.server.username === 'root'"> 当前连接方式不满足前提</span></div>
-              </div>
-            </div>
+            </template>
 
             <div class="group">
               <details class="raw-box">
@@ -240,6 +258,7 @@
                 <pre class="raw">{{ current.raw }}</pre>
               </details>
             </div>
+            </template>
           </template>
         </template>
       </div>
@@ -254,14 +273,21 @@
       </div>
     </div>
 
-    <!-- AI assistant -->
-    <template v-if="tab === 'chat'">
-      <header class="toolbar">
+    <!-- AI assistant: a page of its own, or a side panel over any page -->
+    <div class="ai-host" v-if="tab === 'chat' || aiPanel" :class="{ panel: aiPanel && tab !== 'chat' }" role="complementary" :aria-label="aiPanel && tab !== 'chat' ? 'AI 侧栏' : null">
+      <header class="toolbar" v-if="tab === 'chat'">
         <h1>AI 助手</h1>
         <div class="spacer"></div>
         <button class="plain narrow-only" @click="showConvs = !showConvs"><ui-icon name="bubble"></ui-icon>对话记录</button>
         <button class="plain" @click="newChat" :disabled="chatBusy || !messages.length"><ui-icon name="plus"></ui-icon>新对话</button>
       </header>
+      <header class="ai-panel-head" v-else>
+        <ui-icon name="sparkles"></ui-icon><b class="grow">AI 助手</b>
+        <button class="plain icon-only" @click="newChat" :disabled="chatBusy || !messages.length" title="新对话" aria-label="新对话"><ui-icon name="plus"></ui-icon></button>
+        <button class="plain icon-only" @click="go('chat')" title="打开整页" aria-label="打开整页"><ui-icon name="expand"></ui-icon></button>
+        <button class="plain icon-only" @click="aiPanel = false" title="关闭（Esc）" aria-label="关闭 AI 侧栏"><ui-icon name="close"></ui-icon></button>
+      </header>
+      <div class="ai-context small" v-if="tab !== 'chat' && pageContext"><span class="sdot" style="background: var(--accent)"></span>知道你正在看：{{ pageContext }}</div>
       <div class="chat-layout">
       <aside class="conv-list" :class="{open: showConvs}" aria-label="对话记录">
         <div class="side-label">对话记录</div>
@@ -337,12 +363,22 @@
         </div>
       </div>
       </div>
-    </template>
+    </div>
+    <!-- Pages that fill the window ask from their toolbar instead. -->
+    <button class="ai-fab" v-if="!['chat', 'terminal', 'files'].includes(tab) && !aiPanel" @click="toggleAI(true)" :title="'问 AI（' + modKey + 'J）'"><ui-icon name="sparkles"></ui-icon>问 AI</button>
+
+    <!-- Websites on 1Panel -->
+    <div class="tab-pane" v-if="seen.sites" v-show="tab === 'sites'">
+      <header class="toolbar"><h1>网站</h1></header>
+      <div class="page wide">
+        <site-page :servers="servers" :active="tab === 'sites'" :request="sitesRequest" @ask="askAI" @server="id => { serverTab = 'connection'; select(id); }" @context="v => siteContext = v"></site-page>
+      </div>
+    </div>
 
     <!-- Website statistics -->
     <!-- Kept alive once opened, so switching back shows it at once. -->
     <div class="tab-pane" v-if="seen.stats" v-show="tab === 'stats'">
-      <header class="toolbar"><h1>网站统计</h1>
+      <header class="toolbar"><h1>{{ statsView === 'eo' ? 'EdgeOne' : '访问统计' }}</h1>
         <span class="segmented" role="tablist" aria-label="统计类型">
           <button role="tab" :aria-selected="statsView === 'logs'" :class="{on: statsView === 'logs'}" @click="statsView = 'logs'">访问分析</button>
           <button role="tab" :aria-selected="statsView === 'eo'" :class="{on: statsView === 'eo'}" @click="statsView = 'eo'">EdgeOne 实时</button>
@@ -350,7 +386,7 @@
       </header>
       <div class="page wide">
         <div v-if="statsSeen.logs" v-show="statsView === 'logs'">
-          <visit-stats :servers="servers" :tencent="tc.configured" :active="tab === 'stats' && statsView === 'logs'" @ask="askAI"></visit-stats>
+          <visit-stats :servers="servers" :tencent="tc.configured" :active="tab === 'stats' && statsView === 'logs'" :request="statsRequest" @section="v => visitSection = v" @ask="askAI"></visit-stats>
         </div>
         <div v-if="statsSeen.eo" v-show="statsView === 'eo'">
           <eo-stats :configured="tc.configured" :active="tab === 'stats' && statsView === 'eo'" @ask="askAI" @settings="go('settings')" @origin="go('dns')"></eo-stats>
@@ -358,11 +394,19 @@
       </div>
     </div>
 
-    <!-- Notices: daily reports and alerts -->
-    <div class="tab-pane" v-if="seen.notices" v-show="tab === 'notices'">
-      <header class="toolbar"><h1>通知</h1></header>
+    <!-- 待处理: checklists waiting, alerts and daily reports, every checklist -->
+    <!-- Monitoring -->
+    <div class="tab-pane" v-if="seen.monitor" v-show="tab === 'monitor'">
+      <header class="toolbar"><h1>监控</h1></header>
+      <div class="page wide">
+        <monitor-page :active="tab === 'monitor'" @server="select" @ask="askAI"></monitor-page>
+      </div>
+    </div>
+
+    <div class="tab-pane" v-if="seen.inbox" v-show="tab === 'inbox'">
+      <header class="toolbar"><h1>待处理</h1></header>
       <div class="page">
-        <notice-page :active="tab === 'notices'" @unread="n => unread = n"></notice-page>
+        <inbox-page :active="tab === 'inbox'" :servers="servers" :focus="inboxFocus" @unread="n => unread = n" @changed="loadOverview"></inbox-page>
       </div>
     </div>
 
@@ -374,11 +418,20 @@
       </div>
     </div>
 
+    <!-- Cloud servers: Tencent Cloud and 阿里云 -->
+    <div class="tab-pane" v-if="seen.cloud" v-show="tab === 'cloud'">
+      <header class="toolbar"><h1>云服务器</h1></header>
+      <div class="page wide">
+        <cloud-page :configured="tc.configured" :aliyun="ali.configured" :active="tab === 'cloud'" :request="cloudRequest" :servers="servers"
+          @server="select" @add="addFromCloud" @settings="go('settings')" @ask="askAI"></cloud-page>
+      </div>
+    </div>
+
     <!-- DNS -->
     <div class="tab-pane" v-if="seen.dns" v-show="tab === 'dns'">
       <header class="toolbar"><h1>解析</h1></header>
       <div class="page wide">
-        <dns-page :configured="tc.configured" :active="tab === 'dns'" :servers="servers" @settings="go('settings')"></dns-page>
+        <dns-page :configured="tc.configured" :aliyun="ali.configured" :active="tab === 'dns'" :servers="servers" @settings="go('settings')"></dns-page>
       </div>
     </div>
 
@@ -392,31 +445,19 @@
 
     <!-- Terminals: kept alive once opened, so sessions survive page switches. -->
     <div class="tab-pane" v-if="seen.terminal" v-show="tab === 'terminal'">
-      <header class="toolbar"><h1>终端</h1></header>
+      <header class="toolbar"><h1>终端</h1><span class="spacer"></span><button class="plain" v-if="!aiPanel" @click="toggleAI(true)" :title="'问 AI（' + modKey + 'J）'"><ui-icon name="sparkles"></ui-icon>问 AI</button></header>
       <terminal-page :servers="servers" :active="tab === 'terminal'" :request="termRequest"></terminal-page>
     </div>
 
     <!-- Files: kept alive once opened, so uploads and the open folder survive page switches. -->
     <div class="tab-pane" v-if="seen.files" v-show="tab === 'files'">
-      <header class="toolbar"><h1>文件</h1></header>
+      <header class="toolbar"><h1>文件</h1><span class="spacer"></span><button class="plain" v-if="!aiPanel" @click="toggleAI(true)" :title="'问 AI（' + modKey + 'J）'"><ui-icon name="sparkles"></ui-icon>问 AI</button></header>
       <file-page :servers="servers" :active="tab === 'files'" :request="filesRequest"></file-page>
     </div>
 
-    <!-- Plans -->
-    <template v-if="tab === 'plans'">
-      <header class="toolbar"><h1>建议</h1></header>
-      <div class="page">
-        <div class="page-head">
-          <p>AI 给出的所有清单都在这里，可以随时回来执行或撤销。</p>
-        </div>
-        <plan-card v-for="pl in plans" :key="pl.id" :plan="pl" :server-name="serverName(pl.serverId) + ' · ' + fmtTime(pl.createdAt)"></plan-card>
-        <div class="group" v-if="!plans.length"><div class="row secondary">还没有清单。在「AI 助手」里说出你想做什么，AI 会把修改方案整理成清单。</div></div>
-      </div>
-    </template>
-
     <!-- Logs -->
     <template v-if="tab === 'logs'">
-      <header class="toolbar"><h1>日志</h1><span class="spacer"></span>
+      <header class="toolbar"><h1>记录</h1><span class="spacer"></span>
         <span class="segmented">
           <button :class="{on: logView === 'exec'}" @click="logView = 'exec'">执行日志</button>
           <button :class="{on: logView === 'audit'}" @click="logView = 'audit'; loadAudit()">操作记录</button>
@@ -487,6 +528,26 @@
           </ol>
         </details>
 
+        <div class="group-title">阿里云</div>
+        <div class="group">
+          <div class="row form"><span class="k">AccessKey ID</span><span class="v"><input v-model="ali.id" :placeholder="ali.configured ? '已保存：' + ali.hint + '（留空表示不修改）' : '一般以 LTAI 开头'" autocomplete="off" aria-label="AccessKey ID"></span></div>
+          <div class="row form"><span class="k">AccessKey Secret</span><span class="v"><input type="password" v-model="ali.secret" :placeholder="ali.configured ? '已保存（留空表示不修改）' : '创建时只显示一次，请复制保存'" autocomplete="off" aria-label="AccessKey Secret"></span></div>
+          <div class="row"><span class="grow small secondary">{{ ali.info || (ali.configured ? '已配置' : '还没有配置。配好后「云服务器」里会出现阿里云的轻量应用服务器和 ECS，AI 也能查看和管理它们') }}</span>
+            <button v-if="ali.configured" class="plain destructive" @click="clearAliyun" :disabled="busy">清除</button>
+            <button @click="testAliyun" :disabled="busy || !ali.configured">测试</button>
+            <button class="primary" @click="saveAliyun" :disabled="busy || !ali.id || !ali.secret">保存</button></div>
+        </div>
+        <details class="guide">
+          <summary><ui-icon name="chevron"></ui-icon>怎么创建给 Miao Panel 用的 RAM 用户（只给需要的权限）？</summary>
+          <ol>
+            <li>打开阿里云控制台的<a href="https://ram.console.aliyun.com/users" target="_blank" rel="noopener">访问控制（RAM）</a>，进入「用户 → 创建用户」；</li>
+            <li>登录名称随便填，比如 miaopanel；访问方式只勾选「使用永久 AccessKey 访问」，<b>不要</b>勾选控制台访问；</li>
+            <li>创建后给这个用户「添加权限」，搜索并勾选：<code>AliyunECSFullAccess</code>（云服务器 ECS 和它的安全组、快照）、<code>AliyunSWASFullAccess</code>（轻量应用服务器）、<code>AliyunCloudMonitorReadOnlyAccess</code>（ECS 的监控数据）、<code>AliyunDNSFullAccess</code>（云解析）、<code>AliyunCDNFullAccess</code>（CDN）。用不到的产品可以不勾；只想让 AI 查看的话，改选名字里带 ReadOnly 的同名策略；</li>
+            <li>复制 AccessKey ID 和 AccessKey Secret 粘贴到上面。Secret 只显示一次；</li>
+            <li>不要用主账号的 AccessKey。RAM 用户只有你勾选的权限，随时可以在访问控制里禁用或删除。</li>
+          </ol>
+        </details>
+
         <div class="group-title">AI 自由命令</div>
         <div class="group">
           <div class="row"><span class="grow">没有现成模板时，允许 AI 现场编写命令</span>
@@ -508,7 +569,26 @@
         <div class="group">
           <div class="row"><span class="k">密码和 API Key</span><span class="v">{{ info.secretsKind === 'keychain' ? '保存在系统钥匙串（Windows 凭据管理器）' : info.mode === 'server' ? '保存在服务器上数据目录的 secrets.json（只有运行 Miao Panel 的用户可读），不会发给 AI' : '保存在数据目录的 secrets.json（仅当前用户可读）' }}</span></div>
           <div class="row"><span class="k">访问范围</span><span class="v">{{ info.mode === 'server' ? 'Web 版：登录后才能访问，可以开启两步验证' : '只在本机打开（127.0.0.1），不会发给 AI' }}</span></div>
-          <div class="row"><span class="k">版本</span><span class="v">{{ info.version }}</span></div>
+        </div>
+
+        <div class="group-title">版本和诊断</div>
+        <div class="group">
+          <div class="row"><span class="k">当前版本</span><span class="v">{{ upd.current || info.version }}<span class="small tertiary"> · {{ upd.os }}</span></span></div>
+          <div class="row" v-if="upd.latest"><span class="k">最新版本</span><span class="v">
+            <template v-if="upd.newer"><span class="sdot warn"></span>{{ upd.latest.version }} 可以更新</template>
+            <template v-else>{{ upd.latest.version }}，已经是最新</template>
+            <a class="small" :href="upd.latest.url" target="_blank" rel="noopener"> 更新说明</a></span></div>
+          <div class="row stack small secondary" v-if="upd.newer && upd.latest.notes"><pre class="upd-notes">{{ updNotes }}</pre></div>
+          <div class="row small secondary" v-if="upd.error"><ui-icon name="warn" class="st-warn"></ui-icon><span class="grow">{{ upd.error }}</span></div>
+          <div class="row small secondary" v-if="upd.newer && !upd.canApply && upd.why"><ui-icon name="info"></ui-icon><span class="grow">{{ upd.why }}</span></div>
+          <div class="row" v-if="updApplying"><span class="spinner"></span><span class="grow">{{ updApplying }}</span></div>
+          <div class="row"><span class="grow small secondary">每天自动检查一次（只问 GitHub 最新的版本号，不发送任何数据）<template v-if="upd.checkedAt"> · 上次 {{ fmtTime(upd.checkedAt) }}</template></span>
+            <span class="segmented"><button :class="{on: !upd.enabled}" @click="setUpdateCheck(false)" :disabled="busy">关闭</button><button :class="{on: upd.enabled}" @click="setUpdateCheck(true)" :disabled="busy">开启</button></span></div>
+          <div class="row small secondary">遇到问题时下载诊断包附在反馈里：版本、系统、哪些功能配置了、最近的操作记录和故障（没有密钥、密码和对话内容，服务器地址只保留前两段）。</div>
+          <div class="row upd-actions"><span class="grow"></span>
+            <button @click="downloadDiagnostics" :disabled="busy">下载诊断包</button>
+            <button @click="checkUpdate" :disabled="busy || !!updApplying">检查更新</button>
+            <button class="primary" v-if="upd.newer && upd.canApply" @click="applyUpdate" :disabled="busy || !!updApplying">更新到 {{ upd.latest.version }}</button></div>
         </div>
       </div>
     </template>
@@ -559,6 +639,9 @@
       </div>
     </div>
   </div>
+
+  <command-palette :open="palette" :servers="servers" @close="palette = false" @go="go" @stats="openStats" @server="select" @terminal="openTerminal"
+    @files="id => openFiles(id)" @site="openSite" @ask="askAI" @add="openAdd" @newsite="newSite"></command-palette>
 
   <div class="toast" v-if="toast.text" :class="toast.kind" role="status">
     <ui-icon :name="toast.kind === 'error' ? 'alert' : 'check'" class="lg"></ui-icon><div>{{ toast.text }}</div>

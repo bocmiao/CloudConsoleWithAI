@@ -53,6 +53,9 @@ func traceCloud(env *Env, run func() Outcome) Outcome {
 }
 
 func applyCloud(ctx context.Context, env *Env, r Resolved, progress Progress) Outcome {
+	if strings.HasPrefix(r.Impl.Cloud, "ali_") {
+		return applyAliyun(ctx, env, r, progress)
+	}
 	out := &Outcome{Undo: map[string]string{}}
 	if env.Cloud == nil {
 		out.Status = StatusRefused
@@ -122,6 +125,9 @@ func applyCloud(ctx context.Context, env *Env, r Resolved, progress Progress) Ou
 }
 
 func undoCloud(ctx context.Context, env *Env, r Resolved, undo map[string]string) Outcome {
+	if strings.HasPrefix(r.Impl.Cloud, "ali_") {
+		return undoAliyun(ctx, env, r, undo)
+	}
 	out := Outcome{}
 	if len(undo) == 0 {
 		out.Status = StatusUndone

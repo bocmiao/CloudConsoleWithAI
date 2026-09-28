@@ -2,6 +2,7 @@ package actions
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/bocmiao/CloudConsoleWithAI/internal/tencent"
@@ -24,7 +25,7 @@ func TestFirewallTightenAndUndo(t *testing.T) {
 		t.Fatalf("existing deny lost priority: %+v", f.Firewall["sg-abc"])
 	}
 	for _, rule := range f.Firewall["sg-abc"] {
-		if publicSensitiveRule(rule, 22) {
+		if publicSensitiveRule(rule, AdminPorts(22, 0)) {
 			t.Fatalf("sensitive port remains public: %+v", rule)
 		}
 	}
@@ -63,12 +64,12 @@ func TestFirewallTightenRefusesOtherPublicSources(t *testing.T) {
 	base := tencent.FirewallRule{Protocol: "ALL", Port: "ALL", CidrBlock: "0.0.0.0/0", Action: "ACCEPT"}
 	for _, source := range []string{"0.0.0.0/1", "128.0.0.0/1", "203.0.113.9/32"} {
 		rules := []tencent.FirewallRule{base, {Protocol: "TCP", Port: "3306", CidrBlock: source, Action: "ACCEPT"}}
-		if _, err := FirewallTightenRules(rules, 22, "203.0.113.4/32"); err == nil {
+		if _, err := FirewallTightenRules(rules, AdminPorts(22, 0), "203.0.113.4/32"); err == nil {
 			t.Errorf("public MySQL source %s accepted", source)
 		}
 	}
 	rules := []tencent.FirewallRule{base, {Protocol: "TCP", Port: "3306", CidrBlock: "10.0.0.0/8", Action: "ACCEPT"}}
-	if _, err := FirewallTightenRules(rules, 22, "203.0.113.4/32"); err != nil {
+	if _, err := FirewallTightenRules(rules, AdminPorts(22, 0), "203.0.113.4/32"); err != nil {
 		t.Fatalf("private MySQL source rejected: %v", err)
 	}
 }
@@ -102,6 +103,20 @@ func TestSSHHardenRequiresKeyConnection(t *testing.T) {
 	for _, env := range []*Env{{User: "root", AuthKind: "key"}, {User: "admin", AuthKind: "password"}, {User: "other", AuthKind: "key"}} {
 		if out := Apply(context.Background(), env, r, nil); out.Status != StatusRefused {
 			t.Fatalf("unsafe SSH execution accepted: %+v", out)
+		}
+	}
+}
+
+func TestAdminPortsAndNetwork(t *testing.T) {
+	if got := AdminPorts(2222, 31000); !slices.Equal(got, []int{2222, 31000, 13940, 8090, 8080}) {
+		t.Errorf("ports = %v", got)
+	}
+	if got := AdminPorts(22, 13940); !slices.Equal(got, []int{22, 13940, 8090, 8080}) {
+		t.Errorf("ports = %v", got)
+	}
+	for cidr, ok := range map[string]bool{"203.0.113.4/32": true, "203.0.0.0/16": true, "1.2.3.4/1": false, "0.0.0.0/0": false, "2001:db8::/64": false, "x": false} {
+		if _, got := AdminNetwork(cidr); got != ok {
+			t.Errorf("%s accepted = %v", cidr, got)
 		}
 	}
 }

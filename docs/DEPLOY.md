@@ -22,7 +22,7 @@ docker logs miaopanel          # 找到「初始化码」
 默认只在本机的 `127.0.0.1:18765` 上监听，需要再配一个带 HTTPS 的反向代理（见下文）才能从外面访问。
 数据（数据库和密钥）在 Docker 卷 `miaopanel-data` 里，删除容器不会丢；**删除这个卷就全没了**。
 
-升级：`git pull && docker compose up -d --build`。
+升级：`git pull && docker compose up -d --build`。有新版本时「设置 → 版本和诊断」和总览会提醒（每天问一次 GitHub，可以关掉），Docker 版不能在页面上一键更新。
 
 ### 备份与恢复 Web 版数据
 
@@ -74,7 +74,7 @@ sudo journalctl -u miaopanel   # 找到「初始化码」
 ```
 
 服务文件在 [`deploy/miaopanel.service`](../deploy/miaopanel.service)：以 `miaopanel` 用户运行，数据在 `/var/lib/miaopanel`，只监听 `127.0.0.1:18765`。
-升级：下载新版本，`sudo install -m 755 MiaoPanel-linux-amd64 /usr/local/bin/miaopanel` 替换后 `sudo systemctl restart miaopanel`。
+升级：下载新版本，`sudo install -m 755 MiaoPanel-linux-amd64 /usr/local/bin/miaopanel` 替换后 `sudo systemctl restart miaopanel`。服务以 `miaopanel` 用户运行、不能写 `/usr/local/bin`，所以页面上只提醒有新版本，不能一键更新。
 
 ## 配置 HTTPS 反向代理
 

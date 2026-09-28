@@ -6,24 +6,25 @@ package geoip
 
 import (
 	"bytes"
-	"compress/bzip2"
-	"compress/gzip"
 	_ "embed"
 	"encoding/binary"
 	"io"
 	"net/netip"
 	"strings"
 	"sync"
+
+	"github.com/ulikunitz/xz"
 )
 
-//go:embed ip2region_v4.xdb.gz
-var packed4 []byte
-
-// The IPv6 database is bigger (37 MB); bzip2 keeps it at 5.5 MB in the
-// program, and it is only unpacked when an IPv6 visitor is seen.
-//
-//go:embed ip2region_v6.xdb.bz2
-var packed6 []byte
+// The databases are 11 MB (IPv4) and 37 MB (IPv6); xz keeps them at 2.7
+// and 3.1 MB in the program (made with xz -9e). Each is unpacked in about
+// a second when the first address of its kind is looked up.
+var (
+	//go:embed ip2region_v4.xdb.xz
+	packed4 []byte
+	//go:embed ip2region_v6.xdb.xz
+	packed6 []byte
+)
 
 // Location is where an address is registered.
 type Location struct {
@@ -65,7 +66,8 @@ var (
 	db4, db6     []byte
 )
 
-func unpack(r io.Reader, err error) []byte {
+func unpack(packed []byte) []byte {
+	r, err := xz.NewReader(bytes.NewReader(packed))
 	if err != nil {
 		return nil
 	}
@@ -76,8 +78,8 @@ func unpack(r io.Reader, err error) []byte {
 	return data
 }
 
-func load4() { db4 = unpack(gzip.NewReader(bytes.NewReader(packed4))) }
-func load6() { db6 = unpack(bzip2.NewReader(bytes.NewReader(packed6)), nil) }
+func load4() { db4 = unpack(packed4) }
+func load6() { db6 = unpack(packed6) }
 
 const (
 	headerLen  = 256

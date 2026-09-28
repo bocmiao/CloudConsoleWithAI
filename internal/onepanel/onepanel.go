@@ -58,7 +58,15 @@ type Shell func(ctx context.Context, cmd, stdin string, maxOut int) (stdout, std
 // runs curl on the server against the panel's loopback port.
 func NewOverShell(sh Shell, port int, key, host, scheme string) *Client {
 	target := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
-	return newClient(&curlTransport{sh: sh, target: target}, target, key, host, scheme)
+	return newClient(&curlTransport{sh: sh, target: target, name: "1Panel", redact: redactKeys}, target, key, host, scheme)
+}
+
+// ShellTransport sends HTTP requests to a port on the server's loopback
+// by running curl there, for other panels' clients: name is the panel's,
+// for messages, and redact a shell filter (such as a sed) that blanks
+// secrets in its answers on the server.
+func ShellTransport(sh Shell, port int, name, redact string) http.RoundTripper {
+	return &curlTransport{sh: sh, target: net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), name: name, redact: redact}
 }
 
 func newClient(rt http.RoundTripper, target, key, host, scheme string) *Client {
@@ -75,6 +83,8 @@ func newClient(rt http.RoundTripper, target, key, host, scheme string) *Client {
 type curlTransport struct {
 	sh     Shell
 	target string
+	name   string // the panel, for messages
+	redact string // appended to the command: blanks secrets in the answer
 }
 
 func shq(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
@@ -99,7 +109,13 @@ func (t *curlTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.URL.RawQuery != "" {
 		u += "?" + req.URL.RawQuery
 	}
-	cmd := []string{"curl", "-sS", "-k", "--noproxy", "'*'", "-m", "170", "-X", req.Method, "-o", "-", "-w", shq(statusMark + "%{http_code}"), "-H", shq("Host: " + req.Host)}
+	// As long as the caller waits (宝塔's backups and certificate orders
+	// run inside the call), at least the usual 170 seconds.
+	maxTime := 170
+	if d, ok := req.Context().Deadline(); ok {
+		maxTime = max(maxTime, int(time.Until(d).Seconds())-5)
+	}
+	cmd := []string{"curl", "-sS", "-k", "--noproxy", "'*'", "-m", strconv.Itoa(maxTime), "-X", req.Method, "-o", "-", "-w", shq(statusMark + "%{http_code}"), "-H", shq("Host: " + req.Host)}
 	for k, vs := range req.Header {
 		for _, v := range vs {
 			cmd = append(cmd, "-H", shq(k+": "+v))
@@ -109,7 +125,7 @@ func (t *curlTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		cmd = append(cmd, "--data-binary", "@-")
 	}
 	cmd = append(cmd, shq(u))
-	line := "{ " + strings.Join(cmd, " ") + "; rc=$?; echo; echo MIAOCURL $rc; }" + redactKeys
+	line := "{ " + strings.Join(cmd, " ") + "; rc=$?; echo; echo MIAOCURL $rc; }" + t.redact
 	stdout, stderr, _, err := t.sh(req.Context(), line, string(body), 8<<20)
 	if err != nil {
 		return nil, err
@@ -121,9 +137,9 @@ func (t *curlTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	code, _ := strconv.Atoi(strings.TrimSpace(stdout[end+len("\nMIAOCURL "):]))
 	switch {
 	case code == 127:
-		return nil, errors.New("服务器上没有 curl，无法调用 1Panel 接口")
+		return nil, fmt.Errorf("服务器上没有 curl，无法调用 %s 接口", t.name)
 	case code != 0:
-		return nil, fmt.Errorf("curl 连接 1Panel 失败（退出码 %d）：%s", code, strings.TrimSpace(stderr))
+		return nil, fmt.Errorf("curl 连接 %s 失败（退出码 %d）：%s", t.name, code, strings.TrimSpace(stderr))
 	}
 	stdout = stdout[:end]
 	i := strings.LastIndex(stdout, statusMark)
@@ -380,9 +396,13 @@ func (c *Client) Databases(ctx context.Context, app string) ([]string, error) {
 // kind is "app" (name = app key, detail = install name) or a database type
 // such as "mysql" (name = database app, detail = database name).
 func (c *Client) Backup(ctx context.Context, kind, name, detail, taskID string) error {
+	return c.BackupNote(ctx, kind, name, detail, taskID, "Miao Panel 修改前备份")
+}
+
+// BackupNote starts a backup with a note saying why it was made.
+func (c *Client) BackupNote(ctx context.Context, kind, name, detail, taskID, note string) error {
 	return c.do(ctx, http.MethodPost, "/backups/backup", map[string]any{
-		"type": kind, "name": name, "detailName": detail, "taskID": taskID,
-		"description": "Miao Panel 修改前备份",
+		"type": kind, "name": name, "detailName": detail, "taskID": taskID, "description": note,
 	}, nil)
 }
 

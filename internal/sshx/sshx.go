@@ -132,6 +132,51 @@ func authMethods(t Target) ([]ssh.AuthMethod, error) {
 // Close closes the connection.
 func (c *Client) Close() error { return c.conn.Close() }
 
+// KeepAlive asks the server every interval whether it is still there, and
+// closes the connection when three questions in a row go unanswered. A
+// firewall or NAT on the way can drop an idle connection without telling
+// either end; this keeps it busy enough not to be dropped, and notices
+// when it was. Any answer counts, a refusal included.
+func (c *Client) KeepAlive(interval time.Duration) {
+	gone := make(chan struct{})
+	go func() {
+		_ = c.conn.Wait()
+		close(gone)
+	}()
+	go func() {
+		tick := time.NewTicker(interval)
+		defer tick.Stop()
+		missed := 0
+		for {
+			select {
+			case <-gone:
+				return
+			case <-tick.C:
+			}
+			answer := make(chan error, 1)
+			go func() {
+				_, _, err := c.conn.SendRequest("keepalive@openssh.com", true, nil)
+				answer <- err
+			}()
+			select {
+			case <-gone:
+				return
+			case err := <-answer:
+				if err != nil {
+					c.conn.Close()
+					return
+				}
+				missed = 0
+			case <-time.After(interval):
+				if missed++; missed >= 3 {
+					c.conn.Close()
+					return
+				}
+			}
+		}
+	}()
+}
+
 // SFTP opens a file transfer session on the connection.
 func (c *Client) SFTP() (*sftp.Client, error) { return sftp.NewClient(c.conn) }
 

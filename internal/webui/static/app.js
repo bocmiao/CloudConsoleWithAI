@@ -58,9 +58,7 @@ function md(text) {
 
 // Line icons (24x24, stroked with currentColor).
 const ICONS = {
-  layers: 'M12 3l9 5-9 5-9-5zM3 13l9 5 9-5',
   sparkles: 'M12 3l1.8 4.9L19 9.5l-5.2 1.6L12 16l-1.8-4.9L5 9.5l5.2-1.6zM19 15l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z',
-  bulb: 'M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.6.5 1.1 1.2 1.1 2V16h5v-.2c0-.8.5-1.5 1.1-2A6 6 0 0 0 12 3z',
   clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2',
   server: 'M5 4h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM5 13h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2zM7 7.5h.01M7 16.5h.01',
   sliders: 'M4 7h9M17 7h3M15 5v4M4 17h3M11 17h9M9 15v4',
@@ -87,8 +85,6 @@ const ICONS = {
   pencil: 'M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4',
   archive: 'M3 4h18v4H3zM5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4',
   cpu: 'M7 7h10v10H7zM10 10h4v4h-4zM9 3v4M15 3v4M9 17v4M15 17v4M3 9h4M3 15h4M17 9h4M17 15h4',
-  memory: 'M3 8h18v8H3zM7 16v3M12 16v3M17 16v3M7 11v2M12 11v2M17 11v2',
-  disk: 'M3 13h18v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM3 13l3-8h12l3 8M7 16.5h.01',
   terminal: 'M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM7 10l3 2.5L7 15M12.5 15H17',
   undo: 'M9 14L4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11',
   eye: 'M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
@@ -102,7 +98,25 @@ const ICONS = {
   bolt: 'M13 3L5 13.5h6L10 21l8-10.5h-6z',
   cloud: 'M7 18a4.5 4.5 0 0 1-.6-8.96A6 6 0 0 1 18 8.6 4.5 4.5 0 0 1 17.5 18z',
   bucket: 'M4 7h16l-1.6 12.2a2 2 0 0 1-2 1.8H7.6a2 2 0 0 1-2-1.8zM4 7c0-1.7 3.6-3 8-3s8 1.3 8 3',
-  bell: 'M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15zM10 20.5a2 2 0 0 0 4 0',
+  pulse: 'M3 12h4l2.5-6 4.5 12 2.5-6H21',
+  window: 'M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM3 9h18M6 7h.01M9 7h.01',
+  home: 'M4 10.5 12 4l8 6.5V19a1 1 0 0 1-1 1h-4.5v-5.5h-5V20H5a1 1 0 0 1-1-1z',
+  inbox: 'M4 13.5 6.5 5h11L20 13.5V19a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1zM4 13.5h4.5l1.5 2.5h4l1.5-2.5H20',
+  shield: 'M12 3.5l7 2.7v5.3c0 4.2-2.9 7.6-7 9-4.1-1.4-7-4.8-7-9V6.2z',
+  history: 'M4 12a8 8 0 1 0 2.4-5.7L4 8.5M4 4v4.5h4.5M12 8v4.2l2.8 1.8',
+  expand: 'M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7',
+  search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4',
+  gear: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.5a7.6 7.6 0 0 0-2.6 1.5l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 0 0 0 3l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.6 7.6 0 0 0 2.6-1.5l2.4 1 2-3.4z',
+};
+
+// Miao Panel's mark: the cat-ear M on a rounded tile, light or dark with
+// the system.
+const MIAO_MARK = 'M 103 438 C 79 438 64 422 66 398 L 79 174 C 81 136 88 99 103 73 C 107 66 114 65 120 72 L 246 221 Q 256 234 266 221 L 392 72 C 398 65 405 66 409 73 C 424 99 431 136 433 174 L 446 398 C 448 422 433 438 409 438 H 365 C 343 438 332 426 332 406 V 280 L 282 338 Q 256 365 230 338 L 180 280 V 406 C 180 426 169 438 147 438 Z';
+const MiaoLogo = {
+  template: `<svg viewBox="0 0 512 512" role="img" aria-label="Miao Panel"><rect class="logo-tile" width="512" height="512" rx="115"></rect>
+    <rect class="logo-edge" x="4" y="4" width="504" height="504" rx="111" fill="none" stroke-width="8"></rect>
+    <path class="logo-mark" transform="translate(96 99) scale(0.625)" :d="d"></path></svg>`,
+  setup() { return { d: MIAO_MARK }; },
 };
 
 // In Miao Panel's own window, links that would open a new window go to
@@ -302,6 +316,10 @@ const PlanCard = {
             <summary><ui-icon name="chevron"></ui-icon>查看 AI 写的命令</summary>
             <div class="diff"><div v-for="(l, j) in scriptLines(s.free.script)" :key="j">{{ l || ' ' }}</div></div>
           </details>
+          <details class="free-more" v-for="d in s.diffs || []" :key="'c' + d.path" :open="!s.status">
+            <summary><ui-icon name="chevron"></ui-icon>{{ d.path }} 的改动</summary>
+            <div class="diff"><div v-for="(l, j) in diffLines(d.diff)" :key="j" :class="l.cls">{{ l.t }}</div></div>
+          </details>
           <div class="small" v-if="status(s)" :class="'st-' + status(s).cls">{{ status(s).text }}<button v-if="s.logId" class="link small log-link" @click="openLog(s.logId)">查看执行日志</button></div>
           <div class="step-log" v-if="s.log && s.log.length"><div v-for="(l, j) in s.log" :key="j">{{ l }}</div></div>
         </div>
@@ -356,7 +374,8 @@ const EXEC_STATUS = {
 
 // Everything Miao Panel ran on servers, with details and rollback.
 const ExecLog = {
-  props: { focus: { type: Number, default: 0 } },
+  // server: only what was run on that server, for its workbench.
+  props: { focus: { type: Number, default: 0 }, server: { type: Number, default: 0 } },
   setup(props) {
     const list = ref([]);
     const changesOnly = ref(false);
@@ -367,7 +386,10 @@ const ExecLog = {
 
     async function load() {
       loading.value = true;
-      try { list.value = await api('GET', '/api/exec' + (changesOnly.value ? '?changes=1' : '')); }
+      const q = new URLSearchParams();
+      if (changesOnly.value) q.set('changes', '1');
+      if (props.server) q.set('server', props.server);
+      try { list.value = await api('GET', '/api/exec' + (q.toString() ? '?' + q : '')); }
       catch (e) { notify(e.message, 'error'); } finally { loading.value = false; }
     }
     async function toggle(id) {
@@ -642,8 +664,8 @@ const RankList = {
 // 访问分析: visits counted from access logs (EdgeOne's or a server's),
 // in four sections, with the IPs worth a look and blocking.
 const VisitStats = {
-  props: { servers: { type: Array, default: () => [] }, active: Boolean, tencent: Boolean },
-  emits: ['ask'],
+  props: { servers: { type: Array, default: () => [] }, active: Boolean, tencent: Boolean, request: Object },
+  emits: ['ask', 'section'],
   setup(props, { emit }) {
     const sources = ref([]);
     const source = ref(pref('miao.visitSource', ''));
@@ -667,7 +689,8 @@ const VisitStats = {
     let seq = 0;
     // Today is counted per hour for PV and requests only.
     watch(days, v => { setPref('miao.visitDays', String(v)); if (v === 1 && !['pv', 'requests'].includes(series.value)) series.value = 'pv'; }, { immediate: true });
-    watch(section, v => setPref('miao.visitSection', v));
+    watch(section, v => { setPref('miao.visitSection', v); emit('section', v); });
+    watch(() => props.request, r => { if (r && r.section) section.value = r.section; });
 
     async function loadSources() {
       try {
@@ -761,7 +784,6 @@ const VisitStats = {
     const cur = computed(() => range.value && range.value.sites ? (range.value.sites[site.value] || range.value.sites['*'] || null) : null);
     const total = computed(() => cur.value ? cur.value.total : {});
     const top = kind => (cur.value && cur.value.top && cur.value.top[kind]) || [];
-    const siteInfo = computed(() => ((data.value && data.value.sites) || []).find(s => s.name === site.value) || null);
     const siteRows = computed(() => range.value ? siteNames.value.map(n => ({ name: n, total: (range.value.sites[n] || {}).total || {} })) : []);
 
     // IPs: those that touched the chosen site, riskiest first.
@@ -906,7 +928,6 @@ const VisitStats = {
     const yesterday = key => { const l = fullDays.value; return l.length ? l[l.length - 1][key] : null; };
     const pct = (a, b) => b > 0 ? (a / b * 100).toFixed(1) + '%' : '—';
     const rangeText = computed(() => (VISIT_RANGES.find(r => r.d === days.value) || {}).text);
-    const sourceTitle = computed(() => (sources.value.find(s => s.key === source.value) || {}).title || '');
     function askAI() {
       const who = site.value === '*' ? '所有网站' : site.value;
       const src = source.value === 'edgeone' ? 'EdgeOne 日志（source=edgeone）' : `服务器日志（server_id=${(data.value || {}).serverId}）`;
@@ -915,7 +936,6 @@ const VisitStats = {
     function askIP(p) {
       emit('ask', `分析一下 IP ${p.ip}（${p.place || ''} ${p.isp || ''}）最近${rangeText.value}在我网站上的行为：它访问了什么、频率如何、是不是扫描或攻击，要不要封禁？`);
     }
-    const shortUA = ua => (ua || '').length > 90 ? ua.slice(0, 90) + '…' : (ua || '—');
     // "blog.x.com/old ← /about": the missing address, and the page (or the
     // other website) whose link led there.
     const deadLinks = computed(() => top('dead').map(it => {
@@ -926,10 +946,10 @@ const VisitStats = {
       const list = top('dead').slice(0, 15).map(it => `${it.value}（${it.count} 次）`).join('\n');
       emit('ask', `我的网站有这些死链（有人点链接打开却是 404，← 后面是链接所在的页面或网站）：\n${list}\n帮我看看这些地址原来是什么、应该怎么修（改链接、做 301 跳转还是恢复页面）。`);
     }
-    return { sources, source, days, site, section, series, data, loading, error, load, siteNames, range, cur, total, top, siteInfo, siteRows,
+    return { sources, source, days, site, section, series, data, loading, error, load, siteNames, range, cur, total, top, siteRows,
       ips, risky, ipRows, counts, judgement, verdictOf, blockable, blockedSet, picked, togglePick, pickSuggested, judge, judging, showAll, manualIPs, manualZone, blockManual,
-      block, unblock, plan, planning, planDone, realIP, planServerName, fromServer, directRows, blocked, drawer, openIP, alerts, trend, dayRows, hourRows, delta, yesterday, pct, SERIES, sourceTitle,
-      askAI, askIP, shortUA, deadLinks, askDead, auto, autoEdit, autoBusy, autoForm, editAuto, saveAuto, turnOffAuto, runAuto, autoRule, autoUntil, untilText, VISIT_RANGES, VISIT_SECTIONS, RISK, VERDICT, fmtCount, fmtBytes, whenText };
+      block, unblock, plan, planning, planDone, realIP, planServerName, fromServer, directRows, blocked, drawer, openIP, alerts, trend, dayRows, hourRows, delta, yesterday, pct, SERIES,
+      askAI, askIP, deadLinks, askDead, auto, autoEdit, autoBusy, autoForm, editAuto, saveAuto, turnOffAuto, runAuto, autoRule, autoUntil, untilText, VISIT_RANGES, VISIT_SECTIONS, RISK, VERDICT, fmtCount, fmtBytes, whenText };
   },
   template: `
   <div class="vs">
@@ -1311,14 +1331,15 @@ const TerminalPage = {
     }
     function send(key, data) {
       const l = live.get(key), t = tabOf(key);
-      if (!l || !t || t.state !== 'open') return;
+      // Typing still reaches the shell while the output reconnects.
+      if (!l || !t || !(t.state === 'open' || t.state === 'reconnecting')) return;
       l.queue += data;
       if (!l.sending) flush(key);
     }
     async function flush(key) {
       const l = live.get(key), t = tabOf(key);
       l.sending = true;
-      while (l.queue && t && t.state === 'open') {
+      while (l.queue && t && (t.state === 'open' || t.state === 'reconnecting')) {
         const data = l.queue;
         l.queue = '';
         try { await api('POST', `/api/terminals/${t.id}/input`, { data }); }
@@ -1326,26 +1347,82 @@ const TerminalPage = {
       }
       l.sending = false;
     }
-    // attach streams the terminal's output into the tab until it ends.
+    // attach streams the terminal's output into the tab. The stream is
+    // server-sent events: output in base64 with its offset as the id,
+    // "reset" when the replay does not start where we asked, a ping every
+    // 15 seconds, "end" when the shell has ended. When the stream drops
+    // while the shell is still running (a proxy timing out, the network
+    // changing, a laptop waking up) it picks up again from the last
+    // offset, so nothing is lost or printed twice.
     async function attach(key) {
       const t = tabOf(key), l = live.get(key);
-      l.ctl = new AbortController();
-      t.state = 'open';
+      if (!t || !l || !t.id) return;
+      if (l.ctl) l.ctl.abort();
+      clearTimeout(l.retry);
+      const ctl = new AbortController();
+      l.ctl = ctl;
+      let heard = Date.now(), ended = false, gone = '';
+      // A connection that went quiet without closing (pings stopped).
+      const watch = setInterval(() => { if (Date.now() - heard > 40000) ctl.abort(); }, 5000);
       try {
-        const res = await fetch(`/api/terminals/${t.id}/output`, { headers: { 'X-Miao': '1' }, credentials: 'same-origin', signal: l.ctl.signal });
-        if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `连接失败（${res.status}）`); }
-        const reader = res.body.getReader();
+        const from = l.offset == null ? -1 : l.offset;
+        const res = await fetch(`/api/terminals/${t.id}/output?from=${from}`, { headers: { 'X-Miao': '1' }, credentials: 'same-origin', signal: ctl.signal });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          // 400: the terminal is gone on the server; anything else may pass.
+          if (res.status === 400) gone = d.error || '会话已结束';
+          else if (res.status === 401 && window.MIAO_MODE === 'server') { location.reload(); return; }
+          throw new Error(d.error || `连接失败（${res.status}）`);
+        }
+        t.state = 'open'; t.error = ''; l.tries = 0;
+        const reader = res.body.getReader(), dec = new TextDecoder();
+        let text = '', ev = {};
         for (;;) {
           const { value, done } = await reader.read();
           if (done) break;
-          l.term.write(value);
+          heard = Date.now();
+          text += dec.decode(value, { stream: true });
+          let i;
+          while ((i = text.indexOf('\n')) >= 0) {
+            const line = text.slice(0, i);
+            text = text.slice(i + 1);
+            if (line === '') {
+              if (ev.event === 'reset') l.term.reset();
+              else if (ev.event === 'end') ended = true;
+              else if (ev.data) {
+                const bin = atob(ev.data), bytes = new Uint8Array(bin.length);
+                for (let j = 0; j < bin.length; j++) bytes[j] = bin.charCodeAt(j);
+                l.term.write(bytes);
+                if (ev.id) l.offset = Number(ev.id);
+              }
+              ev = {};
+            } else if (line[0] !== ':') {
+              const c = line.indexOf(':');
+              ev[c < 0 ? line : line.slice(0, c)] = c < 0 ? '' : line.slice(c + 1).replace(/^ /, '');
+            }
+          }
         }
-        t.state = 'ended';
       } catch (e) {
-        if (e.name === 'AbortError') return;
-        t.state = 'error'; t.error = e.message;
+        if (e.name === 'AbortError' && l.ctl !== ctl) return; // replaced or closed
+        if (!gone) t.error = e.name === 'AbortError' ? '连接没有响应' : e.message;
+      } finally {
+        clearInterval(watch);
       }
+      if (l.ctl !== ctl || !tabOf(key)) return;
+      if (ended || gone) { t.state = 'ended'; t.error = gone && !ended ? gone : ''; return; }
+      // Dropped: try again, soon at first, then less often.
+      t.state = 'reconnecting';
+      const wait = Math.min(1000 * 2 ** (l.tries || 0), 15000);
+      l.tries = (l.tries || 0) + 1;
+      l.retry = setTimeout(() => { if (tabOf(key) && t.state === 'reconnecting') attach(key); }, wait);
     }
+    // Back online or back to the page: reconnect now rather than after the wait.
+    function retryNow() {
+      for (const t of tabs.value) if (t.state === 'reconnecting') { const l = live.get(t.key); if (l) l.tries = 0; attach(t.key); }
+    }
+    const onVisible = () => { if (document.visibilityState === 'visible') retryNow(); };
+    window.addEventListener('online', retryNow);
+    document.addEventListener('visibilitychange', onVisible);
     async function open(serverId) {
       const sv = props.servers.find(s => s.id === serverId);
       if (!sv) return;
@@ -1363,26 +1440,22 @@ const TerminalPage = {
         // Closed while it was connecting: end the new one on the server too.
         if (!tabOf(key)) { api('DELETE', `/api/terminals/${v.id}`).catch(() => {}); return; }
         t.id = v.id;
+        l.offset = 0; // a new shell: keep what the tab already shows
+        l.tries = 0;
         attach(key);
         l.term.focus();
       } catch (e) { if (tabOf(key)) { t.state = 'error'; t.error = e.message; } }
     }
-    // After a network hiccup the shell is usually still running on the
-    // server (with whatever command was in it): pick it up again rather
-    // than starting a new one.
+    // The button on a tab that ended or failed: pick up the same shell if
+    // it is still running on the server, otherwise start a new one.
     async function reconnect(key) {
       const t = tabOf(key), l = live.get(key);
-      if (t && t.id && l && l.term) {
-        try {
-          const alive = (await api('GET', '/api/terminals')).some(v => v.id === t.id && !v.ended);
-          if (alive) {
-            l.term.reset(); // the server sends the recent output again
-            t.error = '';
-            attach(key);
-            l.term.focus();
-            return;
-          }
-        } catch { /* start a new one below */ }
+      if (!t) return;
+      if (t.id && l && l.term && t.state !== 'ended') {
+        l.tries = 0;
+        t.state = 'reconnecting';
+        attach(key);
+        return;
       }
       if (l && l.term) l.term.write('\r\n\x1b[90m[重新连接……]\x1b[0m\r\n');
       connect(key);
@@ -1390,10 +1463,13 @@ const TerminalPage = {
     async function close(key) {
       const t = tabOf(key);
       if (!t) return;
-      if (t.state === 'open' && !confirm(`关闭「${t.name}」的终端？正在运行的命令会被结束。`)) return;
+      if ((t.state === 'open' || t.state === 'reconnecting') && !confirm(`关闭「${t.name}」的终端？正在运行的命令会被结束。`)) return;
       const l = live.get(key);
       if (l) {
-        if (l.ctl) l.ctl.abort();
+        clearTimeout(l.retry);
+        const ctl = l.ctl;
+        l.ctl = null;
+        if (ctl) ctl.abort();
         if (l.ro) l.ro.disconnect();
         if (l.term) l.term.dispose();
         live.delete(key);
@@ -1423,13 +1499,17 @@ const TerminalPage = {
     });
     function onRequest(r) {
       if (!r) return;
-      const existing = tabs.value.find(t => t.serverId === r.serverId && t.state === 'open');
+      const existing = tabs.value.find(t => t.serverId === r.serverId && (t.state === 'open' || t.state === 'reconnecting'));
       if (existing) show(existing.key); else open(r.serverId);
     }
     watch(() => props.request, onRequest);
     watch(() => props.active, on => { if (on && current.value) show(current.value); });
-    onUnmounted(() => { for (const [, l] of live) { if (l.ctl) l.ctl.abort(); if (l.ro) l.ro.disconnect(); if (l.term) l.term.dispose(); } });
-    const stateText = t => ({ connecting: '正在连接……', ended: '已结束', error: '出错' }[t.state] || '');
+    onUnmounted(() => {
+      window.removeEventListener('online', retryNow);
+      document.removeEventListener('visibilitychange', onVisible);
+      for (const [, l] of live) { clearTimeout(l.retry); const ctl = l.ctl; l.ctl = null; if (ctl) ctl.abort(); if (l.ro) l.ro.disconnect(); if (l.term) l.term.dispose(); }
+    });
+    const stateText = t => ({ connecting: '正在连接……', reconnecting: '重新连接中……', ended: '已结束', error: '出错' }[t.state] || '');
     return { tabs, current, pick, setBox, open, close, show, reconnect, stateText };
   },
   template: `
@@ -1455,8 +1535,9 @@ const TerminalPage = {
       </div>
       <div v-for="t in tabs" :key="t.key" class="term-wrap" v-show="current === t.key">
         <div class="term-box" :ref="el => setBox(t.key, el)"></div>
+        <div class="term-note" v-if="t.state === 'reconnecting'" role="status">连接断了，正在重新连接{{ t.error ? '（' + t.error + '）' : '' }}……<button class="plain" @click="reconnect(t.key)">现在重试</button></div>
         <div class="term-over" v-if="t.state === 'error' || t.state === 'ended'">
-          <span :class="t.state === 'error' ? 'st-crit' : ''">{{ t.state === 'error' ? t.error : '会话已结束' }}</span>
+          <span :class="t.state === 'error' ? 'st-crit' : ''">{{ t.state === 'error' ? t.error : (t.error || '会话已结束') }}</span>
           <button @click="reconnect(t.key)"><ui-icon name="refresh"></ui-icon>重新连接</button>
         </div>
       </div>
@@ -1847,14 +1928,20 @@ const EO_AREAS = [{ id: 'mainland', text: '中国大陆（域名要已备案）'
 const dnsMemo = new Map();
 
 const DnsPage = {
-  props: { configured: Boolean, active: Boolean, servers: { type: Array, default: () => [] } },
+  // configured: Tencent Cloud's keys (DNSPod); aliyun: 阿里云's (云解析).
+  props: { configured: Boolean, aliyun: Boolean, active: Boolean, servers: { type: Array, default: () => [] } },
   emits: ['settings'],
   setup(props) {
     const domains = ref([]);
     const eoListError = ref(''); // reading the sites for the domain list
     // Either call may fail to read EdgeOne; the records call says so too.
     const eoError = computed(() => eoListError.value || (data.value && data.value.eoError) || '');
-    const domain = ref(pref('miao.dnsDomain', ''));
+    // The same domain can be in both DNSPod and 阿里云: picked as provider:name.
+    const pick = ref(pref('miao.dnsDomain', ''));
+    const dkey = d => d.provider + ':' + d.name;
+    const current = computed(() => domains.value.find(d => dkey(d) === pick.value) || domains.value.find(d => d.name === pick.value) || null);
+    const domain = computed(() => current.value ? current.value.name : '');
+    const provider = computed(() => (current.value && current.value.provider) || 'dnspod');
     const data = ref(null);
     const loading = ref(false);
     const error = ref('');
@@ -1865,37 +1952,40 @@ const DnsPage = {
     const lines = ref([]);
     const formError = ref('');
     let seq = 0;
-    watch(domain, v => { if (v) setPref('miao.dnsDomain', v); load(); });
+    watch(pick, v => { if (v) setPref('miao.dnsDomain', v); load(); });
 
     const domainsLoaded = ref(false);
+    const anyCloud = computed(() => props.configured || props.aliyun);
+    const both = computed(() => props.configured && props.aliyun);
+    const listErrors = ref([]); // a provider whose domains could not be read
     async function loadDomains() {
-      if (!props.configured) return;
+      if (!anyCloud.value) return;
       try {
         const r = await api('GET', '/api/dns/domains');
         domains.value = r.domains; eoListError.value = r.eoError || '';
-        if (!r.domains.some(d => d.name === domain.value)) domain.value = r.domains.length ? r.domains[0].name : '';
-        else load();
+        listErrors.value = [r.dnspodError && 'DNSPod：' + r.dnspodError, r.aliError && '阿里云云解析：' + r.aliError].filter(Boolean);
+        const want = current.value ? dkey(current.value) : r.domains.length ? dkey(r.domains[0]) : '';
+        if (want !== pick.value) pick.value = want; else load();
       } catch (e) { error.value = e.message; } finally { domainsLoaded.value = true; }
     }
     async function load(fresh) {
       const d = domain.value;
       if (!d) { data.value = null; return; }
-      const n = ++seq;
-      const memo = dnsMemo.get(d);
+      const n = ++seq, key = provider.value + ':' + d;
+      const memo = dnsMemo.get(key);
       if (memo && !fresh) data.value = memo; else if (!memo) data.value = null;
       loading.value = true; error.value = '';
       try {
-        const r = await api('GET', '/api/dns/records?domain=' + encodeURIComponent(d));
+        const r = await api('GET', '/api/dns/records?domain=' + encodeURIComponent(d) + '&provider=' + provider.value);
         if (n !== seq) return;
-        dnsMemo.set(d, r); data.value = r;
+        dnsMemo.set(key, r); data.value = r;
       } catch (e) { if (n === seq) error.value = e.message; }
       finally { if (n === seq) loading.value = false; }
     }
     // Coming back to the page shows what it had at once, then refreshes.
     watch(() => props.active, v => { if (v) domains.value.length ? load() : loadDomains(); }, { immediate: true });
-    watch(() => props.configured, v => { if (v) loadDomains(); });
+    watch(() => [props.configured, props.aliyun], () => { if (anyCloud.value) loadDomains(); });
 
-    const current = computed(() => domains.value.find(d => d.name === domain.value) || null);
     const zone = computed(() => data.value && data.value.edgeone);
     const eoUsable = computed(() => !eoError.value && !(zone.value && (zone.value.type === 'full' || zone.value.paused)));
     const shown = computed(() => {
@@ -1908,7 +1998,7 @@ const DnsPage = {
     async function propose(body) {
       planning.value = true; formError.value = '';
       try {
-        plan.value = await api('POST', '/api/dns/plan', { domain: domain.value, ...body });
+        plan.value = await api('POST', '/api/dns/plan', { domain: domain.value, provider: provider.value, ...body });
         editor.open = false; quick.open = false; originEdit.open = false;
         return true;
       } catch (e) {
@@ -1934,21 +2024,21 @@ const DnsPage = {
     }
 
     // Adding or changing one record.
-    const editor = reactive({ open: false, id: 0, sub: '', type: 'A', value: '', line: '默认', ttl: 600, mx: 10, remark: '' });
+    const editor = reactive({ open: false, id: 0, rid: '', sub: '', type: 'A', value: '', line: '默认', ttl: 600, mx: 10, remark: '' });
     async function loadLines() {
-      try { lines.value = await api('GET', '/api/dns/lines?domain=' + encodeURIComponent(domain.value)); }
+      try { lines.value = await api('GET', '/api/dns/lines?domain=' + encodeURIComponent(domain.value) + '&provider=' + provider.value); }
       catch { lines.value = ['默认']; }
     }
     function openEditor(r) {
       formError.value = '';
       Object.assign(editor, r
-        ? { open: true, id: r.id, sub: r.name, type: r.type, value: r.value, line: r.line, ttl: r.ttl, mx: r.mx || 10, remark: r.remark || '' }
-        : { open: true, id: 0, sub: '', type: 'A', value: '', line: '默认', ttl: 600, mx: 10, remark: '' });
+        ? { open: true, id: r.id, rid: r.rid || '', sub: r.name, type: r.type, value: r.value, line: r.line, ttl: r.ttl, mx: r.mx || 10, remark: r.remark || '' }
+        : { open: true, id: 0, rid: '', sub: '', type: 'A', value: '', line: '默认', ttl: 600, mx: 10, remark: '' });
       loadLines();
     }
     const editorTTLs = computed(() => TTLS.includes(editor.ttl) ? TTLS : [...TTLS, editor.ttl].sort((a, b) => a - b));
     function submitEditor() {
-      const body = { op: editor.id ? 'modify' : 'add', id: editor.id, sub: editor.sub.trim() || '@', type: editor.type, value: editor.value.trim(),
+      const body = { op: editor.id || editor.rid ? 'modify' : 'add', id: editor.id, rid: editor.rid, sub: editor.sub.trim() || '@', type: editor.type, value: editor.value.trim(),
         line: editor.line, ttl: editor.ttl, remark: editor.remark.trim() };
       if (editor.type === 'MX') body.mx = editor.mx;
       propose(body);
@@ -1973,28 +2063,28 @@ const DnsPage = {
     watch(() => JSON.stringify([editor, quick, originEdit]), () => { if (!planning.value) formError.value = ''; });
     const quickName = computed(() => ((quick.sub.trim() || '@') === '@' ? '' : quick.sub.trim() + '.') + domain.value);
 
-    const del = r => propose({ op: 'delete', id: r.id });
-    const toggle = r => propose({ op: 'status', id: r.id, status: r.enabled ? 'disable' : 'enable' });
+    const del = r => propose({ op: 'delete', id: r.id, rid: r.rid });
+    const toggle = r => propose({ op: 'status', id: r.id, rid: r.rid, status: r.enabled ? 'disable' : 'enable' });
     const eoPoint = sub => propose({ op: 'eo_point', sub });
     const eoOff = r => propose({ op: 'eo_off', id: r.id });
     const eoOn = r => openQuick({ sub: r.name, target: r.type === 'CNAME' ? 'host' : 'ip', value: r.value, edgeone: true });
     const canEO = r => r.enabled && !r.edgeone && !r.system && ['A', 'AAAA', 'CNAME'].includes(r.type) && zone.value && zone.value.type === 'partial' && eoUsable.value && !/\.eo\.dnse|\.edgeone\.app/.test(r.value);
-    const planServerName = computed(() => '腾讯云');
+    const planServerName = computed(() => provider.value === 'alidns' ? '阿里云' : '腾讯云');
 
     return { RECORD_TYPES, EO_AREAS, VALUE_HINT, domains, domainsLoaded, eoError, domain, data, loading, error, q, typeFilter, plan, planning, lines, formError,
       current, zone, eoUsable, shown, load, planDone, closePlan, editor, openEditor, editorTTLs, submitEditor, quick, openQuick, submitQuick, quickName, originEdit, openOrigin, submitOrigin,
-      del, toggle, eoPoint, eoOff, eoOn, canEO, ttlText, planServerName };
+      del, toggle, eoPoint, eoOff, eoOn, canEO, ttlText, planServerName, anyCloud, both, listErrors, provider, pick, dkey };
   },
   template: `
   <div>
-    <div class="group" v-if="!configured">
-      <div class="row"><ui-icon name="info" class="lg" style="color: var(--accent)"></ui-icon><div class="grow">域名解析在腾讯云 DNSPod，需要先填写腾讯云密钥。</div><button @click="$emit('settings')">去设置</button></div>
+    <div class="group" v-if="!anyCloud">
+      <div class="row"><ui-icon name="info" class="lg" style="color: var(--accent)"></ui-icon><div class="grow">域名解析在腾讯云 DNSPod 或阿里云云解析，需要先在设置里填写对应的密钥。</div><button @click="$emit('settings')">去设置</button></div>
     </div>
     <template v-else>
-      <div class="page-head"><p>DNSPod 里的域名解析。每次修改都会先生成一份清单，确认后才执行，执行后可以撤销；经过 EdgeOne 的网站会标出来。</p></div>
+      <div class="page-head"><p>{{ both ? 'DNSPod 和阿里云云解析' : aliyun ? '阿里云云解析' : 'DNSPod' }}里的域名解析。每次修改都会先生成一份清单，确认后才执行，执行后可以撤销<template v-if="configured">；经过 EdgeOne 的网站会标出来</template>。</p></div>
       <div class="stat-bar dns-bar">
         <label class="field"><span>域名</span>
-          <select v-model="domain" aria-label="域名" :disabled="!domains.length"><option v-for="d in domains" :key="d.name" :value="d.name">{{ d.name }}</option></select></label>
+          <select v-model="pick" aria-label="域名" :disabled="!domains.length"><option v-for="d in domains" :key="dkey(d)" :value="dkey(d)">{{ d.name }}{{ both ? (d.provider === 'alidns' ? '（阿里云）' : '（DNSPod）') : '' }}</option></select></label>
         <label class="field dns-search"><span>搜索</span>
           <input type="search" v-model="q" placeholder="主机记录、记录值或备注" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" @keydown.esc="q = ''"></label>
         <label class="field"><span>类型</span>
@@ -2006,7 +2096,8 @@ const DnsPage = {
       </div>
 
       <div class="notice" v-if="error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ error }}</div>
-      <div class="group" v-if="domainsLoaded && !domains.length && !error && !loading"><div class="row secondary">DNSPod 里还没有域名。</div></div>
+      <div class="notice" v-for="e in listErrors" :key="e"><ui-icon name="warn" class="st-warn"></ui-icon>{{ e }}</div>
+      <div class="group" v-if="domainsLoaded && !domains.length && !error && !loading"><div class="row secondary">{{ both ? 'DNSPod 和阿里云云解析' : aliyun ? '阿里云云解析' : 'DNSPod' }}里还没有域名。</div></div>
       <div class="notice" v-if="!domainsLoaded && !error"><span class="spinner"></span>正在读取域名……</div>
       <div class="notice" v-if="loading && !data"><span class="spinner"></span>正在读取解析记录……</div>
 
@@ -2028,14 +2119,15 @@ const DnsPage = {
         <div class="dns-sum small secondary">
           <span>{{ data.records.length }} 条记录<template v-if="shown.length !== data.records.length">，显示 {{ shown.length }} 条</template></span>
           <span v-if="zone && zone.type === 'partial'"><ui-icon name="cloud"></ui-icon>已接入 EdgeOne（CNAME 方式）</span>
-          <span v-else-if="!zone && !eoError">没有接入 EdgeOne</span>
+          <span v-else-if="!zone && !eoError && provider === 'dnspod'">没有接入 EdgeOne</span>
+          <span v-if="provider === 'alidns'">阿里云云解析</span>
           <span v-if="loading"><span class="spinner inline"></span>正在更新</span>
         </div>
         <div class="table-wrap">
           <table class="table dns-table">
             <thead><tr><th>主机记录</th><th>类型</th><th>线路</th><th>记录值</th><th>TTL</th><th>状态</th><th><span class="sr-only">操作</span></th></tr></thead>
             <tbody>
-              <tr v-for="r in shown" :key="r.id" :class="{ off: !r.enabled }">
+              <tr v-for="r in shown" :key="r.rid || r.id" :class="{ off: !r.enabled }">
                 <td class="c-name"><div class="dns-name">{{ r.name }}</div><div class="small tertiary">{{ r.full }}</div></td>
                 <td class="c-type"><span class="tag">{{ r.type }}</span></td>
                 <td class="c-line nowrap">{{ r.line }}</td>
@@ -2097,7 +2189,7 @@ const DnsPage = {
             <input v-model="quick.value" :placeholder="quick.target === 'ip' ? '例如 1.2.3.4' : '例如 example.github.io'" :aria-label="quick.target === 'ip' ? 'IP 地址' : '域名'" autocapitalize="off" spellcheck="false"></span></div>
         </div>
         <div class="group">
-          <label class="row form dns-check"><input type="checkbox" v-model="quick.edgeone" :disabled="!eoUsable">
+          <label class="row form dns-check" v-if="provider === 'dnspod'"><input type="checkbox" v-model="quick.edgeone" :disabled="!eoUsable">
             <span class="grow"><b>经过 EdgeOne</b><span class="small secondary block">访客先到 EdgeOne 节点：加速、防护、隐藏服务器 IP，还能用免费 HTTPS 证书。{{ !eoUsable ? (zone && zone.type === 'full' ? '这个域名用 NS 方式接入 EdgeOne，请在 EdgeOne 里管理解析。' : '现在读不到 EdgeOne。') : '' }}</span></span></label>
           <template v-if="quick.edgeone">
             <div class="row form" v-if="!zone"><span class="k">加速区域</span><span class="v">
@@ -2136,6 +2228,1953 @@ const DnsPage = {
         <div class="notice" v-if="formError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ formError }}</div>
         <div class="sheet-actions"><button @click="editor.open = false">取消</button>
           <button class="primary" @click="submitEditor" :disabled="planning || !editor.value.trim()">{{ planning ? '正在生成……' : '生成清单' }}</button></div>
+      </div>
+    </div>
+
+    <!-- The checklist to confirm -->
+    <div class="sheet-mask" v-if="plan" @click.self="closePlan">
+      <div class="sheet plan-sheet" role="dialog" aria-label="确认清单">
+        <h2>{{ plan.title }}</h2>
+        <p>勾选后点「执行」，确认后才会生效；执行后可以在这里或「建议」页撤销。</p>
+        <plan-card :plan="plan" :server-name="planServerName" @done="planDone"></plan-card>
+        <div class="sheet-actions"><button @click="closePlan">关闭</button></div>
+      </div>
+    </div>
+  </div>`,
+};
+
+// ⌘K / Ctrl+K: search servers, sites and pages, or type what to do
+// ("终端 blog", "新建网站"); anything else goes to the AI.
+const PALETTE_PAGES = [
+  { tab: 'home', label: '总览', icon: 'home', keys: 'home overview zonglan' },
+  { tab: 'chat', label: 'AI 助手', icon: 'sparkles', keys: 'ai chat' },
+  { tab: 'inbox', label: '待处理', icon: 'inbox', keys: 'inbox todo 建议 通知 清单 plans notices' },
+  { tab: 'monitor', label: '监控', icon: 'pulse', keys: 'monitor uptime 监控 可用性 宕机 打不开 告警 cpu 内存 磁盘' },
+  { tab: 'sites', label: '网站管理', icon: 'window', keys: 'sites website 网站 1panel nginx https 反向代理 证书' },
+  { stats: ['logs', 'overview'], label: '访问统计', icon: 'chart', keys: 'stats visits pv uv 统计 流量' },
+  { stats: ['logs', 'security'], label: '安全', icon: 'shield', keys: 'security 封禁 ip 攻击' },
+  { tab: 'certs', label: '证书', icon: 'lock', keys: 'certs ssl https 证书 续签' },
+  { tab: 'cloud', label: '云服务器', icon: 'cloud', keys: 'cloud lighthouse cvm ecs aliyun 阿里云 腾讯云 轻量 云服务器 实例 防火墙 安全组 快照 开机 关机 重启 到期' },
+  { stats: ['eo'], label: 'EdgeOne', icon: 'bolt', keys: 'edgeone eo cdn 缓存 cache' },
+  { tab: 'dns', label: '解析', icon: 'globe', keys: 'dns dnspod 解析 域名' },
+  { tab: 'storage', label: '存储', icon: 'bucket', keys: 'cos storage bucket 存储桶' },
+  { tab: 'terminal', label: '终端', icon: 'prompt', keys: 'terminal ssh shell 终端' },
+  { tab: 'files', label: '文件', icon: 'folder', keys: 'files sftp 文件' },
+  { tab: 'logs', label: '记录', icon: 'history', keys: 'logs history 日志 记录 撤销' },
+  { tab: 'settings', label: '设置', icon: 'gear', keys: 'settings 设置 api key 模型' },
+];
+const CommandPalette = {
+  props: { open: Boolean, servers: { type: Array, default: () => [] } },
+  emits: ['close', 'go', 'stats', 'server', 'terminal', 'files', 'site', 'ask', 'add', 'newsite'],
+  setup(props, { emit }) {
+    const q = ref(''), pick = ref(0), input = ref(null), sites = ref([]);
+    let loaded = 0;
+    watch(() => props.open, v => {
+      if (!v) return;
+      q.value = ''; pick.value = 0;
+      nextTick(() => input.value && input.value.focus());
+      if (Date.now() - loaded > 60000) {
+        loaded = Date.now();
+        api('GET', '/api/websites').then(r => { sites.value = r.servers.flatMap(s => s.sites.map(x => ({ ...x, serverId: s.id, serverName: s.name }))); }).catch(() => {});
+      }
+    });
+    const norm = s => String(s || '').toLowerCase();
+    const items = computed(() => {
+      const raw = q.value.trim(), k = norm(raw);
+      const words = k.split(/\s+/).filter(Boolean);
+      const has = (...fields) => words.every(w => fields.some(f => norm(f).includes(w)));
+      const out = [];
+      // "终端 blog", "文件 blog": a tool on a server.
+      const tool = words[0] === '终端' || words[0] === 'ssh' ? 'terminal' : words[0] === '文件' ? 'files' : '';
+      const rest = tool ? words.slice(1) : words;
+      for (const s of props.servers) {
+        const hit = rest.every(w => norm(s.name).includes(w) || norm(s.host).includes(w));
+        if (tool && hit) out.push({ kind: tool, id: s.id, icon: tool === 'terminal' ? 'prompt' : 'folder', label: `${tool === 'terminal' ? '打开终端' : '管理文件'}：${s.name}`, note: s.host });
+        else if (!tool && (!k || has(s.name, s.host, '服务器 server'))) out.push({ kind: 'server', id: s.id, icon: 'server', label: s.name, note: '服务器 · ' + s.host });
+      }
+      if (!tool) {
+        for (const x of sites.value) if (k && has(x.domain, x.remark, x.serverName, '网站 site')) out.push({ kind: 'site', id: x.id, serverId: x.serverId, icon: 'window', label: x.domain, note: '网站 · ' + x.serverName });
+        for (const p of PALETTE_PAGES) if (!k || has(p.label, p.keys)) out.push({ kind: 'page', page: p, icon: p.icon, label: p.label, note: '页面' });
+        if (!k || has('新建网站 new site 建站')) out.push({ kind: 'newsite', icon: 'plus', label: '新建网站', note: '1Panel' });
+        if (!k || has('添加服务器 add server')) out.push({ kind: 'add', icon: 'plus', label: '添加服务器', note: '' });
+        if (raw) out.push({ kind: 'ask', icon: 'sparkles', label: '问 AI：' + raw, note: 'Enter', text: raw });
+      }
+      return out.slice(0, 40);
+    });
+    watch(items, () => { pick.value = 0; });
+    function run(it) {
+      if (!it) return;
+      emit('close');
+      if (it.kind === 'server') emit('server', it.id);
+      else if (it.kind === 'terminal') emit('terminal', it.id);
+      else if (it.kind === 'files') emit('files', it.id);
+      else if (it.kind === 'site') emit('site', it.serverId, it.id);
+      else if (it.kind === 'page') it.page.stats ? emit('stats', ...it.page.stats) : emit('go', it.page.tab);
+      else if (it.kind === 'ask') emit('ask', it.text);
+      else if (it.kind === 'add') emit('add');
+      else if (it.kind === 'newsite') emit('newsite');
+    }
+    function key(e) {
+      const n = items.value.length;
+      if (e.key === 'ArrowDown') { e.preventDefault(); pick.value = (pick.value + 1) % Math.max(n, 1); scroll(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); pick.value = (pick.value - 1 + n) % Math.max(n, 1); scroll(); }
+      else if (e.key === 'Enter') { e.preventDefault(); run(items.value[pick.value]); }
+      else if (e.key === 'Escape') { e.preventDefault(); emit('close'); }
+    }
+    const list = ref(null);
+    function scroll() { nextTick(() => { const el = list.value && list.value.querySelector('.pal-item.on'); if (el) el.scrollIntoView({ block: 'nearest' }); }); }
+    return { q, pick, input, items, run, key, list };
+  },
+  template: `
+  <div class="sheet-mask pal-mask" v-if="open" @click.self="$emit('close')">
+    <div class="palette" role="dialog" aria-label="搜索和跳转">
+      <div class="pal-input"><ui-icon name="search"></ui-icon>
+        <input ref="input" v-model="q" @keydown="key" placeholder="搜服务器、网站、页面，或者输入「终端 blog」" aria-label="搜索" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <kbd>Esc</kbd></div>
+      <div class="pal-list" ref="list" role="listbox">
+        <button v-for="(it, i) in items" :key="it.kind + (it.id || it.label)" class="pal-item" :class="{ on: i === pick }" role="option" :aria-selected="i === pick"
+          @click="run(it)" @mousemove="pick = i">
+          <ui-icon :name="it.icon"></ui-icon><span class="grow">{{ it.label }}</span><span class="small tertiary">{{ it.note }}</span></button>
+        <div class="pal-empty small secondary" v-if="!items.length">没有找到</div>
+      </div>
+      <div class="pal-foot small tertiary"><span>↑ ↓ 选择</span><span>Enter 打开</span><span>找不到的话，直接说想做什么，交给 AI</span></div>
+    </div>
+  </div>`,
+};
+
+// 总览: servers, sites, certificates and security at a glance, what needs
+// the user, and what changed lately. Built from what Miao Panel already
+// knows, so it opens at once.
+const HOME_ASKS = ['今天的访问量怎么样？', '有没有人在扫描我的网站？', '哪台服务器最需要处理？'];
+const TODO_ICON = { crit: 'alert', warn: 'warn', plan: 'sparkles', info: 'info' };
+const levelDot = l => ({ ok: 'good', warn: 'warn', crit: 'crit' }[l] || 'off');
+const HomePage = {
+  props: { overview: Object, servers: { type: Array, default: () => [] }, aiReady: Boolean, active: Boolean },
+  emits: ['refresh', 'ask', 'go', 'server', 'stats', 'plan', 'add', 'log'],
+  setup(props, { emit }) {
+    const draft = ref('');
+    const ov = computed(() => props.overview);
+    const today = computed(() => new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'short' }));
+    const ask = text => { const t = (text || draft.value).trim(); if (t) { emit('ask', t); draft.value = ''; } };
+    const patrol = () => emit('ask', '帮我把所有服务器、网站、证书和安全情况巡检一遍：先查数据，再按轻重缓急告诉我哪些需要处理，能修的给我清单。');
+
+    const cards = computed(() => {
+      const o = ov.value;
+      if (!o) return [];
+      const bad = o.servers.filter(s => s.level === 'warn' || s.level === 'crit');
+      const worst = o.servers.some(s => s.level === 'crit') ? 'crit' : bad.length ? 'warn' : 'ok';
+      const out = [{ id: 'servers', icon: 'server', label: '服务器', value: o.servers.length, unit: '台', level: worst,
+        pill: bad.length ? `${bad.length} 台注意` : '正常', sub: bad.length ? bad.map(s => `${s.name} ${s.note}`).join(' · ') : o.servers.map(s => s.name).join('、') }];
+      const v = o.visits;
+      const change = v && v.pvBefore > 0 ? Math.round((v.pv - v.pvBefore) * 100 / v.pvBefore) : null;
+      out.push({ id: 'sites', icon: 'chart', label: '网站', value: v ? v.sites : '—', unit: v ? '个' : '', level: v ? 'ok' : 'off', pill: v ? '今天' : '没有数据',
+        sub: v ? `今天 PV ${fmtCount(v.pv)}${change == null ? '' : ` · 比昨天同期 ${change >= 0 ? '↑' : '↓'}${Math.abs(change)}%`}` : '在「访问统计」里选择数据来源' });
+      const c = o.certs;
+      out.push({ id: 'certs', icon: 'lock', label: '证书', value: c ? c.total : '—', unit: c ? '张' : '', level: c ? (c.attention ? c.level : 'ok') : 'off',
+        pill: c ? (c.attention ? `${c.attention} 张要处理` : '正常') : '没有数据', sub: c && c.attention ? `${c.soonest}${c.days != null ? (c.days < 0 ? ' 已过期' : ` ${c.days} 天后到期`) : ''}` : (c ? '都在自动续签或有效期充足' : '腾讯云或 1Panel 的证书会显示在这里') });
+      const sct = o.security;
+      out.push({ id: 'security', icon: 'shield', label: '安全', value: sct ? sct.high : '—', unit: sct ? '个高风险 IP' : '', level: sct ? (sct.known && sct.unblocked ? 'crit' : 'ok') : 'off',
+        pill: sct ? (sct.known ? (sct.unblocked ? `${sct.unblocked} 个未封禁` : '都已处理') : '最近 24 小时') : '没有数据', sub: sct ? '扫描后台、猜密码或攻击 · 最近 24 小时' : '经过 EdgeOne 或服务器日志统计后显示' });
+      return out;
+    });
+    function openCard(id) {
+      if (id === 'servers') { const s = ov.value.servers.find(x => x.level === 'warn' || x.level === 'crit') || ov.value.servers[0]; if (s) emit('server', s.id); }
+      if (id === 'sites') emit('stats', 'logs', 'overview');
+      if (id === 'certs') emit('go', 'certs');
+      if (id === 'security') emit('stats', 'logs', 'security');
+    }
+    function doTodo(t) {
+      if (t.kind === 'plan') emit('plan', t.id);
+      else if (t.kind === 'cert') emit('go', 'certs');
+      else if (t.kind === 'security') emit('stats', 'logs', 'security');
+      else if (t.kind === 'notice') emit('go', 'inbox');
+      else if (t.kind === 'monitor') emit('ask', `${t.title}（${t.meta}）。帮我排查原因，能修的话给我一份清单。`);
+      else if (t.kind === 'update') emit('go', 'settings');
+      else if (t.kind === 'server') {
+        const s = ov.value.servers.find(x => x.id === t.id);
+        emit('ask', `服务器 ${s ? s.name : ''} 提示「${s ? s.note : ''}」，帮我看看是怎么回事，要不要处理，怎么处理？`);
+      }
+    }
+
+    // Today's views by hour, as a small line.
+    const spark = computed(() => {
+      const v = ov.value && ov.value.visits;
+      if (!v || !v.hours || !v.hours.length) return null;
+      const W = 300, H = 72, max = Math.max(...v.hours, 1);
+      const X = i => (i * W / 23).toFixed(1), Y = n => (H - 4 - n / max * (H - 14)).toFixed(1);
+      const line = v.hours.map((n, i) => (i ? 'L' : 'M') + X(i) + ' ' + Y(n)).join(' ');
+      const last = v.hours.length - 1;
+      return { line, area: line + ` L${X(last)} ${H} L0 ${H} Z`, x: X(last), y: Y(v.hours[last]), now: `0:00 → ${last}:59` };
+    });
+    const bar = v => v == null ? null : { w: Math.min(v, 100) + '%', cls: v >= 85 ? 'warn' : '' };
+    return { draft, ov, today, ask, patrol, cards, openCard, doTodo, spark, bar, HOME_ASKS, TODO_ICON, levelDot, fmtCount, whenText };
+  },
+  template: `
+  <div class="home">
+    <div class="home-head">
+      <div class="grow secondary">{{ today }}</div>
+      <button class="plain" @click="$emit('refresh')"><ui-icon name="refresh"></ui-icon>刷新</button>
+      <button class="primary" @click="patrol" :disabled="!aiReady || !servers.length"><ui-icon name="sparkles"></ui-icon>让 AI 巡检一遍</button>
+    </div>
+
+    <!-- First time -->
+    <div class="group home-start" v-if="!servers.length">
+      <div class="row stack"><b>三步开始</b><div class="small secondary">看状态、找问题、问 AI，任何修改都要你确认后才执行。</div></div>
+      <div class="row"><span class="step-num" :class="{done: aiReady}">1</span><div class="grow"><b>设置 AI 模型</b><div class="small secondary">推荐 DeepSeek V4.1 Flash，便宜好用</div></div>
+        <button @click="$emit('go', 'settings')">去设置</button></div>
+      <div class="row"><span class="step-num">2</span><div class="grow"><b>添加服务器</b><div class="small secondary">填 IP、用户名和密码，或者选腾讯云上的服务器</div></div>
+        <button class="primary" @click="$emit('add')">添加服务器</button></div>
+      <div class="row"><span class="step-num">3</span><div class="grow"><b>识别环境</b><div class="small secondary">自动看出装了什么：1Panel、宝塔、网站、数据库……只读，不会改动任何东西</div></div></div>
+    </div>
+
+    <template v-if="ov && servers.length">
+      <div class="home-cards">
+        <button class="home-card" v-for="c in cards" :key="c.id" @click="openCard(c.id)">
+          <span class="home-card-top"><ui-icon :name="c.icon"></ui-icon><span class="grow">{{ c.label }}</span>
+            <span class="pill"><span class="sdot" :class="levelDot(c.level)"></span>{{ c.pill }}</span></span>
+          <span class="home-card-value">{{ c.value }}<small>{{ c.unit }}</small></span>
+          <span class="home-card-sub"><span class="sdot phone-only" :class="levelDot(c.level)"></span>{{ c.sub }}</span>
+        </button>
+      </div>
+
+      <div class="home-row">
+        <section class="card home-todo">
+          <header class="card-head"><h3>需要你处理</h3><span class="side-count" v-if="ov.todo.length">{{ ov.todo.length }}</span><span class="grow"></span>
+            <button class="link small" @click="$emit('go', 'inbox')">全部 ›</button></header>
+          <div class="home-empty" v-if="!ov.todo.length"><span class="sdot good"></span>现在没有要处理的事</div>
+          <div class="todo-row" v-for="(t, i) in ov.todo" :key="i">
+            <span class="todo-icon" :class="'lv-' + t.level"><ui-icon :name="TODO_ICON[t.level] || 'info'"></ui-icon></span>
+            <div class="grow"><div class="todo-title">{{ t.title }}</div><div class="small secondary" v-if="t.meta">{{ t.meta }}</div></div>
+            <button :class="t.kind === 'plan' ? 'primary' : ''" @click="doTodo(t)">{{ t.action }}</button>
+          </div>
+        </section>
+        <section class="card home-ask">
+          <header class="card-head"><ui-icon name="sparkles" class="home-ask-icon"></ui-icon><h3>问 AI</h3></header>
+          <p class="small secondary">用大白话说想做的事，它先查清楚再回答；要改东西会先给你清单。</p>
+          <textarea v-model="draft" rows="3" placeholder="比如：今天下午流量为什么涨了？" aria-label="问 AI" @keydown.enter.exact.prevent="ask()"></textarea>
+          <div class="home-asks"><button v-for="q in HOME_ASKS" :key="q" class="chip" @click="ask(q)">{{ q }}</button></div>
+          <div class="home-ask-foot"><span class="grow"></span>
+            <button class="primary icon-only round" @click="ask()" :disabled="!draft.trim()" title="发送" aria-label="发送"><ui-icon name="arrow-up"></ui-icon></button></div>
+        </section>
+      </div>
+
+      <div class="home-row three">
+        <section class="card">
+          <header class="card-head"><h3>服务器</h3></header>
+          <div class="srv-grid srv-head small tertiary"><span>名称</span><span>CPU</span><span>内存</span><span>磁盘</span></div>
+          <button class="srv-grid srv-row" v-for="s in ov.servers" :key="s.id" @click="$emit('server', s.id)">
+            <span class="srv-name"><span class="sdot" :class="levelDot(s.level)"></span><span><b>{{ s.name }}</b><span class="small tertiary block">{{ s.level === 'unknown' ? s.note : ({ '1panel': '1Panel', bt: '宝塔', linux: 'Linux' }[s.adapter] || '') }}</span></span></span>
+            <span v-for="(m, k) in [s.cpuPct, s.memPct, s.diskPct]" :key="k" class="srv-metric">
+              <template v-if="m != null"><span class="mini-bar"><span :class="bar(m).cls" :style="{ width: bar(m).w }"></span></span><span :class="{ 'warn-text': m >= 85 }">{{ m }}%</span></template>
+              <span class="tertiary" v-else>—</span>
+            </span>
+          </button>
+        </section>
+        <section class="card">
+          <header class="card-head"><h3>今天的访问</h3><span class="grow"></span><button class="link small" @click="$emit('stats', 'logs', 'overview')">统计 ›</button></header>
+          <template v-if="ov.visits">
+            <div class="home-pv"><b>{{ fmtCount(ov.visits.pv) }}</b><span class="secondary">PV</span>
+              <span class="small secondary" v-if="ov.visits.pvBefore">比昨天同期 {{ ov.visits.pv >= ov.visits.pvBefore ? '↑' : '↓' }}{{ Math.abs(Math.round((ov.visits.pv - ov.visits.pvBefore) * 100 / ov.visits.pvBefore)) }}%</span></div>
+            <svg v-if="spark" class="home-spark" viewBox="0 0 300 72" preserveAspectRatio="none" role="img" aria-label="今天每小时的访问量">
+              <path :d="spark.area" class="spark-area"></path><path :d="spark.line" class="spark-line"></path>
+              <circle :cx="spark.x" :cy="spark.y" r="3.5" class="spark-dot"></circle></svg>
+            <div class="small tertiary" v-if="spark">{{ ov.visits.title }} · {{ spark.now }}</div>
+          </template>
+          <div class="home-empty" v-else>还没有访问数据，打开「访问统计」选择数据来源。</div>
+        </section>
+        <section class="card">
+          <header class="card-head"><h3>最近的变更</h3><span class="grow"></span><button class="link small" @click="$emit('go', 'logs')">记录 ›</button></header>
+          <div class="home-empty" v-if="!ov.changes.length">还没有执行过修改</div>
+          <button class="change-row" v-for="c in ov.changes" :key="c.id" @click="$emit('log', c.id)">
+            <span class="small tertiary change-when">{{ whenText(c.startedAt) }}</span>
+            <span class="grow"><span class="ellipsis block" :title="c.note || c.title">{{ c.note || c.title }}</span><span class="small secondary">{{ c.serverName }}{{ c.status === 'undone' || c.undoneBy ? ' · 已撤销' : c.status !== 'done' ? ' · 没有成功' : '' }}</span></span>
+          </button>
+        </section>
+      </div>
+    </template>
+    <div class="notice" v-else-if="servers.length"><span class="spinner"></span>正在汇总……</div>
+  </div>`,
+};
+
+// The server workbench: one server's page, in tabs. 终端 and 文件 stay pages
+// of their own (their sessions and uploads outlive the tab), opened from
+// the buttons at the top.
+const SERVER_TABS = [{ id: 'overview', text: '概览' }, { id: 'sites', text: '网站' }, { id: 'apps', text: '应用' },
+  { id: 'security', text: '安全与备份' }, { id: 'history', text: '执行记录' }, { id: 'connection', text: '连接设置' }];
+
+// What a finding's button offers, by its title. Every one goes to the AI,
+// which looks first and proposes a checklist.
+const FINDING_FIX = [
+  [/没有 swap/, '加 swap', '给这台服务器加一个大小合适的 swap'],
+  [/内存/, '优化内存', '看看是什么占用了内存，能怎么优化'],
+  [/磁盘/, '清理磁盘', '看看是什么占用了磁盘空间，哪些可以安全清理'],
+  [/SSH/, '加固 SSH', '在不把我锁在外面的前提下加固 SSH 登录'],
+  [/服务启动失败|Docker/, '排查', '查一下原因并修复'],
+];
+const findingFix = f => {
+  if (f.level === 'info' && /不是 root/.test(f.title)) return null;
+  const hit = FINDING_FIX.find(([re]) => re.test(f.title));
+  return hit ? { label: hit[1], ask: hit[2] } : { label: '让 AI 处理', ask: '看看怎么处理' };
+};
+
+// A ring gauge, like the widgets on a phone.
+const RING_C = 2 * Math.PI * 23;
+const ServerRing = {
+  props: { pct: Number, level: String },
+  setup(props) {
+    const dash = computed(() => `${(RING_C * Math.min(100, Math.max(0, props.pct || 0)) / 100).toFixed(1)} ${RING_C.toFixed(1)}`);
+    return { dash };
+  },
+  template: `<svg class="ring" viewBox="0 0 56 56" aria-hidden="true">
+    <circle cx="28" cy="28" r="23" class="ring-track"></circle>
+    <circle cx="28" cy="28" r="23" class="ring-value" :class="level" :stroke-dasharray="dash" transform="rotate(-90 28 28)"></circle>
+  </svg>`,
+};
+
+const gbText = mb => mb >= 1024 ? (mb / 1024).toFixed(mb >= 10240 ? 0 : 1) + ' GB' : mb + ' MB';
+
+const ServerOverview = {
+  props: { view: Object, cloud: Object, active: Boolean, busy: Boolean },
+  emits: ['ask', 'tab', 'site', 'discover', 'log'],
+  setup(props, { emit }) {
+    const p = computed(() => props.view && props.view.profile);
+    const sv = computed(() => props.view && props.view.server);
+    const sites = ref(null), sitesError = ref(''), recent = ref([]), samples = ref([]);
+    const chartKind = ref('cpu');
+    let seq = 0;
+    async function load() {
+      const s = sv.value;
+      if (!s) return;
+      const n = ++seq;
+      api('GET', `/api/exec?server=${s.id}&changes=1`).then(r => { if (n === seq) recent.value = r.slice(0, 5); }).catch(() => {});
+      api('GET', `/api/servers/${s.id}/metrics?hours=24`).then(r => { if (n === seq) samples.value = r; }).catch(() => {});
+      if (!PANELS.includes(s.adapter)) { sites.value = null; sitesError.value = ''; return; }
+      try {
+        const r = await api('GET', `/api/websites?server=${s.id}`);
+        if (n !== seq) return;
+        const x = r.servers[0];
+        sites.value = x && !x.noPanel && !x.error ? x.sites : null;
+        sitesError.value = !x ? '' : x.noPanel ? '还没有配置' + (s.adapter === 'bt' ? '宝塔' : ' 1Panel ') + '接口' : x.error || '';
+      } catch (e) { if (n === seq) sitesError.value = e.message; }
+    }
+    watch(() => [props.active, sv.value && sv.value.id, props.view && props.view.collectedAt], () => { if (props.active) load(); }, { immediate: true });
+
+    const level = v => v >= 90 ? 'crit' : v >= 80 ? 'warn' : '';
+    // The monitoring's last sample, when it is from the last ten minutes.
+    const live = computed(() => {
+      const l = samples.value[samples.value.length - 1];
+      return l && Date.now() - new Date(l.at) < 10 * 60000 ? l : null;
+    });
+    const metrics = computed(() => {
+      const x = p.value, out = [], l = live.value;
+      if (!x) return out;
+      const load1 = l ? l.load1 : parseFloat(String(x.load || '').split(/\s+/)[0]);
+      if (x.cpuCores && !isNaN(load1)) {
+        const v = l ? Math.round(l.cpu) : Math.min(100, Math.round(load1 * 100 / x.cpuCores));
+        out.push({ label: 'CPU', pct: v, level: level(v), sub: `${x.cpuCores} 核 · 负载 ${load1}` });
+      }
+      const m = x.memory;
+      if (m && m.totalMB) {
+        const v = l ? Math.round(l.mem) : Math.round((m.totalMB - m.availableMB) * 100 / m.totalMB);
+        const noSwap = !m.swapTotalMB;
+        out.push({ label: '内存', pct: v, level: level(v) || (noSwap && v >= 70 ? 'warn' : ''),
+          sub: `${gbText(Math.round(m.totalMB * v / 100))} / ${gbText(m.totalMB)}` + (noSwap ? ' · 没有 swap' : '') });
+      }
+      const d = (x.disks || []).find(d => d.mount === '/');
+      if (d) {
+        const v = l ? Math.round(l.disk) : d.usePct;
+        out.push({ label: '磁盘', pct: v, level: level(v), sub: l ? `共 ${d.size}` : `${d.used} / ${d.size}` });
+      }
+      const c = props.cloud;
+      if (c && c.trafficTotal) {
+        const v = Math.round(c.trafficUsed * 100 / c.trafficTotal);
+        out.push({ label: '流量包', pct: v, level: level(v), sub: `本月 ${fmtBytes(c.trafficUsed)} / ${fmtBytes(c.trafficTotal)}` });
+      }
+      return out;
+    });
+    const findings = computed(() => (p.value && p.value.findings || []).map(f => ({ ...f, fix: findingFix(f) })));
+    const tone = l => ({ danger: 'crit', warn: 'warn' }[l] || 'info');
+    function fix(f) {
+      emit('ask', `服务器「${sv.value.name}」：${f.title}（${f.detail}）。${f.fix.ask}，能改的话给我一份清单。`);
+    }
+    const programs = computed(() => {
+      const list = (p.value && p.value.programs || []).slice(0, 5);
+      const top = Math.max(1, ...list.map(g => g.memMB));
+      return list.map(g => ({ ...g, w: Math.max(2, Math.round(g.memMB * 100 / top)) + '%' }));
+    });
+    const chart = computed(() => {
+      const pts = samples.value.map(m => ({ t: Math.floor(new Date(m.at) / 1000), m }));
+      if (pts.length < 2) return null;
+      const k = chartKind.value;
+      if (k === 'net') return { points: pts.map(x => ({ t: x.t, v: x.m.rx })), more: [{ label: '出', points: pts.map(x => ({ t: x.t, v: x.m.tx })), format: v => fmtBytes(v) + '/s' }], label: '入', format: v => fmtBytes(v) + '/s' };
+      return { points: pts.map(x => ({ t: x.t, v: k === 'cpu' ? x.m.cpu : x.m.mem })), more: [], label: k === 'cpu' ? 'CPU' : '内存', format: v => Math.round(v) + '%' };
+    });
+    const plainSites = computed(() => p.value && p.value.websites || []);
+    const shownSites = computed(() => (sites.value || []).slice(0, 6));
+    return { live, chart, chartKind, p, sv, sites, sitesError, recent, metrics, findings, tone, fix, programs, plainSites, shownSites,
+      SITE_TYPES, PANELS, certLeft, certLevel, whenText, gbText };
+  },
+  template: `
+  <div class="wb-overview">
+    <div class="wb-rings" v-if="metrics.length">
+      <div class="wb-ring card" v-for="m in metrics" :key="m.label" :title="live && m.label !== '流量包' ? '两分钟前的实时数据' : ''">
+        <div class="wb-ring-gauge"><server-ring :pct="m.pct" :level="m.level"></server-ring><b>{{ m.pct }}<small>%</small></b></div>
+        <div class="grow"><div class="wb-ring-label">{{ m.label }}</div><div class="small" :class="m.level ? 'st-' + m.level + '-text' : 'secondary'">{{ m.sub }}</div></div>
+      </div>
+    </div>
+
+    <section class="card" v-if="chart">
+      <header class="card-head"><h3>最近 24 小时</h3><span class="small tertiary">{{ live ? '每两分钟采样' : '最近没有采样' }}</span><span class="grow"></span>
+        <span class="segmented small"><button :class="{on: chartKind === 'cpu'}" @click="chartKind = 'cpu'">CPU</button><button :class="{on: chartKind === 'mem'}" @click="chartKind = 'mem'">内存</button><button :class="{on: chartKind === 'net'}" @click="chartKind = 'net'">网络</button></span></header>
+      <line-chart :points="chart.points" :more="chart.more" :label="chart.label" :format="chart.format" :span="24"></line-chart>
+    </section>
+
+    <section class="card wb-checks">
+      <header class="card-head"><h3>体检结果</h3><span class="small tertiary" v-if="view.collectedAt">{{ whenText(view.collectedAt) }} · 只读检查</span>
+        <span class="grow"></span><button class="plain small" @click="$emit('discover')" :disabled="busy"><ui-icon name="refresh"></ui-icon>重新识别</button></header>
+      <div class="home-empty" v-if="!findings.length"><span class="sdot good"></span>一切正常，没有发现需要处理的问题</div>
+      <div class="wb-check" v-for="(f, i) in findings" :key="i">
+        <span class="wb-check-icon" :class="'st-' + tone(f.level)"><ui-icon :name="f.level === 'danger' ? 'alert' : f.level === 'warn' ? 'warn' : 'info'"></ui-icon></span>
+        <div class="grow"><div>{{ f.title }}</div><div class="small secondary">{{ f.detail }}</div></div>
+        <button v-if="f.fix" @click="fix(f)">{{ f.fix.label }}</button>
+      </div>
+    </section>
+
+    <div class="wb-row">
+      <section class="card">
+        <header class="card-head"><h3>网站</h3><span class="grow"></span>
+          <button class="link small" v-if="PANELS.includes(sv.adapter)" @click="$emit('tab', 'sites')">全部 ›</button></header>
+        <template v-if="PANELS.includes(sv.adapter)">
+          <div class="home-empty" v-if="sitesError"><span class="sdot warn"></span>{{ sitesError }}
+            <button class="link small" v-if="sitesError.includes('接口')" @click="$emit('tab', 'connection')">去填写</button></div>
+          <div class="home-empty" v-else-if="!sites"><span class="spinner inline"></span>正在读取……</div>
+          <div class="home-empty" v-else-if="!sites.length">这台服务器上还没有网站</div>
+          <button class="wb-site" v-for="x in shownSites" :key="x.id" @click="$emit('site', x.id)">
+            <span class="sdot" :class="x.running ? 'good' : 'off'"></span>
+            <span class="grow"><span class="block ellipsis">{{ x.domain }}</span><span class="small tertiary">{{ SITE_TYPES[x.type] || x.type }}{{ x.app ? ' · ' + x.app : '' }}</span></span>
+            <span class="small" v-if="x.https" :class="certLevel(x.certDays) === 'good' ? 'secondary' : 'st-' + certLevel(x.certDays) + '-text'">HTTPS {{ certLeft(x.certDays) }}</span>
+            <span class="small st-warn-text" v-else>没开 HTTPS</span>
+          </button>
+          <div class="small tertiary wb-more" v-if="sites && sites.length > shownSites.length">还有 {{ sites.length - shownSites.length }} 个</div>
+        </template>
+        <template v-else>
+          <div class="home-empty" v-if="!plainSites.length">没有发现网站</div>
+          <div class="wb-site" v-for="w in plainSites.slice(0, 8)" :key="w"><span class="grow ellipsis">{{ w }}</span></div>
+          <div class="small tertiary wb-more">网站管理支持 1Panel 和宝塔；这里是识别时在 Nginx 配置里看到的网站</div>
+        </template>
+      </section>
+
+      <section class="card">
+        <header class="card-head"><h3>应用和服务</h3><span class="small tertiary">按内存</span><span class="grow"></span>
+          <button class="link small" @click="$emit('tab', 'apps')">全部 ›</button></header>
+        <div class="home-empty" v-if="!programs.length">重新识别后显示占内存最多的程序</div>
+        <div class="wb-app" v-for="g in programs" :key="g.name">
+          <div class="wb-app-top"><span class="grow ellipsis">{{ g.name }}<span class="small tertiary" v-if="g.procs > 1"> · {{ g.procs }} 个进程</span></span><span class="small secondary num">{{ gbText(g.memMB) }}</span></div>
+          <div class="wb-app-bar"><div :style="{ width: g.w }"></div></div>
+        </div>
+      </section>
+    </div>
+
+    <section class="card">
+      <header class="card-head"><h3>最近在这台服务器上</h3><span class="grow"></span><button class="link small" @click="$emit('tab', 'history')">执行记录 ›</button></header>
+      <div class="home-empty" v-if="!recent.length">还没有执行过修改</div>
+      <button class="change-row" v-for="c in recent" :key="c.id" @click="$emit('log', c.id)">
+        <span class="small tertiary change-when">{{ whenText(c.startedAt) }}</span>
+        <span class="grow"><span class="ellipsis block" :title="c.note || c.title">{{ c.note || c.title }}</span>
+          <span class="small secondary">{{ c.status === 'undone' || c.undoneBy ? '已撤销' : c.status === 'done' ? '已完成' : '没有成功' }}</span></span>
+      </button>
+    </section>
+  </div>`,
+};
+
+const ServerApps = {
+  props: { profile: Object, collectedAt: String, server: Number, serverName: String, adapter: String },
+  emits: ['ask'],
+  setup(props) {
+    const p = computed(() => props.profile || {});
+    const programs = computed(() => p.value.programs || []);
+    const containers = computed(() => (p.value.docker && p.value.docker.list) || []);
+    const services = computed(() => p.value.services || { running: [], failed: [] });
+    const panelApps = computed(() => (p.value.panel && p.value.panel.apps) || []);
+    const runtimes = computed(() => (p.value.panel && p.value.panel.runtimes) || []);
+
+    // Changes, each a checklist.
+    const plan = ref(null), planning = ref(false), formError = ref('');
+    async function propose(body) {
+      planning.value = true; formError.value = '';
+      try {
+        plan.value = await api('POST', `/api/servers/${props.server}/apps/plan`, body);
+        dbForm.open = false;
+        return true;
+      } catch (e) { if (dbForm.open) formError.value = e.message; else notify(e.message, 'error'); return false; }
+      finally { planning.value = false; }
+    }
+    const svc = ref('');
+    const restartService = name => propose({ op: 'service_restart', name });
+    const restartContainer = c => propose({ op: 'container_restart', name: c.name });
+
+    // MySQL on 1Panel.
+    const dbs = reactive({ apps: null, loading: false, error: '' });
+    async function loadDBs() {
+      if (props.adapter !== '1panel' || !props.server) return;
+      dbs.loading = true; dbs.error = '';
+      try { dbs.apps = await api('GET', `/api/servers/${props.server}/databases`); }
+      catch (e) { dbs.error = e.message; } finally { dbs.loading = false; }
+    }
+    watch(() => props.server, () => { dbs.apps = null; loadDBs(); }, { immediate: true });
+    const dbForm = reactive({ open: false, app: '', name: '', user: '', access: '%' });
+    function openDB(app) { formError.value = ''; Object.assign(dbForm, { open: true, app: app.app, name: '', user: '', access: '%' }); }
+    const createDB = () => propose({ op: 'db_create', app: dbForm.app, name: dbForm.name.trim(), user: dbForm.user.trim(), access: dbForm.access });
+    const backupDB = (app, d) => propose({ op: 'db_backup', app: app.app, name: d.name });
+    function deleteDB(app, d) {
+      if (!confirm(`删除数据库 ${d.name} 和它的用户 ${d.user}？会先生成一份清单：删除前先备份，删除后不能一键撤销。`)) return;
+      propose({ op: 'db_delete', app: app.app, name: d.name });
+    }
+    // Waiting on a checklist stops when the tab is left.
+    let gone = false;
+    onUnmounted(() => { gone = true; });
+    async function closePlan() {
+      const pl = plan.value;
+      plan.value = null;
+      if (!pl) return;
+      for (let i = 0; i < 100; i++) {
+        await new Promise(r => setTimeout(r, 3000));
+        if (gone) return;
+        try {
+          const now = await api('GET', `/api/plans/${pl.id}`);
+          if (now.status === 'running') continue;
+          loadDBs();
+        } catch { /* looked at again when the tab opens */ }
+        return;
+      }
+    }
+    return { p, programs, containers, services, panelApps, runtimes, gbText, whenText, plan, planning, formError, svc, restartService, restartContainer,
+      dbs, loadDBs, dbForm, openDB, createDB, backupDB, deleteDB, closePlan };
+  },
+  template: `
+  <div class="wb-apps">
+    <p class="small tertiary">来自{{ collectedAt ? ' ' + whenText(collectedAt) + '的' : '最近一次' }}识别。要更新，点「重新识别」。重启和数据库的修改都会先生成清单，确认后才执行。</p>
+
+    <div class="group-title">占内存最多的程序</div>
+    <div class="group">
+      <div class="row secondary" v-if="!programs.length">重新识别后显示</div>
+      <div class="table-wrap" v-else>
+        <table class="table">
+          <thead><tr><th>程序</th><th class="num">进程</th><th class="num">内存</th><th class="num">CPU</th><th>用户</th></tr></thead>
+          <tbody><tr v-for="g in programs" :key="g.name"><td>{{ g.name }}</td><td class="num">{{ g.procs }}</td><td class="num nowrap">{{ gbText(g.memMB) }}</td>
+            <td class="num">{{ g.cpu.toFixed(1) }}%</td><td class="secondary">{{ g.user }}</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <template v-if="containers.length || (p.docker && p.docker.status && p.docker.status !== 'no')">
+      <div class="group-title">Docker 容器</div>
+      <div class="group">
+        <div class="row secondary" v-if="p.docker.status === 'unreachable'">Docker 已安装但连接不上，服务可能没有运行</div>
+        <div class="row secondary" v-else-if="!containers.length">没有容器</div>
+        <div class="table-wrap" v-else>
+          <table class="table">
+            <thead><tr><th>容器</th><th>镜像</th><th>状态</th><th class="num">内存</th><th class="num">CPU</th><th><span class="sr-only">操作</span></th></tr></thead>
+            <tbody><tr v-for="c in containers" :key="c.name"><td>{{ c.name }}<div class="small tertiary" v-if="c.ports">{{ c.ports }}</div></td><td class="secondary">{{ c.image }}</td>
+              <td class="nowrap"><span class="sdot" :class="c.running ? 'good' : 'off'"></span>{{ c.status }}</td>
+              <td class="num nowrap">{{ c.mem ? c.mem.split(' / ')[0] : '—' }}</td><td class="num">{{ c.cpu || '—' }}</td>
+              <td class="site-ops"><button class="link small" @click="restartContainer(c)" :disabled="planning">重启</button></td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </template>
+
+    <div class="group-title">系统服务</div>
+    <div class="group">
+      <div class="row" v-if="services.failed && services.failed.length"><span class="k"><span class="sdot crit"></span>启动失败</span>
+        <span class="v">{{ services.failed.join('、') }}</span>
+        <button @click="$emit('ask', '这台服务器上的服务 ' + services.failed.join('、') + ' 启动失败，帮我查一下原因并修复')">让 AI 排查</button></div>
+      <div class="row"><span class="k">正在运行</span><span class="v"><span class="tags" v-if="services.running && services.running.length"><span class="tag" v-for="s in services.running" :key="s">{{ s }}</span></span><template v-else>—</template></span></div>
+      <div class="row" v-if="(services.running && services.running.length) || (services.failed && services.failed.length)"><span class="k">重启服务</span>
+        <span class="v"><select v-model="svc" aria-label="要重启的服务"><option value="">选择服务</option>
+          <option v-for="s in [...(services.failed || []), ...(services.running || [])]" :key="s" :value="s">{{ s }}</option></select></span>
+        <button @click="restartService(svc)" :disabled="!svc || planning">生成清单</button></div>
+    </div>
+
+    <template v-if="adapter === '1panel'">
+      <div class="group-title">数据库</div>
+      <div class="notice" v-if="dbs.error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ dbs.error }}</div>
+      <div class="notice" v-if="dbs.loading && !dbs.apps"><span class="spinner"></span>正在读取数据库……</div>
+      <div class="group" v-if="dbs.apps && !dbs.apps.length"><div class="row secondary">1Panel 里没有安装 MySQL 或 MariaDB</div></div>
+      <template v-for="a in dbs.apps || []" :key="a.app">
+        <div class="group">
+          <div class="row"><span class="grow"><b>{{ a.app }}</b><span class="small secondary"> · {{ a.kind === 'mariadb' ? 'MariaDB' : 'MySQL' }} {{ a.version }}</span>
+            <span class="small block" v-if="!a.running"><span class="sdot crit"></span>没有运行</span></span>
+            <button class="plain small" @click="openDB(a)" :disabled="planning"><ui-icon name="plus"></ui-icon>新建数据库</button></div>
+          <div class="row small secondary" v-if="a.error"><ui-icon name="alert" class="st-crit"></ui-icon><span class="grow">{{ a.error }}</span></div>
+          <div class="row" v-for="d in a.databases" :key="d.name">
+            <span class="grow"><b>{{ d.name }}</b><span class="small tertiary block">用户 {{ d.user }} · {{ d.access === '%' ? '任何地址可连' : d.access === 'localhost' ? '只能本机连' : d.access }}<template v-if="d.note"> · {{ d.note }}</template></span></span>
+            <button class="plain small" @click="backupDB(a, d)" :disabled="planning">备份</button>
+            <button class="link small danger" @click="deleteDB(a, d)" :disabled="planning">删除</button>
+          </div>
+          <div class="row small secondary" v-if="!a.databases.length && !a.error">还没有数据库</div>
+        </div>
+      </template>
+      <p class="small tertiary" v-if="dbs.apps && dbs.apps.length">密码在 1Panel「数据库」页面查看和修改；Miao Panel 不保存数据库密码。</p>
+    </template>
+
+    <template v-if="panelApps.length || runtimes.length || (p.databases && p.databases.length) || (p.wordpress && p.wordpress.length) || (p.java && p.java.length)">
+      <div class="group-title">面板应用和运行环境</div>
+      <div class="group">
+        <div class="row" v-if="panelApps.length"><span class="k">面板应用</span><span class="v"><span class="tags"><span class="tag" v-for="a in panelApps" :key="a">{{ a }}</span></span></span></div>
+        <div class="row" v-if="runtimes.length"><span class="k">PHP 运行环境</span><span class="v">{{ runtimes.join('、') }}</span></div>
+        <div class="row" v-if="p.databases && p.databases.length"><span class="k">数据库</span><span class="v">{{ p.databases.join('、') }}</span></div>
+        <div class="row" v-for="w in p.wordpress" :key="w"><span class="k">WordPress</span><span class="v small">{{ w }}</span></div>
+        <div class="row" v-for="j in p.java" :key="j"><span class="k">Java</span><span class="v small">{{ j }}</span></div>
+      </div>
+    </template>
+
+    <!-- A new database -->
+    <div class="sheet-mask" v-if="dbForm.open" @click.self="dbForm.open = false">
+      <div class="sheet" role="dialog" aria-label="新建数据库">
+        <h2>新建数据库</h2>
+        <p>在 {{ dbForm.app }} 里新建数据库和用户，字符集 utf8mb4。密码随机生成，在 1Panel「数据库」页面查看。</p>
+        <div class="group">
+          <div class="row form"><span class="k">数据库名</span><span class="v"><input v-model="dbForm.name" placeholder="字母、数字和下划线，例如 shop" aria-label="数据库名" autocomplete="off" spellcheck="false"></span></div>
+          <div class="row form"><span class="k">用户名</span><span class="v"><input v-model="dbForm.user" :placeholder="dbForm.name || '不填和数据库名一样'" aria-label="用户名" autocomplete="off" spellcheck="false"></span></div>
+          <div class="row form"><span class="k">谁能连接</span><span class="v"><select v-model="dbForm.access" aria-label="谁能连接"><option value="%">任何地址（容器里的应用要连就选这个）</option><option value="localhost">只能在 MySQL 容器里连</option></select></span></div>
+        </div>
+        <div class="notice" v-if="formError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ formError }}</div>
+        <div class="sheet-actions"><button @click="dbForm.open = false">取消</button>
+          <button class="primary" @click="createDB" :disabled="planning || !dbForm.name.trim()">生成清单</button></div>
+      </div>
+    </div>
+
+    <!-- The checklist to confirm -->
+    <div class="sheet-mask" v-if="plan" @click.self="closePlan">
+      <div class="sheet plan-sheet" role="dialog" aria-label="确认清单">
+        <h2>{{ plan.title }}</h2>
+        <p>勾选后点「执行」，确认后才会生效。</p>
+        <plan-card :plan="plan" :server-name="serverName" @done="loadDBs"></plan-card>
+        <div class="sheet-actions"><button @click="closePlan">关闭</button></div>
+      </div>
+    </div>
+  </div>`,
+};
+
+// 云服务 › 云服务器: the lightweight and full servers in the Tencent Cloud
+// and 阿里云 accounts, their expiry and traffic package, and one instance's
+// monitoring, firewall and snapshots. Starting, stopping, rebooting,
+// snapshots and firewall changes are checklists, confirmed first.
+const CLOUD_STATES = { RUNNING: ['good', '运行中'], STOPPED: ['off', '已关机'], STARTING: ['warn', '正在开机'], STOPPING: ['warn', '正在关机'],
+  REBOOTING: ['warn', '正在重启'], PENDING: ['warn', '创建中'], SHUTDOWN: ['off', '已关机'], TERMINATING: ['off', '正在退还'],
+  RESETTING: ['warn', '正在重置'], UPGRADING: ['warn', '正在升级'], DISABLED: ['off', '已停用'] };
+const cloudState = s => CLOUD_STATES[s] || ['off', s || '未知'];
+const cloudKind = k => ({ lighthouse: '轻量应用服务器', cvm: '云服务器 CVM', swas: '轻量应用服务器', ecs: '云服务器 ECS' })[k] || k;
+// A lightweight server has its own firewall; the others use a security group.
+const cloudLight = k => k === 'lighthouse' || k === 'swas';
+const CLOUD_NAMES = { tencent: '腾讯云', aliyun: '阿里云' };
+
+const CloudPage = {
+  // configured: Tencent Cloud's keys are set; aliyun: 阿里云's.
+  props: { active: Boolean, request: Object, servers: { type: Array, default: () => [] }, configured: Boolean, aliyun: Boolean },
+  emits: ['server', 'add', 'settings', 'ask'],
+  setup(props, { emit }) {
+    const list = ref(null), loading = ref(false), error = ref('');
+    const open = ref(null); // { provider, region, id }
+    const detail = ref(null), dLoading = ref(false), dError = ref('');
+    const plan = ref(null), planning = ref(false), formError = ref('');
+    const fw = reactive({ open: false, port: '', protocol: 'TCP', who: 'all', cidr: '', description: '' });
+    const snap = reactive({ open: false, name: '' });
+    let seq = 0;
+
+    const anyCloud = computed(() => props.configured || props.aliyun);
+    // Both clouds at once; one that fails says so and the other still shows.
+    let listSeq = 0;
+    async function loadList(refresh) {
+      if (!anyCloud.value) return;
+      const n = ++listSeq;
+      loading.value = true; error.value = '';
+      const q = refresh ? '?refresh=1' : '';
+      const clouds = [props.configured && 'tencent', props.aliyun && 'aliyun'].filter(Boolean);
+      const got = await Promise.allSettled(clouds.map(c => api('GET', `/api/${c}/servers${q}`)));
+      if (n !== listSeq) return; // a newer load, with other clouds, is on its way
+      const out = { servers: [], errors: [], fetchedAt: '' };
+      got.forEach((r, i) => {
+        const name = CLOUD_NAMES[clouds[i]];
+        if (r.status === 'rejected') { out.errors.push(name + '：' + r.reason.message); return; }
+        out.servers.push(...r.value.servers.map(x => ({ ...x, provider: clouds[i] })));
+        out.errors.push(...(r.value.errors || []).map(e => clouds.length > 1 ? name + '：' + e : e));
+        if (r.value.fetchedAt > out.fetchedAt) out.fetchedAt = r.value.fetchedAt;
+      });
+      if (!out.servers.length && got.every(r => r.status === 'rejected')) error.value = out.errors.join('；');
+      else list.value = out;
+      loading.value = false;
+    }
+    async function loadDetail() {
+      const o = open.value;
+      if (!o) return;
+      const n = ++seq;
+      dLoading.value = true; dError.value = '';
+      try {
+        const d = await api('GET', `/api/${o.provider}/servers/${encodeURIComponent(o.region)}/${encodeURIComponent(o.id)}`);
+        if (n === seq) detail.value = { ...d, instance: { ...d.instance, provider: o.provider } };
+      } catch (e) { if (n === seq) dError.value = e.message; }
+      finally { if (n === seq) dLoading.value = false; }
+    }
+    function openOne(s) { open.value = { provider: s.provider || 'tencent', region: s.region, id: s.id }; detail.value = null; loadDetail(); }
+    function back() { open.value = null; detail.value = null; loadList(); }
+    watch(() => props.active, v => { if (v) { if (!list.value) loadList(); if (open.value) loadDetail(); } }, { immediate: true });
+    // Other keys, other servers: the list is read again, now or when shown.
+    watch(() => [props.configured, props.aliyun], () => { list.value = null; if (props.active) loadList(); });
+    watch(() => props.request, r => { if (r && r.id) openOne(r); }, { immediate: true });
+
+    const servers = computed(() => (list.value && list.value.servers) || []);
+    const serverOf = id => props.servers.find(s => s.id === id);
+    const inst = computed(() => detail.value && detail.value.instance);
+    const daysTo = t => t ? Math.floor((new Date(t) - Date.now()) / 86400000) : null;
+    function expiry(s) {
+      if (!s.expiredTime) return { text: ['POSTPAID_BY_HOUR', 'POSTPAID'].includes(s.chargeType) ? '按量计费' : '', level: '' };
+      const d = daysTo(s.expiredTime);
+      const auto = s.renewFlag === 'NOTIFY_AND_AUTO_RENEW';
+      const text = d < 0 ? '已过期' : `还剩 ${d} 天`;
+      return { text: text + (auto ? ' · 自动续费' : ''), level: d < 0 ? 'crit' : d < 15 && !auto ? 'warn' : '', date: new Date(s.expiredTime).toLocaleDateString('zh-CN') };
+    }
+    const traffic = s => s.trafficTotal ? Math.min(100, Math.round(s.trafficUsed * 100 / s.trafficTotal)) : null;
+    const trafficLevel = v => v >= 90 ? 'crit' : v >= 80 ? 'warn' : '';
+
+    async function propose(body) {
+      planning.value = true; formError.value = '';
+      try {
+        plan.value = await api('POST', `/api/${open.value.provider}/servers/plan`, { instance: open.value.id, region: open.value.region, ...body });
+        fw.open = false; snap.open = false;
+      } catch (e) { formError.value = e.message; if (!fw.open && !snap.open) notify(e.message, 'error'); }
+      finally { planning.value = false; }
+    }
+    const power = op => propose({ op });
+    function openFirewall() { Object.assign(fw, { open: true, port: '', protocol: 'TCP', who: 'all', cidr: '', description: '' }); formError.value = ''; }
+    function submitFirewall() {
+      propose({ op: 'firewall_open', port: fw.port.trim(), protocol: fw.protocol, cidr: fw.who === 'all' ? '0.0.0.0/0' : fw.cidr.trim(), description: fw.description.trim() });
+    }
+    function closeRule(r) {
+      propose({ op: 'firewall_close', port: r.port, protocol: r.protocol, cidr: r.source });
+    }
+    function openSnap() { Object.assign(snap, { open: true, name: '' }); formError.value = ''; }
+    function submitSnap() { propose({ op: 'snapshot', name: snap.name.trim() }); }
+    // Closed while it still runs: look again once it has finished.
+    let gone = false;
+    onUnmounted(() => { gone = true; });
+    async function closePlan() {
+      const p = plan.value;
+      plan.value = null;
+      if (!p) return;
+      for (let i = 0; i < 100; i++) {
+        await new Promise(r => setTimeout(r, 3000));
+        if (gone) return;
+        try {
+          const now = await api('GET', `/api/plans/${p.id}`);
+          if (now.status === 'running') continue;
+          await loadList(true); loadDetail();
+        } catch { /* looked at again when the page opens */ }
+        return;
+      }
+    }
+    function planDone() { loadList(true); loadDetail(); }
+    const loginPort = r => /^(22|3389)$/.test(String(r.port)) || /\bALL\b/i.test(String(r.port));
+    const metricFormat = m => v => (Math.round(v * 10) / 10) + ' ' + (m.unit === '%' ? '%' : m.unit || '');
+    const snapState = s => ({ NORMAL: '可用', CREATING: '创建中', ROLLBACKING: '回滚中', FAILED: '失败' }[s.state] || s.state);
+    const providerName = computed(() => CLOUD_NAMES[(open.value && open.value.provider) || 'tencent']);
+    function ask() {
+      const s = inst.value;
+      emit('ask', `帮我看看${providerName.value}${cloudKind(s.kind)}「${s.name || s.id}」（${s.id}，${s.regionName}）的状况：监控、防火墙和到期，有没有需要处理的？`);
+    }
+    const planServer = computed(() => plan.value && plan.value.serverId && serverOf(plan.value.serverId) ? serverOf(plan.value.serverId).name : providerName.value);
+    const both = computed(() => props.configured && props.aliyun);
+    return { list, loading, error, open, detail, dLoading, dError, plan, planning, formError, fw, snap, servers, serverOf, inst,
+      loadList, loadDetail, openOne, back, expiry, traffic, trafficLevel, power, openFirewall, submitFirewall, closeRule, openSnap, submitSnap,
+      closePlan, planDone, loginPort, metricFormat, snapState, ask, cloudState, cloudKind, cloudLight, fmtBytes, anyCloud, providerName, planServer, both, CLOUD_NAMES };
+  },
+  template: `
+  <div class="cloud-page">
+    <div class="group" v-if="!anyCloud">
+      <div class="row"><ui-icon name="cloud" class="lg" style="color: var(--accent)"></ui-icon>
+        <div class="grow">还没有配置云账号的密钥<span class="small secondary block">在「设置」里填写腾讯云的 SecretId 和 SecretKey，或阿里云的 AccessKey，就能在这里看到账号里的轻量应用服务器和云服务器。</span></div>
+        <button class="primary" @click="$emit('settings')">去设置</button></div>
+    </div>
+
+    <!-- The instances -->
+    <template v-else-if="!open">
+      <div class="page-head"><p>{{ both ? '腾讯云和阿里云' : aliyun ? '阿里云' : '腾讯云' }}账号里的轻量应用服务器和云服务器：到期、流量包、监控、防火墙和快照。开关机、快照和防火墙的修改都会先生成一份清单，确认后才执行。</p></div>
+      <div class="stat-bar">
+        <span class="small tertiary" v-if="list">{{ servers.length }} 台<span v-if="list.fetchedAt"> · 更新于 {{ new Date(list.fetchedAt).toLocaleTimeString('zh-CN', { hour12: false }) }}</span></span>
+        <span class="grow"></span>
+        <button class="plain" @click="loadList(true)" :disabled="loading"><ui-icon name="refresh"></ui-icon>刷新</button>
+      </div>
+      <div class="notice" v-if="error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ error }}</div>
+      <div class="notice" v-for="e in (list && list.errors) || []" :key="e"><ui-icon name="warn" class="st-warn"></ui-icon>{{ e }}</div>
+      <div class="notice" v-if="loading && !list"><span class="spinner"></span>正在读取各个地域的服务器……</div>
+      <div class="group" v-if="list && !servers.length"><div class="row secondary">这个账号里还没有轻量应用服务器或云服务器</div></div>
+      <div class="group cloud-list" v-if="servers.length">
+        <div class="table-wrap">
+          <table class="table cloud-table">
+            <thead><tr><th>服务器</th><th>状态</th><th>配置</th><th>公网 IP</th><th>到期</th><th>流量包</th><th>Miao Panel</th></tr></thead>
+            <tbody>
+              <tr v-for="s in servers" :key="s.provider + s.id" class="site-row" @click="openOne(s)">
+                <td><div class="site-name">{{ s.name || s.id }}</div><div class="small tertiary"><template v-if="both">{{ CLOUD_NAMES[s.provider] }} · </template>{{ cloudKind(s.kind) }} · {{ s.regionName }}</div></td>
+                <td class="nowrap"><span class="sdot" :class="cloudState(s.state)[0]"></span>{{ cloudState(s.state)[1] }}</td>
+                <td class="nowrap">{{ s.cpu }} 核 · {{ s.memoryGB }} GB<div class="small tertiary">{{ s.diskGB }} GB 硬盘<span v-if="s.bandwidthMbps"> · {{ s.bandwidthMbps }} Mbps</span></div></td>
+                <td class="nowrap mono small">{{ (s.publicIPs || [])[0] || '—' }}</td>
+                <td class="nowrap"><span :class="expiry(s).level ? 'st-' + expiry(s).level + '-text' : ''">{{ expiry(s).text || '—' }}</span><div class="small tertiary" v-if="expiry(s).date">{{ expiry(s).date }}</div></td>
+                <td class="cloud-traffic"><template v-if="traffic(s) != null">
+                  <div class="small nowrap">{{ fmtBytes(s.trafficUsed) }} / {{ fmtBytes(s.trafficTotal) }}</div>
+                  <div class="meter" :class="trafficLevel(traffic(s))" role="meter" :aria-valuenow="traffic(s)" aria-valuemin="0" aria-valuemax="100" aria-label="流量包用量"><div :style="{ width: traffic(s) + '%' }"></div></div></template>
+                  <span class="tertiary" v-else>—</span></td>
+                <td class="nowrap" @click.stop>
+                  <button class="link small" v-if="s.serverId && serverOf(s.serverId)" @click="$emit('server', s.serverId)">{{ serverOf(s.serverId).name }} ›</button>
+                  <button class="link small" v-else-if="(s.publicIPs || []).length" @click="$emit('add', s)">添加</button>
+                  <span class="tertiary" v-else>—</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </template>
+
+    <!-- One instance -->
+    <template v-else>
+      <div class="site-head">
+        <button class="plain" @click="back"><ui-icon name="chevron" class="flip"></ui-icon>云服务器</button>
+        <template v-if="inst">
+          <div class="grow site-title">
+            <h2>{{ inst.name || inst.id }}</h2>
+            <div class="small secondary"><span class="sdot" :class="cloudState(inst.state)[0]"></span>{{ cloudState(inst.state)[1] }} · {{ providerName }} · {{ cloudKind(inst.kind) }} · {{ inst.regionName }} · {{ inst.id }}</div>
+          </div>
+          <div class="site-actions">
+            <button v-if="inst.serverId && serverOf(inst.serverId)" @click="$emit('server', inst.serverId)"><ui-icon name="server"></ui-icon>服务器页</button>
+            <button @click="ask"><ui-icon name="sparkles"></ui-icon>让 AI 检查</button>
+            <button v-if="inst.state === 'STOPPED'" class="primary" @click="power('start')" :disabled="planning">开机</button>
+            <template v-else-if="inst.state === 'RUNNING'">
+              <button @click="power('reboot')" :disabled="planning">重启</button>
+              <button class="destructive" @click="power('stop')" :disabled="planning">关机</button>
+            </template>
+          </div>
+        </template>
+        <span class="grow" v-else></span>
+        <span class="spinner inline" v-if="dLoading"></span>
+      </div>
+      <div class="notice" v-if="dError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ dError }}<button class="plain" @click="loadDetail">重试</button></div>
+      <div class="notice" v-if="dLoading && !detail"><span class="spinner"></span>正在读取……</div>
+
+      <template v-if="detail">
+        <div class="group">
+          <div class="row"><span class="k">配置</span><span class="v">{{ inst.cpu }} 核 · {{ inst.memoryGB }} GB 内存 · 系统盘 {{ inst.diskGB }} GB<span v-if="inst.bandwidthMbps"> · 带宽 {{ inst.bandwidthMbps }} Mbps</span></span></div>
+          <div class="row"><span class="k">系统</span><span class="v">{{ inst.os || '—' }}</span></div>
+          <div class="row"><span class="k">IP</span><span class="v mono small">{{ (inst.publicIPs || []).join('、') || '—' }}<span class="tertiary" v-if="(inst.privateIPs || []).length"> · 内网 {{ inst.privateIPs.join('、') }}</span></span></div>
+          <div class="row"><span class="k">到期</span><span class="v"><span :class="expiry(inst).level ? 'st-' + expiry(inst).level + '-text' : ''">{{ expiry(inst).date ? expiry(inst).date + '（' + expiry(inst).text + '）' : expiry(inst).text || '—' }}</span></span></div>
+          <div class="row stack" v-if="traffic(inst) != null">
+            <div style="display: flex"><span>本月流量包</span><span class="secondary" style="margin-left: auto">已用 {{ fmtBytes(inst.trafficUsed) }} / {{ fmtBytes(inst.trafficTotal) }}</span></div>
+            <div class="meter" :class="trafficLevel(traffic(inst))" role="meter" :aria-valuenow="traffic(inst)" aria-valuemin="0" aria-valuemax="100" aria-label="流量包用量"><div :style="{ width: traffic(inst) + '%' }"></div></div>
+          </div>
+        </div>
+
+        <div class="group-title">最近 24 小时</div>
+        <div class="notice" v-if="detail.metricError"><ui-icon name="warn" class="st-warn"></ui-icon>监控：{{ detail.metricError }}</div>
+        <div class="cloud-metrics" v-if="detail.metrics.length">
+          <section class="card" v-for="m in detail.metrics" :key="m.label">
+            <header class="card-head"><h3>{{ m.label }}</h3><span class="small secondary num">现在 {{ metricFormat(m)(m.latest) }} · 平均 {{ metricFormat(m)(m.avg) }} · 最高 {{ metricFormat(m)(m.max) }}</span></header>
+            <line-chart v-if="m.points.length" :points="m.points" :label="m.label" :format="metricFormat(m)" :span="24"></line-chart>
+            <div class="home-empty" v-else>没有数据</div>
+          </section>
+        </div>
+
+        <div class="group-title cloud-title">{{ cloudLight(inst.kind) ? '防火墙' : '安全组' }}<span class="tertiary small" v-if="detail.group">{{ detail.group }}（同一安全组的服务器共用这些规则）</span>
+          <span class="grow"></span><button class="plain small" @click="openFirewall" :disabled="planning"><ui-icon name="plus"></ui-icon>放行端口</button></div>
+        <div class="group">
+          <div class="row" v-if="detail.firewallError"><ui-icon name="alert" class="st-crit"></ui-icon><span class="grow secondary">{{ detail.firewallError }}</span></div>
+          <div class="row secondary" v-else-if="!detail.firewall.length">没有入站规则</div>
+          <div class="table-wrap" v-else>
+            <table class="table">
+              <thead><tr><th>端口</th><th>协议</th><th>来源</th><th>策略</th><th>备注</th><th><span class="sr-only">操作</span></th></tr></thead>
+              <tbody><tr v-for="(r, i) in detail.firewall" :key="i">
+                <td class="mono">{{ r.port }}</td><td>{{ r.protocol }}</td>
+                <td>{{ r.everyone ? '所有人' : r.source }}<span class="tertiary small cloud-cidr" v-if="r.everyone">{{ r.source }}</span></td>
+                <td><span class="sdot" :class="r.action === 'ACCEPT' ? 'good' : 'off'"></span>{{ r.action === 'ACCEPT' ? '允许' : '拒绝' }}</td>
+                <td class="secondary">{{ r.description || '' }}</td>
+                <td class="site-ops"><button class="link small destructive" v-if="r.action === 'ACCEPT' && !loginPort(r)" @click="closeRule(r)" :disabled="planning">关闭</button>
+                  <span class="small tertiary" v-else-if="loginPort(r)" title="远程登录用的端口，关掉会连不上">登录用</span></td>
+              </tr></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="group-title cloud-title">系统盘快照<span class="grow"></span><button class="plain small" @click="openSnap" :disabled="planning"><ui-icon name="plus"></ui-icon>创建快照</button></div>
+        <div class="group">
+          <div class="row" v-if="detail.snapshotError"><ui-icon name="alert" class="st-crit"></ui-icon><span class="grow secondary">{{ detail.snapshotError }}</span></div>
+          <div class="row secondary" v-else-if="!detail.snapshots.length">还没有快照。大改之前做一个，出问题可以在{{ providerName }}控制台回滚。</div>
+          <div class="row" v-for="sn in detail.snapshots" :key="sn.id">
+            <div class="grow"><div>{{ sn.name || sn.id }}</div><div class="small tertiary">{{ sn.id }}<span v-if="sn.created"> · {{ new Date(sn.created).toLocaleString('zh-CN', { hour12: false }) }}</span><span v-if="sn.sizeGB"> · {{ sn.sizeGB }} GB</span></div></div>
+            <span class="small"><span class="sdot" :class="sn.state === 'NORMAL' ? 'good' : sn.state === 'FAILED' ? 'crit' : 'warn'"></span>{{ snapState(sn) }}<span v-if="sn.state === 'CREATING' && sn.percent"> {{ sn.percent }}%</span></span>
+          </div>
+        </div>
+      </template>
+    </template>
+
+    <!-- Opening a port -->
+    <div class="sheet-mask" v-if="fw.open" @click.self="fw.open = false">
+      <div class="sheet" role="dialog" aria-label="放行端口">
+        <h2>放行端口</h2>
+        <p>在{{ inst && cloudLight(inst.kind) ? '防火墙' : '安全组' }}里加一条允许访问的规则。只给自己用的端口（数据库、面板）最好只允许自己的 IP。<template v-if="inst && inst.provider === 'aliyun'">阿里云的一条规则只能是一个端口或一段范围。</template></p>
+        <div class="group">
+          <div class="row form"><span class="k">端口</span><span class="v"><input v-model="fw.port" placeholder="如 8080，或 8000-8100" aria-label="端口" autocomplete="off"></span></div>
+          <div class="row form"><span class="k">协议</span><span class="v"><span class="segmented"><button :class="{on: fw.protocol === 'TCP'}" @click="fw.protocol = 'TCP'">TCP</button><button :class="{on: fw.protocol === 'UDP'}" @click="fw.protocol = 'UDP'">UDP</button></span></span></div>
+          <div class="row form"><span class="k">允许谁</span><span class="v"><span class="segmented"><button :class="{on: fw.who === 'all'}" @click="fw.who = 'all'">所有人</button><button :class="{on: fw.who === 'ip'}" @click="fw.who = 'ip'">指定 IP</button></span></span></div>
+          <div class="row form" v-if="fw.who === 'ip'"><span class="k">IP 或网段</span><span class="v"><input v-model="fw.cidr" placeholder="如 203.0.113.7 或 203.0.113.0/24" aria-label="IP 或网段" autocomplete="off"></span></div>
+          <div class="row form"><span class="k">备注</span><span class="v"><input v-model="fw.description" placeholder="可以不填" aria-label="备注" autocomplete="off"></span></div>
+        </div>
+        <div class="notice" v-if="formError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ formError }}</div>
+        <div class="sheet-actions"><button @click="fw.open = false">取消</button>
+          <button class="primary" @click="submitFirewall" :disabled="planning || !fw.port.trim() || (fw.who === 'ip' && !fw.cidr.trim())">{{ planning ? '正在生成……' : '生成清单' }}</button></div>
+      </div>
+    </div>
+
+    <!-- Taking a snapshot -->
+    <div class="sheet-mask" v-if="snap.open" @click.self="snap.open = false">
+      <div class="sheet" role="dialog" aria-label="创建快照">
+        <h2>创建快照</h2>
+        <p>给系统盘做一个整盘备份，不影响运行。{{ inst && !cloudLight(inst.kind) ? '云服务器的快照按容量收费。' : '轻量应用服务器有免费的快照额度。' }}</p>
+        <div class="group"><div class="row form"><span class="k">名称</span><span class="v"><input v-model="snap.name" placeholder="不填自动生成，如 升级前" aria-label="快照名称" autocomplete="off"></span></div></div>
+        <div class="notice" v-if="formError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ formError }}</div>
+        <div class="sheet-actions"><button @click="snap.open = false">取消</button>
+          <button class="primary" @click="submitSnap" :disabled="planning">{{ planning ? '正在生成……' : '生成清单' }}</button></div>
+      </div>
+    </div>
+
+    <!-- The checklist to confirm -->
+    <div class="sheet-mask" v-if="plan" @click.self="closePlan">
+      <div class="sheet plan-sheet" role="dialog" aria-label="确认清单">
+        <h2>{{ plan.title }}</h2>
+        <p>勾选后点「执行」，确认后才会生效。</p>
+        <plan-card :plan="plan" :server-name="planServer" @done="planDone"></plan-card>
+        <div class="sheet-actions"><button @click="closePlan">关闭</button></div>
+      </div>
+    </div>
+  </div>`,
+};
+
+// 监控: every website opened once a minute, every server sampled every two,
+// and what went wrong in the last week. Alerts go to 待处理 and the webhook.
+const INCIDENT_KIND = { site: '网站打不开', server: '服务器连不上', disk: '磁盘快满', mem: '内存快用完', cpu: 'CPU 过高' };
+const MonitorPage = {
+  props: { active: Boolean },
+  emits: ['server', 'ask', 'settings'],
+  setup(props, { emit }) {
+    const v = ref(null), loading = ref(false), error = ref(''), checking = ref(false);
+    const hist = reactive({ open: false, site: null, hours: 24, points: [], loading: false });
+    const form = reactive({ open: false, saving: false, error: '' });
+    let timer = null;
+    async function load() {
+      loading.value = true; error.value = '';
+      try { v.value = await api('GET', '/api/monitor'); }
+      catch (e) { error.value = e.message; } finally { loading.value = false; }
+    }
+    async function checkNow() {
+      checking.value = true;
+      try { v.value = await api('POST', '/api/monitor/check'); notify('已检查一遍'); }
+      catch (e) { notify(e.message, 'error'); } finally { checking.value = false; }
+    }
+    watch(() => props.active, on => {
+      clearInterval(timer);
+      if (on) { load(); timer = setInterval(load, 60000); }
+    }, { immediate: true });
+    onUnmounted(() => clearInterval(timer));
+
+    const sites = computed(() => (v.value && v.value.sites) || []);
+    const down = computed(() => sites.value.filter(s => s.up === false).length);
+    const servers = computed(() => (v.value && v.value.servers) || []);
+    const incidents = computed(() => (v.value && v.value.incidents) || []);
+    const bars = s => {
+      const top = Math.max(200, ...s.recent);
+      return s.recent.map(ms => ms < 0 ? { cls: 'fail', h: '100%' } : { cls: '', h: Math.max(18, Math.round(ms * 100 / top)) + '%' });
+    };
+    const uptimeText = s => s.uptime == null ? '—' : s.uptime.toFixed(s.uptime === 100 ? 0 : 2) + '%';
+    const uptimeLevel = s => s.uptime == null ? '' : s.uptime < 95 ? 'crit' : s.uptime < 99.5 ? 'warn' : '';
+    const lastedText = in_ => {
+      const a = new Date(in_.startedAt), b = in_.endedAt ? new Date(in_.endedAt) : new Date();
+      const m = Math.round((b - a) / 60000);
+      return m < 2 ? '约 1 分钟' : m < 60 ? `约 ${m} 分钟` : m < 2880 ? `约 ${(m / 60).toFixed(1)} 小时` : `约 ${Math.round(m / 1440)} 天`;
+    };
+    const when = t => new Date(t).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+    const rate = b => fmtBytes(b) + '/s';
+
+    async function openHistory(s) {
+      Object.assign(hist, { open: true, site: s, points: [] });
+      await loadHistory();
+    }
+    let histSeq = 0;
+    async function loadHistory() {
+      const n = ++histSeq;
+      hist.loading = true;
+      try {
+        const r = await api('GET', `/api/monitor/site?url=${encodeURIComponent(hist.site.url)}&hours=${hist.hours}`);
+        if (n === histSeq) hist.points = r;
+      } catch (e) { if (n === histSeq) notify(e.message, 'error'); } finally { if (n === histSeq) hist.loading = false; }
+    }
+    watch(() => hist.hours, () => { if (hist.open) loadHistory(); });
+    const histMain = computed(() => hist.points.map(p => ({ t: p.t, v: p.n > p.fails ? p.ms : 0 })));
+    const histMore = computed(() => [{ label: '失败', points: hist.points.map(p => ({ t: p.t, v: p.fails })), format: n => n + ' 次' }]);
+    const histFails = computed(() => hist.points.reduce((n, p) => n + p.fails, 0));
+    const histChecks = computed(() => hist.points.reduce((n, p) => n + p.n, 0));
+
+    function ask(s) {
+      emit('ask', `网站 ${s.name}（${s.url}）现在打不开：${s.error || '没有响应'}。帮我排查是什么原因：DNS、EdgeOne、服务器、Nginx 还是应用，能修的话给我一份清单。`);
+    }
+    function openSettings() {
+      const st = v.value.settings;
+      Object.assign(form, { open: true, saving: false, error: '', enabled: st.enabled, auto: st.auto, servers: st.servers,
+        extra: st.extra.join('\n'), skip: st.skip.join('\n'), diskPct: st.diskPct, memPct: st.memPct, cpuPct: st.cpuPct, email: st.email || '' });
+    }
+    async function saveSettings() {
+      form.saving = true; form.error = '';
+      const lines = t => t.split(/[\n,，\s]+/).map(x => x.trim()).filter(Boolean);
+      try {
+        await api('PUT', '/api/monitor/settings', { enabled: form.enabled, auto: form.auto, servers: form.servers, extra: lines(form.extra), skip: lines(form.skip),
+          diskPct: +form.diskPct, memPct: +form.memPct, cpuPct: +form.cpuPct, email: form.email.trim() });
+        form.open = false;
+        await checkNow();
+      } catch (e) { form.error = e.message; } finally { form.saving = false; }
+    }
+    function skipSite(s) {
+      const st = v.value.settings;
+      api('PUT', '/api/monitor/settings', { ...st, skip: [...st.skip, s.url], extra: st.extra.filter(x => x !== s.url) })
+        .then(() => { notify('不再监控 ' + s.name); return api('POST', '/api/monitor/check'); }).then(r => { v.value = r; }).catch(e => notify(e.message, 'error'));
+    }
+    return { v, loading, error, checking, hist, form, sites, down, servers, incidents, bars, uptimeText, uptimeLevel, lastedText, when, rate,
+      checkNow, load, openHistory, histMain, histMore, histFails, histChecks, ask, openSettings, saveSettings, skipSite, INCIDENT_KIND, fmtBytes };
+  },
+  template: `
+  <div class="monitor-page">
+    <div class="notice" v-if="error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ error }}</div>
+    <div class="notice" v-if="loading && !v"><span class="spinner"></span>正在读取……</div>
+    <template v-if="v">
+      <div class="group" v-if="!v.settings.enabled">
+        <div class="row"><ui-icon name="info" class="lg" style="color: var(--accent)"></ui-icon>
+          <div class="grow">监控已关闭。打开后每分钟检查一次网站能不能打开，每两分钟看一次服务器，出问题马上提醒。</div>
+          <button class="primary" @click="openSettings">打开</button></div>
+      </div>
+      <div class="stat-bar">
+        <span class="mon-summary"><span class="sdot" :class="down ? 'crit' : sites.length ? 'good' : 'off'"></span>
+          <b v-if="down">{{ down }} 个网站打不开</b><template v-else-if="sites.length">{{ sites.length }} 个网站都正常</template><template v-else>还没有要监控的网站</template></span>
+        <span class="small tertiary">每分钟检查一次 · 出问题会提醒到「待处理」{{ v.mail && v.settings.email ? '、邮件' : '' }}和推送</span>
+        <span class="grow"></span>
+        <button class="plain" @click="openSettings"><ui-icon name="gear"></ui-icon>设置</button>
+        <button @click="checkNow" :disabled="checking"><ui-icon name="refresh"></ui-icon>{{ checking ? '正在检查……' : '立即检查' }}</button>
+      </div>
+
+      <div class="group-title">网站</div>
+      <div class="group">
+        <div class="row secondary" v-if="!sites.length">{{ v.listed ? '没有找到网站。在「设置」里手动添加要监控的地址，或者在服务器上用 1Panel 建站。' : '正在整理要监控的网站，一分钟内出结果……' }}</div>
+        <div class="table-wrap" v-else>
+          <table class="table mon-table">
+            <thead><tr><th>网站</th><th>现在</th><th class="num">响应</th><th class="num">24 小时可用率</th><th>最近一小时</th><th><span class="sr-only">操作</span></th></tr></thead>
+            <tbody>
+              <tr v-for="s in sites" :key="s.url">
+                <td><div class="site-name">{{ s.name }}</div><div class="small tertiary ellipsis">{{ s.source }}</div></td>
+                <td><template v-if="s.up == null"><span class="sdot off"></span><span class="tertiary">还没检查</span></template>
+                  <template v-else-if="s.up"><span class="sdot good"></span>正常</template>
+                  <template v-else><span class="sdot crit"></span><span class="st-crit-text">打不开</span><div class="small secondary">{{ s.error }}<span v-if="s.since"> · {{ when(s.since) }} 起</span></div></template></td>
+                <td class="num nowrap">{{ s.up ? s.ms + ' ms' : '—' }}</td>
+                <td class="num nowrap" :class="uptimeLevel(s) ? 'st-' + uptimeLevel(s) + '-text' : ''">{{ uptimeText(s) }}</td>
+                <td><div class="mon-bars" :title="'最近 ' + s.recent.length + ' 次检查'"><span v-for="(b, i) in bars(s)" :key="i" :class="b.cls" :style="{ height: b.h }"></span></div></td>
+                <td class="site-ops nowrap">
+                  <button class="link small" v-if="s.up === false" @click="ask(s)">让 AI 排查</button>
+                  <button class="link small" @click="openHistory(s)">历史</button>
+                  <button class="link small tertiary" v-if="s.source !== '手动添加'" @click="skipSite(s)" :title="'不再监控 ' + s.name">忽略</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <template v-if="servers.length">
+        <div class="group-title">服务器<span class="tertiary small"> · 每两分钟一次{{ v.settings.servers ? '' : '（已关闭）' }}</span></div>
+        <div class="group">
+          <div class="row mon-server" v-for="s in servers" :key="s.id" @click="$emit('server', s.id)">
+            <div class="mon-server-name"><span class="sdot" :class="s.down ? 'crit' : s.problems.length ? 'warn' : s.latest ? 'good' : 'off'"></span>{{ s.name }}
+              <div class="small tertiary" v-if="!s.sampled">通过自动化助手连接，不采样</div>
+              <div class="small st-crit-text" v-else-if="s.down">连不上 · {{ when(s.since) }} 起</div>
+              <div class="small st-warn-text" v-else-if="s.problems.length">{{ s.problems[0] }}</div>
+              <div class="small tertiary" v-else-if="s.latest">{{ when(s.latest.at) }}</div>
+              <div class="small tertiary" v-else>等待第一次采样</div></div>
+            <template v-if="s.latest && !s.down">
+              <div class="mon-metric" v-for="k in [['CPU', s.latest.cpu], ['内存', s.latest.mem], ['磁盘', s.latest.disk]]" :key="k[0]">
+                <div class="small"><span class="secondary">{{ k[0] }}</span> <b class="num">{{ Math.round(k[1]) }}%</b></div>
+                <div class="meter" :class="k[1] >= 90 ? 'crit' : k[1] >= 80 ? 'warn' : ''"><div :style="{ width: Math.min(100, k[1]) + '%' }"></div></div></div>
+              <div class="mon-metric small"><span class="secondary">网络</span><div class="num">↓ {{ rate(s.latest.rx) }}</div><div class="num">↑ {{ rate(s.latest.tx) }}</div></div>
+            </template>
+            <span class="grow" v-else></span>
+          </div>
+        </div>
+      </template>
+
+      <div class="group-title">最近 7 天的故障</div>
+      <div class="group">
+        <div class="row secondary" v-if="!incidents.length">没有故障</div>
+        <div class="row" v-for="x in incidents" :key="x.id">
+          <span class="sdot" :class="x.endedAt ? 'off' : (x.kind === 'site' || x.kind === 'server') ? 'crit' : 'warn'"></span>
+          <div class="grow"><div>{{ INCIDENT_KIND[x.kind] || x.kind }}：{{ x.name }}</div><div class="small secondary">{{ x.reason }}</div></div>
+          <div class="small nowrap" style="text-align: right"><div>{{ when(x.startedAt) }}</div>
+            <div :class="x.endedAt ? 'tertiary' : 'st-crit-text'">{{ x.endedAt ? '持续 ' + lastedText(x) : '还没恢复 · ' + lastedText(x) }}</div></div>
+        </div>
+      </div>
+    </template>
+
+    <!-- A website's history -->
+    <div class="sheet-mask" v-if="hist.open" @click.self="hist.open = false">
+      <div class="sheet mon-history" role="dialog" aria-label="网站历史">
+        <h2>{{ hist.site.name }}</h2>
+        <p class="small secondary">{{ hist.site.url }} · 每分钟检查一次；图上是响应时间，失败的次数在提示里。</p>
+        <span class="segmented small"><button :class="{on: hist.hours === 24}" @click="hist.hours = 24">24 小时</button><button :class="{on: hist.hours === 168}" @click="hist.hours = 168">7 天</button></span>
+        <div class="notice" v-if="hist.loading && !hist.points.length"><span class="spinner"></span>正在读取……</div>
+        <template v-else>
+          <p class="small">{{ histChecks }} 次检查，{{ histFails }} 次失败</p>
+          <div class="mon-strip" aria-label="可用性，红色是有失败的时段"><span v-for="p in hist.points" :key="p.t" :class="p.fails ? 'fail' : p.n ? '' : 'none'"
+            :title="new Date(p.t * 1000).toLocaleString('zh-CN', { hour12: false }) + (p.fails ? ' · 失败 ' + p.fails + ' 次' : ' · 正常')"></span></div>
+          <line-chart v-if="histMain.length > 1" :points="histMain" :more="histMore" label="响应时间" :format="n => Math.round(n) + ' ms'" :span="hist.hours"></line-chart>
+          <div class="home-empty" v-else>数据还不够画图，过几分钟再看</div>
+        </template>
+        <div class="sheet-actions"><button @click="hist.open = false">关闭</button></div>
+      </div>
+    </div>
+
+    <!-- Settings -->
+    <div class="sheet-mask" v-if="form.open" @click.self="form.open = false">
+      <div class="sheet" role="dialog" aria-label="监控设置">
+        <h2>监控设置</h2>
+        <div class="group">
+          <label class="row"><span class="grow">打开监控</span><input type="checkbox" v-model="form.enabled"></label>
+          <label class="row"><span class="grow">自动监控认识的网站<span class="small secondary block">1Panel 上运行中的网站，和其他服务器 Nginx 配置里的域名</span></span><input type="checkbox" v-model="form.auto"></label>
+          <label class="row"><span class="grow">采样服务器的 CPU、内存和磁盘<span class="small secondary block">通过 SSH，连接会保持，不会每次都登录</span></span><input type="checkbox" v-model="form.servers"></label>
+        </div>
+        <div class="group-title">再监控这些地址（一行一个）</div>
+        <div class="group"><div class="row"><textarea v-model="form.extra" rows="3" placeholder="https://example.com/health" aria-label="要监控的地址" class="grow"></textarea></div></div>
+        <div class="group-title">不监控这些地址</div>
+        <div class="group"><div class="row"><textarea v-model="form.skip" rows="2" placeholder="https://test.example.com" aria-label="不监控的地址" class="grow"></textarea></div></div>
+        <div class="group-title">什么时候提醒</div>
+        <div class="group">
+          <div class="row form"><span class="k">磁盘用到</span><span class="v"><input type="number" min="50" max="100" v-model="form.diskPct" aria-label="磁盘提醒线"> %</span></div>
+          <div class="row form"><span class="k">内存连续 6 分钟</span><span class="v"><input type="number" min="50" max="100" v-model="form.memPct" aria-label="内存提醒线"> %</span></div>
+          <div class="row form"><span class="k">CPU 连续 10 分钟</span><span class="v"><input type="number" min="50" max="100" v-model="form.cpuPct" aria-label="CPU 提醒线"> %</span></div>
+          <div class="row form"><span class="k">同时发邮件到</span><span class="v"><input v-model="form.email" placeholder="可以不填" aria-label="提醒邮箱" autocomplete="email"></span></div>
+          <div class="row small secondary" v-if="!v.mail">发邮件要先设置发信邮箱（SMTP），在 Web 版的「设置 → 账号」里。</div>
+          <div class="row small secondary">网站连续两次打不开、服务器连续三次连不上也会提醒，恢复后再说一声。推送地址（企业微信、钉钉、飞书、Server酱）在「待处理 → 提醒和日报」里设置。</div>
+        </div>
+        <div class="notice" v-if="form.error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ form.error }}</div>
+        <div class="sheet-actions"><button @click="form.open = false">取消</button>
+          <button class="primary" @click="saveSettings" :disabled="form.saving">{{ form.saving ? '正在保存……' : '保存' }}</button></div>
+      </div>
+    </div>
+  </div>`,
+};
+
+// 待处理: checklists waiting for the user, alerts and daily reports, and
+// every checklist so far.
+const INBOX_VIEWS = [{ id: 'todo', text: '等你确认' }, { id: 'notices', text: '提醒和日报' }, { id: 'plans', text: '全部清单' }];
+const InboxPage = {
+  props: { active: Boolean, servers: { type: Array, default: () => [] }, focus: Object },
+  emits: ['unread', 'changed'],
+  setup(props, { emit }) {
+    const view = ref(pref('miao.inboxView', 'todo'));
+    watch(view, v => setPref('miao.inboxView', v));
+    const plans = ref(null), error = ref('');
+    async function load() {
+      try { plans.value = await api('GET', '/api/plans'); error.value = ''; }
+      catch (e) { error.value = e.message; }
+    }
+    watch(() => props.active, v => { if (v) load(); }, { immediate: true });
+    watch(() => props.focus, f => { if (f && f.view) view.value = f.view; });
+    const waiting = computed(() => (plans.value || []).filter(p => p.status === 'proposed'));
+    const serverName = id => id ? ((props.servers.find(s => s.id === id) || {}).name || '已删除的服务器') : '腾讯云';
+    const fmt = t => t ? new Date(t).toLocaleString('zh-CN', { hour12: false, month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+    const done = () => { load(); emit('changed'); };
+    return { INBOX_VIEWS, view, plans, error, waiting, serverName, fmt, done, load };
+  },
+  template: `
+  <div class="inbox">
+    <div class="inbox-bar">
+      <span class="segmented" role="tablist" aria-label="待处理">
+        <button v-for="v in INBOX_VIEWS" :key="v.id" role="tab" :aria-selected="view === v.id" :class="{ on: view === v.id }" @click="view = v.id">{{ v.text }}<span class="side-count" v-if="v.id === 'todo' && waiting.length"> {{ waiting.length }}</span></button>
+      </span>
+    </div>
+    <div class="notice" v-if="error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ error }}</div>
+    <template v-if="view === 'todo'">
+      <p class="small secondary inbox-lead">AI 和各个页面生成、还没有执行的清单。勾选后执行，执行后可以撤销；不需要的可以不管它。</p>
+      <plan-card v-for="pl in waiting" :key="pl.id" :plan="pl" :server-name="serverName(pl.serverId) + ' · ' + fmt(pl.createdAt)" @done="done"></plan-card>
+      <div class="group" v-if="plans && !waiting.length"><div class="row secondary"><span class="sdot good"></span>没有等你确认的清单。</div></div>
+    </template>
+    <notice-page v-if="view === 'notices'" :active="active && view === 'notices'" @unread="n => $emit('unread', n)"></notice-page>
+    <template v-if="view === 'plans'">
+      <p class="small secondary inbox-lead">所有清单都在这里，可以随时回来执行或撤销。</p>
+      <plan-card v-for="pl in plans || []" :key="pl.id" :plan="pl" :server-name="serverName(pl.serverId) + ' · ' + fmt(pl.createdAt)" @done="done"></plan-card>
+      <div class="group" v-if="plans && !plans.length"><div class="row secondary">还没有清单。在「AI 助手」里说出你想做什么，AI 会把修改方案整理成清单。</div></div>
+    </template>
+  </div>`,
+};
+
+// 网站: the sites on each 1Panel server, and one site's domains, HTTPS,
+// reverse proxies, rewrite rules, config file and logs. Every change is
+// a checklist, confirmed first and undoable.
+// The panels whose websites Miao Panel manages.
+const PANELS = ['1panel', 'bt'];
+const SITE_TYPES = { static: '静态网站', proxy: '反向代理', deployment: '一键部署', runtime: '运行环境', subsite: '子网站', stream: 'TCP/UDP 代理',
+  php: 'PHP 网站', node: 'Node 项目', java: 'Java 项目', go: 'Go 项目', python: 'Python 项目' };
+const HTTP_MODES = [
+  { id: 'HTTPAlso', text: 'HTTP 和 HTTPS 都能访问', hint: '网站在 EdgeOne 后面、EdgeOne 用 HTTP 回源时选这个' },
+  { id: 'HTTPToHTTPS', text: 'HTTP 自动跳转到 HTTPS', hint: '最常用：访客输入 http:// 也会进入 https://' },
+  { id: 'HTTPSOnly', text: '只能用 HTTPS', hint: 'http:// 直接打不开' },
+];
+const REWRITE_TEMPLATES = ['default', 'wordpress', 'wp2', 'thinkphp', 'laravel5', 'yii2', 'typecho', 'typecho2', 'zblog', 'emlog', 'discuz', 'discuzx',
+  'discuzx2', 'discuzx3', 'dedecms', 'phpcms', 'phpwind', 'ecshop', 'shopex', 'shopwind', 'niushop', 'crmeb', 'maccms', 'seacms', 'empirecms', 'edusoho',
+  'sablog', 'dbshop', 'dabr', 'drupal', 'mvc'];
+const SITE_SECTIONS = [{ id: 'overview', text: '概览' }, { id: 'domains', text: '域名' }, { id: 'https', text: 'HTTPS' }, { id: 'proxy', text: '反向代理' },
+  { id: 'rewrite', text: '伪静态' }, { id: 'conf', text: '配置文件' }, { id: 'logs', text: '日志' }, { id: 'backups', text: '备份' }, { id: 'cache', text: 'EdgeOne 缓存' }];
+const BACKUP_KEEP = [3, 7, 14, 30];
+const siteMemo = new Map(); // "server/site" → detail, shown at once when coming back
+const certLeft = d => d == null ? '' : d > 0 ? `剩 ${d} 天` : d === 0 ? '今天到期' : '已过期';
+const certLevel = d => d == null ? 'off' : d < 0 ? 'crit' : d <= 15 ? 'warn' : 'good';
+
+// Clearing or warming EdgeOne's cache for some domains; used on a site and
+// on the EdgeOne statistics page.
+const EoCacheForm = {
+  props: { domains: { type: Array, default: () => [] }, serverId: { type: Number, default: 0 } },
+  emits: ['plan'],
+  setup(props, { emit }) {
+    const f = reactive({ domain: props.domains[0] || '', type: 'url', method: 'invalidate', targets: '', warm: '' });
+    watch(() => props.domains, v => { if (!v.includes(f.domain)) f.domain = v[0] || ''; });
+    const busy = ref(''), error = ref('');
+    const lines = s => s.split(/[\n,，\s]+/).map(x => x.trim()).filter(Boolean);
+    async function send(body) {
+      busy.value = body.op; error.value = '';
+      try { emit('plan', await api('POST', '/api/eo/cache/plan', { serverId: props.serverId, domain: f.domain, ...body })); }
+      catch (e) { error.value = e.message; } finally { busy.value = ''; }
+    }
+    const purge = () => send({ op: 'purge', type: f.type, method: f.method, targets: ['url', 'prefix'].includes(f.type) ? lines(f.targets) : [] });
+    const warm = () => send({ op: 'prefetch', targets: lines(f.warm) });
+    return { f, busy, error, purge, warm, lines };
+  },
+  template: `
+  <div class="eo-cache">
+    <div class="group">
+      <div class="row form" v-if="domains.length > 1"><span class="k">域名</span><span class="v">
+        <select v-model="f.domain" aria-label="域名"><option v-for="d in domains" :key="d" :value="d">{{ d }}</option></select></span></div>
+      <div class="row stack">
+        <b>清除缓存</b>
+        <div class="small secondary">网站更新了文件、改版后，让访客马上看到新内容。一般几分钟内在全部节点生效，不中断访问。</div>
+      </div>
+      <div class="row form"><span class="k">范围</span><span class="v"><span class="segmented wrap">
+        <button :class="{on: f.type === 'url'}" @click="f.type = 'url'">指定网址</button>
+        <button :class="{on: f.type === 'prefix'}" @click="f.type = 'prefix'">目录</button>
+        <button :class="{on: f.type === 'host'}" @click="f.type = 'host'">整个域名</button>
+        <button :class="{on: f.type === 'all'}" @click="f.type = 'all'">整个站点</button></span>
+        <span class="small secondary block" v-if="f.type === 'host'">清除 {{ f.domain }} 下的所有缓存，之后一段时间回源会变多。</span>
+        <span class="small secondary block" v-if="f.type === 'all'">清除 EdgeOne 站点里所有域名的缓存，源站压力会突然变大，尽量少用。</span></span></div>
+      <div class="row form" v-if="f.type === 'url' || f.type === 'prefix'"><span class="k">{{ f.type === 'url' ? '网址' : '目录' }}</span><span class="v">
+        <textarea v-model="f.targets" rows="4" spellcheck="false" autocapitalize="off" :aria-label="f.type === 'url' ? '要清除的网址' : '要清除的目录'"
+          :placeholder="f.type === 'url' ? '每行一个，例如\\n/css/app.css\\nhttps://' + (f.domain || 'example.com') + '/index.html' : '每行一个，例如\\n/static/\\n/uploads/2026/'"></textarea>
+        <span class="small secondary block">可以只写路径，会自动加上 https://{{ f.domain }}</span></span></div>
+      <div class="row form"><span class="k">方式</span><span class="v"><span class="segmented">
+        <button :class="{on: f.method === 'invalidate'}" @click="f.method = 'invalidate'">标记过期</button>
+        <button :class="{on: f.method === 'delete'}" @click="f.method = 'delete'">直接删除</button></span>
+        <span class="small secondary block">{{ f.method === 'invalidate' ? '节点下次访问时向源站确认有没有更新，没变就继续用（推荐）' : '下次访问一定重新从源站拉取' }}</span></span></div>
+      <div class="row"><span class="grow"></span>
+        <button class="primary" @click="purge" :disabled="!!busy || !f.domain || ((f.type === 'url' || f.type === 'prefix') && !lines(f.targets).length)">{{ busy === 'purge' ? '正在生成……' : '生成清除清单' }}</button></div>
+    </div>
+    <div class="group">
+      <div class="row stack">
+        <b>预热</b>
+        <div class="small secondary">提前把文件缓存到 EdgeOne 节点，访客第一次访问也很快。适合发布新版本、大文件或活动页面之前。</div>
+      </div>
+      <div class="row form"><span class="k">网址</span><span class="v">
+        <textarea v-model="f.warm" rows="4" spellcheck="false" autocapitalize="off" aria-label="要预热的网址" :placeholder="'每行一个，例如\\n/download/app.zip\\nhttps://' + (f.domain || 'example.com') + '/'"></textarea></span></div>
+      <div class="row"><span class="grow"></span>
+        <button class="primary" @click="warm" :disabled="!!busy || !f.domain || !lines(f.warm).length">{{ busy === 'prefetch' ? '正在生成……' : '生成预热清单' }}</button></div>
+    </div>
+    <div class="notice" v-if="error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ error }}</div>
+  </div>`,
+};
+
+const SitePage = {
+  // server: only that server's sites, for its workbench.
+  props: { servers: { type: Array, default: () => [] }, active: Boolean, request: Object, server: { type: Number, default: 0 } },
+  emits: ['ask', 'server', 'context'],
+  setup(props, { emit }) {
+    const list = ref(null), loading = ref(false), error = ref('');
+    const serverFilter = ref(pref('miao.siteServer', ''));
+    watch(serverFilter, v => setPref('miao.siteServer', v));
+    const q = ref('');
+    const open = ref(null); // { serverId, siteId }
+    const detail = ref(null), dLoading = ref(false), dError = ref('');
+    const section = ref('overview');
+    const plan = ref(null), planning = ref(false), formError = ref('');
+    let seq = 0;
+
+    async function loadList() {
+      loading.value = true; error.value = '';
+      try { list.value = await api('GET', '/api/websites' + (props.server ? '?server=' + props.server : '')); }
+      catch (e) { error.value = e.message; } finally { loading.value = false; }
+    }
+    watch(() => props.active, v => { if (v) { loadList(); if (open.value) loadDetail(); } }, { immediate: true });
+
+    const panels = computed(() => list.value ? list.value.servers : []);
+    const shownServers = computed(() => {
+      const k = q.value.trim().toLowerCase();
+      return panels.value.filter(s => props.server || !serverFilter.value || String(s.id) === serverFilter.value).map(s => ({
+        ...s, shown: s.sites.filter(x => !k || [x.domain, x.remark || '', x.alias, x.app || '', x.runtime || ''].some(v => v.toLowerCase().includes(k))),
+      }));
+    });
+    const total = computed(() => panels.value.reduce((n, s) => n + s.sites.length, 0));
+    // New sites can be made on 1Panel only.
+    const usable = computed(() => panels.value.filter(s => !s.noPanel && !s.error && s.panel !== 'bt'));
+    const panelName = p => p === 'bt' ? '宝塔' : '1Panel';
+    const isBT = computed(() => !!(detail.value && detail.value.panel === 'bt'));
+
+    function openSite(serverId, siteId, sec) {
+      open.value = { serverId, siteId };
+      section.value = sec || 'overview';
+      // What was being edited belongs to the site left behind.
+      Object.assign(rw, { content: '', base: '', hash: '' });
+      Object.assign(conf, { content: '', base: '', hash: '' });
+      Object.assign(domainForm, { domain: '', port: 80 });
+      Object.assign(log, { text: '', path: '', error: '' });
+      Object.assign(bk, { data: null, error: '' });
+      sched.open = false;
+      const memo = siteMemo.get(serverId + '/' + siteId);
+      detail.value = memo || null;
+      if (memo) fill(memo);
+      loadDetail();
+    }
+    function back() { open.value = null; detail.value = null; loadList(); }
+    async function loadDetail() {
+      const o = open.value;
+      if (!o) return;
+      const n = ++seq;
+      dLoading.value = true; dError.value = '';
+      try {
+        const d = await api('GET', `/api/servers/${o.serverId}/websites/${o.siteId}`);
+        if (n !== seq) return;
+        siteMemo.set(o.serverId + '/' + o.siteId, d);
+        detail.value = d; fill(d);
+        if (section.value === 'logs') loadLog();
+        if (section.value === 'backups') loadBackups();
+      } catch (e) { if (n === seq) dError.value = e.message; }
+      finally { if (n === seq) dLoading.value = false; }
+    }
+
+    // The forms start from what the site has now.
+    const httpsForm = reactive({ enabled: false, cert: '', mode: 'HTTPAlso', hsts: false, http3: false });
+    const domainForm = reactive({ domain: '', port: 80 });
+    const rw = reactive({ content: '', base: '', hash: '', template: 'default', name: '' });
+    const conf = reactive({ content: '', base: '', hash: '', path: '' });
+    function fill(d) {
+      Object.assign(httpsForm, { enabled: d.https.enable, cert: d.https.cert || (d.certs[0] && d.certs[0].domain) || '', mode: d.https.mode || 'HTTPAlso',
+        hsts: d.https.hsts, http3: d.https.http3 });
+      // Text being edited is kept when the file itself has not changed.
+      if (rw.hash !== d.rewriteHash || rw.content === rw.base) Object.assign(rw, { content: d.rewrite, base: d.rewrite, hash: d.rewriteHash });
+      rw.name = d.rewriteName || 'default';
+      if (!REWRITE_TEMPLATES.includes(rw.template)) rw.template = 'default';
+      if (conf.hash !== d.confHash || conf.content === conf.base) Object.assign(conf, { content: d.conf, base: d.conf, hash: d.confHash });
+      conf.path = d.confPath;
+    }
+
+    const site = computed(() => detail.value && detail.value.site);
+    const sections = computed(() => SITE_SECTIONS.filter(s => s.id !== 'cache' || (detail.value && detail.value.edgeone)).filter(s =>
+      !(site.value && site.value.type === 'stream' && ['proxy', 'rewrite'].includes(s.id))));
+    watch(section, v => { if (v === 'logs' && !log.text) loadLog(); if (v === 'backups') loadBackups(); });
+
+    async function propose(body) {
+      planning.value = true; formError.value = '';
+      try {
+        const o = open.value || {};
+        plan.value = await api('POST', '/api/websites/plan', { serverId: o.serverId, site: site.value ? site.value.domain : '', ...body });
+        proxyEd.open = false; certForm.open = false; createForm.open = false;
+        return true;
+      } catch (e) {
+        if (proxyEd.open || certForm.open || createForm.open) formError.value = e.message; else notify(e.message, 'error');
+        return false;
+      } finally { planning.value = false; }
+    }
+    function planDone() { if (open.value) loadDetail(); loadList(); }
+    async function closePlan() {
+      const p = plan.value;
+      plan.value = null;
+      if (!p) return;
+      for (let i = 0; i < 200; i++) {
+        await new Promise(r => setTimeout(r, 3000));
+        try {
+          const now = await api('GET', `/api/plans/${p.id}`);
+          if (now.status === 'running') continue;
+          planDone();
+        } catch { /* checked again next time */ }
+        return;
+      }
+    }
+    const planServerName = computed(() => {
+      if (plan.value && plan.value.serverId === 0) return '腾讯云';
+      return detail.value ? detail.value.serverName : ((props.servers.find(s => s.id === createForm.serverId) || {}).name || '');
+    });
+
+    // Status and removal.
+    const setRunning = run => propose({ op: run ? 'start' : 'stop' });
+    function removeSite() {
+      if (!confirm(`确定要删除网站 ${site.value.domain} 吗？会先生成一份清单：删除前在 1Panel 里备份网站目录和配置，网站用的应用和数据库保留。删除后不能一键撤销。`)) return;
+      propose({ op: 'delete' });
+    }
+    function ask() {
+      const d = detail.value;
+      emit('ask', `帮我检查一下服务器「${d.serverName}」上的网站 ${d.site.domain}：配置、HTTPS 证书、反向代理和最近的错误日志有没有问题，需要修改的话给我一份清单。`);
+    }
+
+    // Domains.
+    const addDomain = () => propose({ op: 'domain_add', domain: domainForm.domain.trim(), port: Number(domainForm.port) || 80 });
+    const removeDomain = d => propose({ op: 'domain_remove', domain: d.domain, port: d.port });
+
+    // HTTPS.
+    const certOptions = computed(() => detail.value ? detail.value.certs.filter(c => c.ready) : []);
+    const httpsChanged = computed(() => {
+      const h = detail.value && detail.value.https;
+      if (!h) return false;
+      if (!httpsForm.enabled) return h.enable;
+      if (isBT.value) return h.enable && httpsForm.mode !== (h.mode || 'HTTPAlso');
+      return !h.enable || httpsForm.cert !== h.cert || httpsForm.mode !== (h.mode || 'HTTPAlso') || httpsForm.hsts !== h.hsts || httpsForm.http3 !== h.http3;
+    });
+    // Only what was changed goes in the checklist; the rest stays as it is.
+    function saveHTTPS() {
+      const h = detail.value.https;
+      if (isBT.value) return propose({ op: 'https', enabled: true, httpMode: httpsForm.mode });
+      if (!httpsForm.enabled) return propose({ op: 'https', enabled: false });
+      const body = { op: 'https', enabled: true };
+      if (!h.enable || httpsForm.cert !== h.cert) body.cert = httpsForm.cert;
+      if (!h.enable || httpsForm.mode !== h.mode) body.httpMode = httpsForm.mode;
+      if (httpsForm.hsts !== h.hsts) body.hsts = httpsForm.hsts;
+      if (httpsForm.http3 !== h.http3) body.http3 = httpsForm.http3;
+      return propose(body);
+    }
+    const certForm = reactive({ open: false, picked: [], email: '', mode: 'HTTPAlso' });
+    const certNames = computed(() => {
+      if (!detail.value) return [];
+      const names = [detail.value.site.domain];
+      for (const d of detail.value.domains) if (!names.includes(d.domain) && !d.domain.startsWith('*.')) names.push(d.domain);
+      return names;
+    });
+    function openCert() {
+      formError.value = '';
+      Object.assign(certForm, { open: true, picked: [...certNames.value], email: '', mode: detail.value.edgeone ? 'HTTPAlso' : 'HTTPToHTTPS' });
+    }
+    function toggleCertName(n) {
+      const i = certForm.picked.indexOf(n);
+      if (i >= 0) certForm.picked.splice(i, 1); else certForm.picked.push(n);
+    }
+    const issueCert = () => {
+      const [first, ...rest] = certNames.value.filter(n => certForm.picked.includes(n));
+      propose({ op: 'cert', domain: first, otherDomains: rest, email: certForm.email.trim(), httpMode: certForm.mode });
+    };
+
+    // Reverse proxies.
+    const proxyEd = reactive({ open: false, editing: false, name: '', path: '/', target: '', hostMode: '$host', host: '' });
+    function openProxy(p) {
+      formError.value = '';
+      if (p) {
+        const hostMode = ['$host', '$proxy_host'].includes(p.host) ? p.host : 'custom';
+        Object.assign(proxyEd, { open: true, editing: true, name: p.name, path: p.path, target: p.target, hostMode, host: hostMode === 'custom' ? p.host : '' });
+      } else {
+        const used = new Set(detail.value.proxies.map(x => x.name));
+        let name = 'proxy';
+        for (let i = 2; used.has(name); i++) name = 'proxy' + i;
+        Object.assign(proxyEd, { open: true, editing: false, name, path: '/', target: 'http://127.0.0.1:', hostMode: '$host', host: '' });
+      }
+    }
+    const saveProxy = () => propose({ op: 'proxy_set', name: proxyEd.name.trim(), path: proxyEd.path.trim() || '/', target: proxyEd.target.trim(),
+      host: proxyEd.hostMode === 'custom' ? proxyEd.host.trim() : proxyEd.hostMode });
+    const toggleProxy = p => propose({ op: p.enabled ? 'proxy_off' : 'proxy_on', name: p.name });
+    function removeProxy(p) {
+      if (!confirm(`删除反向代理规则 ${p.name}（${p.path} → ${p.target}）？会先生成清单，确认后才删除，可以撤销。`)) return;
+      propose({ op: 'proxy_remove', name: p.name });
+    }
+
+    // Rewrite rules and the config file.
+    const rwDirty = computed(() => rw.content !== rw.base);
+    const confDirty = computed(() => conf.content !== conf.base);
+    async function useTemplate() {
+      if (rwDirty.value && !confirm('套用模板会替换现在编辑框里的内容，继续吗？')) return;
+      try {
+        const o = open.value;
+        const r = await api('GET', `/api/servers/${o.serverId}/websites/${o.siteId}/rewrite?name=${encodeURIComponent(rw.template)}`);
+        rw.content = r.content;
+      } catch (e) { notify(e.message, 'error'); }
+    }
+    const saveRewrite = () => propose({ op: 'rewrite', content: rw.content, template: rw.template !== 'default' && rw.content !== rw.base ? rw.template : '', baseHash: rw.hash });
+    const saveConf = () => propose({ op: 'conf', content: conf.content, baseHash: conf.hash });
+    function onConfKey(e) {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); if (confDirty.value && !planning.value) saveConf(); }
+      if (e.key === 'Tab' && !e.shiftKey) { // indent instead of leaving the box
+        e.preventDefault();
+        const t = e.target, s = t.selectionStart;
+        t.setRangeText('    ', s, t.selectionEnd, 'end');
+        t.dispatchEvent(new Event('input'));
+      }
+    }
+
+    // Logs.
+    const log = reactive({ kind: 'access', lines: 200, text: '', path: '', enabled: true, loading: false, error: '' });
+    async function loadLog() {
+      const o = open.value;
+      if (!o) return;
+      log.loading = true; log.error = '';
+      try {
+        const r = await api('GET', `/api/servers/${o.serverId}/websites/${o.siteId}/log?type=${log.kind}&lines=${log.lines}`);
+        Object.assign(log, { text: r.lines, path: r.path, enabled: r.enabled });
+      } catch (e) { log.error = e.message; } finally { log.loading = false; }
+    }
+    watch(() => [log.kind, log.lines], loadLog);
+
+    // Backups, kept by 1Panel.
+    const bk = reactive({ data: null, loading: false, error: '' });
+    async function loadBackups() {
+      const o = open.value;
+      if (!o) return;
+      bk.loading = true; bk.error = '';
+      // Another site may be opened meanwhile; its backups win.
+      try { const r = await api('GET', `/api/servers/${o.serverId}/websites/${o.siteId}/backups`); if (open.value === o) bk.data = r; }
+      catch (e) { if (open.value === o) bk.error = e.message; } finally { if (open.value === o) bk.loading = false; }
+    }
+    const backupNow = () => propose({ op: 'backup' });
+    const sched = reactive({ open: false, time: '03:00', keep: 7, account: '' });
+    function openSchedule() {
+      const s = bk.data && bk.data.schedule;
+      const local = (bk.data ? bk.data.accounts : []).find(a => a.type === 'LOCAL');
+      let account = '';
+      if (s) {
+        const hit = bk.data.accounts.find(a => s.account.startsWith(a.name) && a.type !== 'LOCAL');
+        if (hit) account = hit.name;
+      }
+      Object.assign(sched, { open: true, time: (s && s.time) || '03:00', keep: (s && s.keep) || 7, account });
+      if (!local && !account && bk.data && bk.data.accounts.length) sched.account = bk.data.accounts[0].name;
+    }
+    const remoteAccounts = computed(() => bk.data ? bk.data.accounts.filter(a => a.type !== 'LOCAL') : []);
+    const saveSchedule = () => propose({ op: 'backup_schedule', time: sched.time, keep: Number(sched.keep) || 7, account: sched.account }).then(ok => { if (ok) sched.open = false; });
+    function unschedule() {
+      if (!confirm('取消这个网站的每日定时备份？已有的备份文件会保留。会先生成清单，确认后才执行，可以撤销。')) return;
+      propose({ op: 'backup_unschedule' });
+    }
+    const backupTime = b => b.createdAt ? new Date(b.createdAt).toLocaleString('zh-CN', { hour12: false }) : b.file;
+    function backupNote(b) {
+      if (b.note) return b.note.replace(/^Miao Panel\s*/, '');
+      return b.automatic ? '定时备份' : '';
+    }
+    function restore(b) {
+      if (!confirm(`把网站 ${site.value.domain} 恢复到 ${backupTime(b)} 的备份？网站目录和配置会换成备份里的，之后的改动会丢失（数据库不变）。恢复前会先把现在的网站备份一份。会先生成清单，确认后才执行。`)) return;
+      propose({ op: 'restore', backup: b.file, when: backupTime(b) + ' 的备份' });
+    }
+    const fetching = ref(0);
+    async function downloadBackup(b) {
+      const o = open.value;
+      fetching.value = b.id;
+      try {
+        const r = await api('POST', `/api/servers/${o.serverId}/websites/${o.siteId}/backups/${b.id}/fetch`);
+        const l = await api('POST', `/api/servers/${o.serverId}/files/link`, { path: r.path });
+        const a = document.createElement('a');
+        a.href = l.url; a.download = '';
+        document.body.appendChild(a); a.click(); a.remove();
+        notify('正在下载 ' + b.file);
+      } catch (e) { notify(e.message, 'error'); } finally { fetching.value = 0; }
+    }
+
+    // A new site.
+    const createForm = reactive({ open: false, serverId: 0, domain: '', type: 'proxy', proxy: 'http://127.0.0.1:' });
+    function openCreate() {
+      formError.value = '';
+      const s = usable.value.find(x => String(x.id) === serverFilter.value) || usable.value[0];
+      Object.assign(createForm, { open: true, serverId: s ? s.id : 0, domain: '', type: 'proxy', proxy: 'http://127.0.0.1:' });
+    }
+    async function create() {
+      planning.value = true; formError.value = '';
+      try {
+        plan.value = await api('POST', '/api/websites/plan', { serverId: createForm.serverId, op: 'create', domain: createForm.domain.trim(),
+          type: createForm.type, proxy: createForm.type === 'proxy' ? createForm.proxy.trim() : '' });
+        createForm.open = false;
+      } catch (e) { formError.value = e.message; } finally { planning.value = false; }
+    }
+    watch(() => JSON.stringify([proxyEd, certForm, createForm]), () => { if (!planning.value) formError.value = ''; });
+
+    const visitURL = computed(() => site.value ? (site.value.https ? 'https://' : 'http://') + site.value.domain : '');
+    // What is open, for the AI side panel.
+    watch(() => [open.value, site.value && site.value.domain, section.value], () => {
+      if (!open.value || !site.value) { emit('context', ''); return; }
+      const sec = (SITE_SECTIONS.find(x => x.id === section.value) || {}).text;
+      emit('context', `网站 ${site.value.domain}（服务器 ${detail.value.serverName}）· ${sec}`);
+    });
+    const eoDomains = computed(() => detail.value && detail.value.edgeone ? detail.value.edgeone.domains.map(d => d.name) : []);
+    const onCachePlan = p => { plan.value = p; };
+    // Opening a site or the new-site sheet from elsewhere (search, the overview).
+    watch(() => props.request, r => {
+      if (r && r.serverId && r.siteId) openSite(r.serverId, r.siteId, r.section);
+      if (r && r.create) { open.value = null; detail.value = null; loadList().then(() => { if (usable.value.length) openCreate(); }); }
+    }, { immediate: true });
+    const modeText = m => (HTTP_MODES.find(x => x.id === m) || { text: '已开启' }).text;
+    const modeHint = m => (HTTP_MODES.find(x => x.id === m) || { hint: '' }).hint;
+
+    return { SITE_TYPES, HTTP_MODES, REWRITE_TEMPLATES, panelName, isBT, list, loading, error, serverFilter, q, panels, shownServers, total, usable, open, detail, dLoading, dError,
+      section, sections, site, plan, planning, formError, loadList, openSite, back, loadDetail, planDone, closePlan, planServerName, setRunning, removeSite, ask,
+      domainForm, addDomain, removeDomain, httpsForm, certOptions, httpsChanged, saveHTTPS, certForm, certNames, openCert, toggleCertName, issueCert,
+      proxyEd, openProxy, saveProxy, toggleProxy, removeProxy, rw, rwDirty, useTemplate, saveRewrite, conf, confDirty, saveConf, onConfKey,
+      log, loadLog, bk, loadBackups, backupNow, sched, openSchedule, remoteAccounts, saveSchedule, unschedule, backupTime, backupNote, restore, fetching, downloadBackup, BACKUP_KEEP,
+      createForm, openCreate, create, visitURL, eoDomains, onCachePlan, modeText, modeHint, certLeft, certLevel };
+  },
+  template: `
+  <div class="site-page">
+    <!-- The list -->
+    <template v-if="!open">
+      <div class="page-head" v-if="!server"><p>1Panel 和宝塔上的网站：域名、HTTPS 证书、反向代理、伪静态和 Nginx 配置。每次修改都会先生成一份清单，确认后才执行，执行后可以撤销。</p></div>
+      <div class="stat-bar site-bar">
+        <label class="field" v-if="panels.length > 1 && !server"><span>服务器</span>
+          <select v-model="serverFilter" aria-label="服务器"><option value="">全部</option><option v-for="s in panels" :key="s.id" :value="String(s.id)">{{ s.name }}</option></select></label>
+        <label class="field site-search"><span>搜索</span>
+          <input type="search" v-model="q" placeholder="域名或备注" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search" @keydown.esc="q = ''"></label>
+        <span class="grow"></span>
+        <span class="small tertiary" v-if="list">{{ total }} 个网站</span>
+        <button class="plain icon-only" @click="loadList" :disabled="loading" title="刷新" aria-label="刷新"><ui-icon name="refresh"></ui-icon></button>
+        <button class="primary" @click="openCreate" :disabled="!usable.length"><ui-icon name="plus"></ui-icon>新建网站</button>
+      </div>
+      <div class="notice" v-if="error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ error }}</div>
+      <div class="notice" v-if="loading && !list"><span class="spinner"></span>正在读取各台服务器上的网站……</div>
+      <div class="group" v-if="list && !panels.length">
+        <div class="row"><ui-icon name="info" class="lg" style="color: var(--accent)"></ui-icon><div class="grow">还没有装了 1Panel 或宝塔的服务器。添加服务器并识别环境后，在服务器的「连接设置」里填写面板的接口密钥。
+          <span class="small secondary block" v-if="list.others && list.others.length">{{ list.others.join('、') }} 的网站请先在面板里管理。</span></div></div>
+      </div>
+
+      <section class="site-server" v-for="s in shownServers" :key="s.id">
+        <div class="group-title site-server-title">
+          <template v-if="!server"><ui-icon name="server"></ui-icon><span>{{ s.name }}</span></template>
+          <span class="tertiary small" v-if="s.openresty && s.openresty.installed">OpenResty {{ s.openresty.version }}<span class="sdot" :class="s.openresty.running ? 'good' : 'crit'"></span>{{ s.openresty.running ? '运行中' : '没有运行' }}</span>
+          <span class="tertiary small" v-else-if="s.openresty">没有安装 OpenResty</span>
+          <span class="tertiary small" v-if="s.panel === 'bt'">宝塔面板</span>
+          <span v-if="loading" class="spinner inline"></span>
+        </div>
+        <div class="group" v-if="s.noPanel">
+          <div class="row"><ui-icon name="plug" class="lg" style="color: var(--accent)"></ui-icon>
+            <div class="grow">还没有配置{{ panelName(s.panel) }}接口<span class="small secondary block">在服务器的「连接设置」里填写{{ panelName(s.panel) }}面板的端口和接口密钥，就能在这里管理网站。</span></div>
+            <button @click="$emit('server', s.id)">去填写</button></div>
+        </div>
+        <div class="group" v-else-if="s.error"><div class="row"><ui-icon name="alert" class="st-crit"></ui-icon><div class="grow secondary">{{ s.error }}</div>
+          <button class="plain" @click="loadList">重试</button></div></div>
+        <div class="group site-group" v-else>
+          <div class="table-wrap">
+            <table class="table site-table">
+              <thead><tr><th>网站</th><th>类型</th><th>状态</th><th>HTTPS</th><th><span class="sr-only">操作</span></th></tr></thead>
+              <tbody>
+                <tr v-for="x in s.shown" :key="x.id" class="site-row" @click="openSite(s.id, x.id)">
+                  <td><div class="site-name">{{ x.domain }}</div><div class="small tertiary" v-if="x.remark || x.app || x.runtime">{{ [x.remark, x.app, x.runtime].filter(Boolean).join(' · ') }}</div></td>
+                  <td class="nowrap">{{ SITE_TYPES[x.type] || x.type }}</td>
+                  <td class="nowrap"><span class="sdot" :class="x.running ? 'good' : 'off'"></span>{{ x.running ? '运行中' : '已停止' }}</td>
+                  <td class="nowrap"><template v-if="x.https"><span class="sdot" :class="certLevel(x.certDays)"></span>{{ certLeft(x.certDays) || '已开启' }}</template>
+                    <span class="tertiary" v-else>未开启</span></td>
+                  <td class="site-ops"><button class="link small" @click.stop="openSite(s.id, x.id)" :aria-label="'管理 ' + x.domain">管理</button></td>
+                </tr>
+                <tr v-if="!s.shown.length"><td colspan="5" class="secondary">{{ s.sites.length ? '没有符合条件的网站' : '这台服务器上还没有网站，点「新建网站」开始' }}</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </template>
+
+    <!-- One site -->
+    <template v-else>
+      <div class="site-head">
+        <button class="plain" @click="back"><ui-icon name="chevron" class="flip"></ui-icon>网站</button>
+        <template v-if="site">
+          <div class="grow site-title">
+            <h2>{{ site.domain }}</h2>
+            <div class="small secondary"><span class="sdot" :class="site.running ? 'good' : 'off'"></span>{{ site.running ? '运行中' : '已停止' }} · {{ SITE_TYPES[site.type] || site.type }} · {{ detail.serverName }}</div>
+          </div>
+          <div class="site-actions">
+            <a class="btn plain" :href="visitURL" target="_blank" rel="noopener"><ui-icon name="link"></ui-icon>访问</a>
+            <button @click="ask"><ui-icon name="sparkles"></ui-icon>让 AI 检查</button>
+            <button @click="setRunning(!site.running)" :disabled="planning">{{ site.running ? '停止' : '启动' }}</button>
+            <button class="plain destructive icon-only" v-if="!isBT" @click="removeSite" :disabled="planning" title="删除网站" aria-label="删除网站"><ui-icon name="trash"></ui-icon></button>
+          </div>
+        </template>
+        <span class="grow" v-else></span>
+        <span class="spinner inline" v-if="dLoading"></span>
+      </div>
+      <div class="notice" v-if="dError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ dError }}<button class="plain" @click="loadDetail">重试</button></div>
+      <div class="notice" v-if="dLoading && !detail"><span class="spinner"></span>正在读取网站……</div>
+
+      <template v-if="detail">
+        <nav class="subtabs site-tabs" role="tablist" aria-label="网站设置">
+          <button v-for="s in sections" :key="s.id" role="tab" :aria-selected="section === s.id" :class="{on: section === s.id}" @click="section = s.id">{{ s.text }}</button>
+        </nav>
+        <div class="alerts" v-if="detail.problems && detail.problems.length">
+          <div class="alert al-warn" v-for="p in detail.problems" :key="p"><ui-icon name="warn"></ui-icon><span class="grow">{{ p }}</span></div>
+        </div>
+
+        <!-- Overview -->
+        <div v-if="section === 'overview'">
+          <div class="group">
+            <div class="row"><span class="k">状态</span><span class="v"><span class="sdot" :class="site.running ? 'good' : 'off'"></span>{{ site.running ? '运行中' : '已停止（访客看到「网站已停止」页面）' }}</span></div>
+            <div class="row"><span class="k">类型</span><span class="v">{{ SITE_TYPES[site.type] || site.type }}<template v-if="site.runtime"> · {{ site.runtime }}</template></span></div>
+            <div class="row" v-if="detail.proxy"><span class="k">后端</span><span class="v mono">{{ detail.proxy }}</span></div>
+            <div class="row"><span class="k">域名</span><span class="v">{{ detail.domains.map(d => d.port === 80 ? d.domain : d.domain + ':' + d.port).join('、') }}</span></div>
+            <div class="row"><span class="k">HTTPS</span><span class="v">
+              <template v-if="detail.https.enable"><span class="sdot" :class="certLevel(detail.https.days)"></span>{{ modeText(detail.https.mode) }} · 证书{{ certLeft(detail.https.days) }}{{ detail.https.autoRenew ? '，自动续签' : '' }}</template>
+              <template v-else>未开启</template></span></div>
+            <div class="row" v-if="detail.edgeone"><span class="k">EdgeOne</span><span class="v">{{ detail.edgeone.domains.map(d => d.name).join('、') }} 经过 EdgeOne（站点 {{ detail.edgeone.zone }}）</span></div>
+            <div class="row"><span class="k">网站目录</span><span class="v mono">{{ site.sitePath || '—' }}</span></div>
+            <div class="row"><span class="k">日志</span><span class="v">访问日志{{ detail.accessLog ? '开' : '关' }} · 错误日志{{ detail.errorLog ? '开' : '关' }}</span></div>
+          </div>
+          <div class="alerts">
+            <div class="alert al-warn" v-if="detail.https.enable && detail.https.uncovered && detail.https.uncovered.length"><ui-icon name="warn"></ui-icon>
+              <span class="grow">证书不包含 {{ detail.https.uncovered.join('、') }}，用 https:// 访问它们时浏览器会报证书错误。</span>
+              <button class="link small" @click="section = 'https'; openCert()">重新申请证书</button></div>
+            <div class="alert al-warn" v-if="detail.https.enable && detail.https.days != null && detail.https.days <= 15 && !detail.https.autoRenew"><ui-icon name="warn"></ui-icon>
+              <span class="grow">证书{{ certLeft(detail.https.days) }}，而且不会自动续签。</span><button class="link small" @click="section = 'https'">去处理</button></div>
+            <div class="alert al-info" v-if="!detail.https.enable"><ui-icon name="info"></ui-icon><span class="grow">这个网站还没有开启 HTTPS。</span>
+              <button class="link small" @click="section = 'https'">开启 HTTPS</button></div>
+          </div>
+        </div>
+
+        <!-- Domains -->
+        <div v-if="section === 'domains'">
+          <div class="group">
+            <div class="row" v-for="d in detail.domains" :key="d.id">
+              <span class="grow"><b>{{ d.domain }}</b><span class="small tertiary"> · 端口 {{ d.port }}</span><span class="tag" v-if="d.domain === site.domain">主域名</span></span>
+              <button class="link small danger" v-if="d.domain !== site.domain" @click="removeDomain(d)" :disabled="planning" :aria-label="'删除域名 ' + d.domain">删除</button>
+            </div>
+          </div>
+          <div class="group-title">添加域名</div>
+          <div class="group">
+            <div class="row form"><span class="k">域名</span><span class="v"><input v-model="domainForm.domain" placeholder="例如 www.example.com" aria-label="要添加的域名" autocapitalize="off" spellcheck="false" @keydown.enter="domainForm.domain.trim() && addDomain()"></span></div>
+            <div class="row form"><span class="k">端口</span><span class="v"><input type="number" min="1" max="65535" v-model.number="domainForm.port" aria-label="端口"><span class="small secondary block">一般用 80；HTTPS 会自动加上 443</span></span></div>
+            <div class="row"><span class="grow small secondary">域名还要解析到这台服务器（或 EdgeOne）才能访问。</span>
+              <button class="primary" @click="addDomain" :disabled="planning || !domainForm.domain.trim()">生成清单</button></div>
+          </div>
+        </div>
+
+        <!-- HTTPS -->
+        <div v-if="section === 'https'">
+          <div class="group" v-if="detail.https.enable">
+            <div class="row"><span class="k">证书</span><span class="v">{{ (detail.https.certNames || []).join('、') }}</span></div>
+            <div class="row"><span class="k">到期</span><span class="v"><span class="sdot" :class="certLevel(detail.https.days)"></span>{{ detail.https.expires ? detail.https.expires.slice(0, 10) : '—' }}（{{ certLeft(detail.https.days) }}）</span></div>
+            <div class="row"><span class="k">自动续签</span><span class="v">{{ detail.https.autoRenew ? '开（' + panelName(detail.panel) + '在到期前自动续签）' : '关' }}</span></div>
+          </div>
+          <!-- 宝塔: switch the redirect, or get a free certificate -->
+          <div class="group" v-if="isBT">
+            <template v-if="detail.https.enable">
+              <label class="row form site-check"><input type="checkbox" :checked="httpsForm.mode === 'HTTPToHTTPS'" @change="httpsForm.mode = $event.target.checked ? 'HTTPToHTTPS' : 'HTTPAlso'">
+                <span class="grow"><b>HTTP 自动跳转到 HTTPS</b><span class="small secondary block">换证书、关闭 HTTPS、HSTS 请在宝塔面板里设置。</span></span></label>
+              <div class="alert al-warn site-inline" v-if="detail.edgeone && httpsForm.mode !== 'HTTPAlso'"><ui-icon name="warn"></ui-icon>
+                <span class="grow">这个网站经过 EdgeOne。如果 EdgeOne 用 HTTP 回源，跳转到 HTTPS 会让访问陷入循环。</span></div>
+              <div class="row"><button class="link small" @click="openCert">重新申请免费证书</button><span class="grow"></span>
+                <button class="primary" @click="saveHTTPS" :disabled="planning || !httpsChanged">生成清单</button></div>
+            </template>
+            <div class="row" v-else><span class="grow">还没有开启 HTTPS<span class="small secondary block">让宝塔向 Let's Encrypt 申请免费证书并开启 HTTPS，到期前自动续签。</span></span>
+              <button class="primary" @click="openCert">申请免费证书</button></div>
+          </div>
+          <div class="group" v-else>
+            <label class="row form site-check"><input type="checkbox" v-model="httpsForm.enabled"><span class="grow"><b>开启 HTTPS</b>
+              <span class="small secondary block">用 1Panel 里的证书。</span></span></label>
+            <template v-if="httpsForm.enabled">
+              <div class="row form"><span class="k">证书</span><span class="v">
+                <select v-model="httpsForm.cert" aria-label="证书" v-if="certOptions.length">
+                  <option v-for="c in certOptions" :key="c.domain" :value="c.domain">{{ c.names.join('、') }}（{{ certLeft(c.days) }}{{ c.covers < detail.domains.length ? '，不包含全部域名' : '' }}）</option></select>
+                <span class="small secondary block" v-else>1Panel 里没有能用于这个网站的证书。</span>
+                <button class="link small" @click="openCert">申请免费证书（Let's Encrypt）</button></span></div>
+              <div class="row form"><span class="k">访问方式</span><span class="v">
+                <select v-model="httpsForm.mode" aria-label="访问方式"><option v-for="m in HTTP_MODES" :key="m.id" :value="m.id">{{ m.text }}</option></select>
+                <span class="small secondary block">{{ modeHint(httpsForm.mode) }}</span></span></div>
+              <label class="row form site-check"><input type="checkbox" v-model="httpsForm.hsts"><span class="grow">HSTS<span class="small secondary block">浏览器记住以后只用 HTTPS 访问。开启后，就算关掉 HTTPS，访问过的浏览器也会在一段时间内打不开网站。</span></span></label>
+              <label class="row form site-check"><input type="checkbox" v-model="httpsForm.http3"><span class="grow">HTTP/3<span class="small secondary block">更快的新协议，需要防火墙放行 UDP 443 端口。</span></span></label>
+            </template>
+            <div class="alert al-warn site-inline" v-if="detail.edgeone && httpsForm.enabled && httpsForm.mode !== 'HTTPAlso'"><ui-icon name="warn"></ui-icon>
+              <span class="grow">这个网站经过 EdgeOne。如果 EdgeOne 用 HTTP 回源，跳转到 HTTPS 会让访问陷入循环，请选「HTTP 和 HTTPS 都能访问」。</span></div>
+            <div class="row"><span class="grow"></span>
+              <button class="primary" @click="saveHTTPS" :disabled="planning || !httpsChanged || (httpsForm.enabled && !httpsForm.cert)">生成清单</button></div>
+          </div>
+        </div>
+
+        <!-- Reverse proxies -->
+        <div v-if="section === 'proxy'">
+          <div class="group">
+            <div class="row" v-if="!detail.proxies.length"><span class="grow secondary">还没有反向代理规则。反向代理可以把某个路径（比如 /api）转给另一个程序。</span></div>
+            <div class="row site-proxy" v-for="p in detail.proxies" :key="p.name" :class="{off: !p.enabled}">
+              <div class="grow">
+                <div><b class="mono">{{ p.path }}</b> → <span class="mono">{{ p.target }}</span></div>
+                <div class="small tertiary">规则 {{ p.name }}{{ p.name === 'root' && site.type === 'proxy' ? '（网站的主规则）' : '' }} · Host {{ p.host }}<template v-if="!p.enabled"> · 已停用</template><template v-if="p.cache"> · 开了缓存</template><template v-if="p.cors"> · 允许跨域</template></div>
+              </div>
+              <button class="link small" @click="openProxy(p)" v-if="p.enabled">修改</button>
+              <button class="link small" @click="toggleProxy(p)" :disabled="planning">{{ p.enabled ? '停用' : '启用' }}</button>
+              <button class="link small danger" @click="removeProxy(p)" :disabled="planning">删除</button>
+            </div>
+          </div>
+          <div class="site-toolbar"><button class="primary" @click="openProxy()"><ui-icon name="plus"></ui-icon>添加规则</button></div>
+        </div>
+
+        <!-- Rewrite rules -->
+        <div v-if="section === 'rewrite'">
+          <div class="stat-bar site-bar">
+            <label class="field"><span>模板</span><select v-model="rw.template" aria-label="伪静态模板"><option v-for="t in REWRITE_TEMPLATES" :key="t" :value="t">{{ t }}</option></select></label>
+            <button @click="useTemplate">套用模板</button>
+            <span class="grow small tertiary"><template v-if="!isBT">现在用的是 {{ rw.name }}</template></span>
+            <button class="plain" @click="rw.content = rw.base" :disabled="!rwDirty">还原</button>
+            <button class="primary" @click="saveRewrite" :disabled="planning || !rwDirty">生成清单</button>
+          </div>
+          <textarea class="site-code" v-model="rw.content" rows="14" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off" aria-label="伪静态规则"
+            placeholder="还没有伪静态规则。可以选一个模板套用，或者直接写 Nginx 的 location / rewrite 规则"></textarea>
+          <p class="small secondary">WordPress、ThinkPHP 这类程序需要伪静态规则，链接才能正常打开。{{ panelName(detail.panel) }}会先检查规则，有错误会拒绝并保留原来的。</p>
+        </div>
+
+        <!-- Config file -->
+        <div v-if="section === 'conf'">
+          <div class="stat-bar site-bar">
+            <span class="grow small tertiary mono ellipsis" :title="conf.path">{{ conf.path }}</span>
+            <span class="tag dirty" v-if="confDirty">未保存</span>
+            <button class="plain" @click="conf.content = conf.base" :disabled="!confDirty">还原</button>
+            <button class="primary" @click="saveConf" :disabled="planning || !confDirty" title="Ctrl+S">生成清单</button>
+          </div>
+          <textarea class="site-code tall" v-model="conf.content" spellcheck="false" autocomplete="off" autocapitalize="off" wrap="off" aria-label="Nginx 配置文件" @keydown="onConfKey"></textarea>
+          <p class="small secondary">这是 1Panel 为这个网站生成的 Nginx 配置。保存前会显示改了哪几行；1Panel 会先用 nginx -t 检查，不通过会自动恢复原文件。HTTPS、反向代理这些用上面对应的页面改更稳妥。</p>
+        </div>
+
+        <!-- Logs -->
+        <div v-if="section === 'logs'">
+          <div class="stat-bar site-bar">
+            <span class="segmented"><button :class="{on: log.kind === 'access'}" @click="log.kind = 'access'">访问日志</button><button :class="{on: log.kind === 'error'}" @click="log.kind = 'error'">错误日志</button></span>
+            <label class="field"><span>最后</span><select v-model.number="log.lines" aria-label="行数"><option :value="100">100 行</option><option :value="200">200 行</option><option :value="500">500 行</option><option :value="2000">2000 行</option></select></label>
+            <span class="grow small tertiary mono ellipsis" :title="log.path">{{ log.path }}</span>
+            <button class="plain icon-only" @click="loadLog" :disabled="log.loading" title="刷新" aria-label="刷新"><ui-icon name="refresh"></ui-icon></button>
+          </div>
+          <div class="notice" v-if="log.error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ log.error }}</div>
+          <div class="notice" v-if="!log.enabled"><ui-icon name="info"></ui-icon>这个网站关掉了{{ log.kind === 'access' ? '访问' : '错误' }}日志，可以在 1Panel 里打开。</div>
+          <pre class="site-log" v-if="log.text">{{ log.text }}</pre>
+          <div class="notice" v-else-if="!log.loading && !log.error"><ui-icon name="info"></ui-icon>日志是空的。</div>
+          <div class="notice" v-if="log.loading && !log.text"><span class="spinner"></span>正在读取日志……</div>
+        </div>
+
+        <!-- Backups -->
+        <div v-if="section === 'backups'">
+          <div class="stat-bar site-bar">
+            <span class="grow small secondary">{{ isBT ? '宝塔把网站目录打包备份' : '1Panel 把网站目录和 Nginx 配置打包备份' }}；数据库不在网站备份里，要另外备份。</span>
+            <button class="plain icon-only" @click="loadBackups" :disabled="bk.loading" title="刷新" aria-label="刷新"><ui-icon name="refresh"></ui-icon></button>
+            <button class="primary" @click="backupNow" :disabled="planning">立即备份</button>
+          </div>
+          <div class="notice" v-if="bk.error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ bk.error }}</div>
+          <div class="notice" v-if="bk.loading && !bk.data"><span class="spinner"></span>正在读取备份……</div>
+          <template v-if="bk.data">
+            <div class="group-title" v-if="!isBT">定时备份</div>
+            <div class="group" v-if="!isBT">
+              <div class="row" v-if="bk.data.schedule">
+                <span class="grow"><b>每天 {{ bk.data.schedule.time || bk.data.schedule.spec }}</b><span class="small secondary"> · 保留最近 {{ bk.data.schedule.keep }} 份 · {{ bk.data.schedule.account }}</span>
+                  <span class="small tertiary block" v-if="bk.data.schedule.lastAt">上次 {{ bk.data.schedule.lastAt }}<span v-if="bk.data.schedule.lastStatus === 'Failed'" class="st-crit-text"> 失败</span></span>
+                  <span class="small tertiary block" v-if="!bk.data.schedule.enabled">在 1Panel 里被停用了</span></span>
+                <button class="plain small" @click="openSchedule" :disabled="planning">修改</button>
+                <button class="link small danger" @click="unschedule" :disabled="planning">取消</button>
+              </div>
+              <div class="row" v-else>
+                <span class="grow">还没有定时备份<span class="small secondary block">由 1Panel 的计划任务在服务器上运行，Miao Panel 关着也会备份。</span></span>
+                <button class="plain small" @click="openSchedule" :disabled="planning" v-if="!sched.open">设置</button>
+              </div>
+              <div class="row small secondary" v-for="o in bk.data.others" :key="o.name">
+                <ui-icon name="info"></ui-icon><span class="grow">1Panel 的计划任务「{{ o.name }}」也会备份这个网站（{{ o.time ? '每天 ' + o.time : o.spec }}，保留 {{ o.keep }} 份）</span></div>
+            </div>
+            <div class="group" v-if="sched.open">
+              <div class="row form"><span class="k">时间</span><span class="v"><input type="time" v-model="sched.time" aria-label="每天几点备份" step="60"><span class="small secondary block">服务器的时间，选访问少的时候</span></span></div>
+              <div class="row form"><span class="k">保留</span><span class="v"><select v-model.number="sched.keep" aria-label="保留几份"><option v-for="n in BACKUP_KEEP" :key="n" :value="n">最近 {{ n }} 份</option></select></span></div>
+              <div class="row form"><span class="k">放在</span><span class="v">
+                <select v-model="sched.account" aria-label="放在哪里"><option value="">服务器本机</option><option v-for="a in remoteAccounts" :key="a.id" :value="a.name">{{ a.name }}（{{ a.type }}）</option></select>
+                <span class="small secondary block" v-if="!sched.account">服务器坏了备份会一起丢。{{ remoteAccounts.length ? '' : '可以先在 1Panel「备份账号」里添加 COS 等存储，再回来选它。' }}</span></span></div>
+              <div class="row"><span class="grow"></span>
+                <button class="plain" @click="sched.open = false">取消</button>
+                <button class="primary" @click="saveSchedule" :disabled="planning || !sched.time">生成清单</button></div>
+            </div>
+
+            <div class="group-title">备份（{{ bk.data.backups.length }}）</div>
+            <div class="group">
+              <div class="row" v-for="b in bk.data.backups" :key="b.id">
+                <span class="grow"><b>{{ backupTime(b) }}</b> <span class="tag" v-if="backupNote(b)">{{ backupNote(b) }}</span>
+                  <span class="small tertiary block ellipsis" :title="b.file">{{ b.account }} · <span class="mono">{{ b.file }}</span></span>
+                  <span class="small block" v-if="b.status && b.status !== 'Success'"><span class="sdot" :class="b.status === 'Failed' ? 'crit' : 'off'"></span>{{ b.status === 'Failed' ? '失败：' + (b.message || '') : '进行中' }}</span></span>
+                <template v-if="!b.status || b.status === 'Success'">
+                  <button class="plain small" @click="downloadBackup(b)" :disabled="fetching === b.id">{{ fetching === b.id ? '准备中…' : '下载' }}</button>
+                  <button class="plain small" v-if="!isBT" @click="restore(b)" :disabled="planning">恢复</button>
+                </template>
+              </div>
+              <div class="row small secondary" v-if="!bk.data.backups.length"><ui-icon name="info"></ui-icon><span class="grow">还没有备份。改网站之前建议先点「立即备份」。</span></div>
+            </div>
+          </template>
+        </div>
+
+        <!-- EdgeOne cache -->
+        <div v-if="section === 'cache' && detail.edgeone">
+          <p class="small secondary site-lead">{{ eoDomains.join('、') }} 经过 EdgeOne。清除或预热会先生成清单，确认后提交给 EdgeOne。</p>
+          <eo-cache-form :domains="eoDomains" :server-id="detail.serverId" @plan="onCachePlan"></eo-cache-form>
+        </div>
+      </template>
+    </template>
+
+    <!-- New site -->
+    <div class="sheet-mask" v-if="createForm.open" @click.self="createForm.open = false">
+      <div class="sheet" role="dialog" aria-label="新建网站">
+        <h2>新建网站</h2>
+        <p>由 1Panel 的 OpenResty 提供服务。会先生成清单，确认后才创建，可以撤销。</p>
+        <div class="group">
+          <div class="row form" v-if="usable.length > 1"><span class="k">服务器</span><span class="v"><select v-model.number="createForm.serverId" aria-label="服务器">
+            <option v-for="s in usable" :key="s.id" :value="s.id">{{ s.name }}</option></select></span></div>
+          <div class="row form"><span class="k">域名</span><span class="v"><input v-model="createForm.domain" placeholder="例如 blog.example.com" aria-label="域名" autocapitalize="off" spellcheck="false"></span></div>
+          <div class="row form"><span class="k">类型</span><span class="v"><span class="segmented">
+            <button :class="{on: createForm.type === 'proxy'}" @click="createForm.type = 'proxy'">反向代理</button>
+            <button :class="{on: createForm.type === 'static'}" @click="createForm.type = 'static'">静态网站</button></span>
+            <span class="small secondary block">{{ createForm.type === 'proxy' ? '转给服务器上的一个程序，比如 Docker 里的 Halo、Node 应用' : '直接提供 HTML、图片等文件' }}</span></span></div>
+          <div class="row form" v-if="createForm.type === 'proxy'"><span class="k">后端地址</span><span class="v"><input v-model="createForm.proxy" placeholder="http://127.0.0.1:8090" aria-label="后端地址" autocapitalize="off" spellcheck="false"></span></div>
+        </div>
+        <div class="notice" v-if="formError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ formError }}</div>
+        <div class="sheet-actions"><button @click="createForm.open = false">取消</button>
+          <button class="primary" @click="create" :disabled="planning || !createForm.domain.trim() || !createForm.serverId">{{ planning ? '正在生成……' : '生成清单' }}</button></div>
+      </div>
+    </div>
+
+    <!-- A reverse proxy rule -->
+    <div class="sheet-mask" v-if="proxyEd.open" @click.self="proxyEd.open = false">
+      <div class="sheet" role="dialog" :aria-label="proxyEd.editing ? '修改反向代理' : '添加反向代理'">
+        <h2>{{ proxyEd.editing ? '修改反向代理' : '添加反向代理' }}</h2>
+        <p>访问这个网站的某个路径时，由 OpenResty 转给后端程序。</p>
+        <div class="group">
+          <div class="row form"><span class="k">路径</span><span class="v"><input v-model="proxyEd.path" placeholder="/api；/ 表示整个网站" aria-label="路径" autocapitalize="off" spellcheck="false"></span></div>
+          <div class="row form"><span class="k">后端地址</span><span class="v"><input v-model="proxyEd.target" placeholder="http://127.0.0.1:8080" aria-label="后端地址" autocapitalize="off" spellcheck="false"></span></div>
+          <div class="row form"><span class="k">Host</span><span class="v"><span class="segmented wrap">
+            <button :class="{on: proxyEd.hostMode === '$host'}" @click="proxyEd.hostMode = '$host'">访客访问的域名</button>
+            <button :class="{on: proxyEd.hostMode === '$proxy_host'}" @click="proxyEd.hostMode = '$proxy_host'">后端地址里的域名</button>
+            <button :class="{on: proxyEd.hostMode === 'custom'}" @click="proxyEd.hostMode = 'custom'">自定义</button></span>
+            <input v-if="proxyEd.hostMode === 'custom'" v-model="proxyEd.host" placeholder="例如 api.example.com" aria-label="自定义 Host" autocapitalize="off" spellcheck="false">
+            <span class="small secondary block">后端是自己服务器上的程序选第一个；代理到别人的网站（例如 CDN、对象存储）选第二个。</span></span></div>
+          <div class="row form"><span class="k">规则名称</span><span class="v"><input v-model="proxyEd.name" :disabled="proxyEd.editing" aria-label="规则名称" autocapitalize="off" spellcheck="false">
+            <span class="small secondary block">字母、数字、_ 和 -</span></span></div>
+        </div>
+        <div class="notice" v-if="formError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ formError }}</div>
+        <div class="sheet-actions"><button @click="proxyEd.open = false">取消</button>
+          <button class="primary" @click="saveProxy" :disabled="planning || !proxyEd.target.trim() || !proxyEd.name.trim()">{{ planning ? '正在生成……' : '生成清单' }}</button></div>
+      </div>
+    </div>
+
+    <!-- A free certificate -->
+    <div class="sheet-mask" v-if="certForm.open" @click.self="certForm.open = false">
+      <div class="sheet" role="dialog" aria-label="申请免费证书">
+        <h2>申请免费证书</h2>
+        <p>让 1Panel 向 Let's Encrypt 申请，签发后自动开启 HTTPS，到期前 1Panel 会自动续签。</p>
+        <div class="group">
+          <div class="row form"><span class="k">包含的域名</span><span class="v">
+            <label class="site-pick" v-for="n in certNames" :key="n"><input type="checkbox" :checked="certForm.picked.includes(n)" @change="toggleCertName(n)">{{ n }}</label></span></div>
+          <div class="row form"><span class="k">访问方式</span><span class="v">
+            <select v-model="certForm.mode" aria-label="访问方式"><option v-for="m in HTTP_MODES" :key="m.id" :value="m.id">{{ m.text }}</option></select></span></div>
+          <div class="row form"><span class="k">邮箱</span><span class="v"><input v-model="certForm.email" type="email" placeholder="1Panel 里还没有 Let's Encrypt 账号时需要" aria-label="邮箱" autocapitalize="off" spellcheck="false"></span></div>
+        </div>
+        <p class="small secondary">Let's Encrypt 会访问 http://域名/.well-known/ 来验证，所以这些域名要已经解析到这台服务器（经过 EdgeOne 也可以），80 端口要能访问。</p>
+        <div class="notice" v-if="formError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ formError }}</div>
+        <div class="sheet-actions"><button @click="certForm.open = false">取消</button>
+          <button class="primary" @click="issueCert" :disabled="planning || !certForm.picked.length">{{ planning ? '正在生成……' : '生成清单' }}</button></div>
       </div>
     </div>
 
@@ -2648,7 +4687,7 @@ const StoragePage = {
       <div class="row"><ui-icon name="info" class="lg" style="color: var(--accent)"></ui-icon><div class="grow">存储桶在腾讯云 COS，需要先填写腾讯云密钥（子账号要有 COS 的权限）。</div><button @click="$emit('settings')">去设置</button></div>
     </div>
     <template v-else>
-      <div class="page-head"><p>腾讯云 COS 里的存储桶。文件的上传、改名和删除直接执行，会记在「日志」里；设置保存后马上生效，可以撤销。</p></div>
+      <div class="page-head"><p>腾讯云 COS 里的存储桶。文件的上传、改名和删除直接执行，会记在「记录」里；设置保存后马上生效，可以撤销。</p></div>
       <div class="notice" v-if="listError"><ui-icon name="alert" class="st-crit"></ui-icon><span class="grow">{{ listError }}</span><button class="small" @click="loadBuckets()">重试</button></div>
       <div class="notice" v-else-if="!list"><span class="spinner"></span>正在读取存储桶……</div>
 
@@ -3152,8 +5191,12 @@ const EoStats = {
     }
     const askIP = ip => emit('ask', `IP ${ip} 最近${rangeText.value}访问 ${domain.value} 很多，帮我看看它在做什么，是正常访问还是爬虫、攻击，要不要封禁？`);
     const timeText = t => new Date(t * 1000).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    // Clearing or warming the cache of the site shown.
+    const cacheOpen = ref(false), cachePlan = ref(null);
+    const onCachePlan = p => { cacheOpen.value = false; cachePlan.value = p; };
     return { sites, domain, hours, section, series, data, loading, refreshing, error, updatedAt, every, load, ask, askIP, hit, errors, change, pct,
-      alerts, chart, rows, rank, tops, pickDomain, rangeText, EO_RANGES, EO_SECTIONS, EO_SERIES, fmtCount, fmtBytes, fmtBits, timeText, clockText };
+      alerts, chart, rows, rank, tops, pickDomain, rangeText, EO_RANGES, EO_SECTIONS, EO_SERIES, fmtCount, fmtBytes, fmtBits, timeText, clockText,
+      cacheOpen, cachePlan, onCachePlan };
   },
   template: `
   <div class="vs">
@@ -3172,6 +5215,7 @@ const EoStats = {
           <span class="spinner inline" v-if="refreshing"></span>更新于 {{ clockText(updatedAt) }} · {{ every === 30000 ? '每 30 秒' : '每分钟' }}自动更新
         </span>
         <button class="plain" @click="load(true)" :disabled="loading || refreshing || !domain" title="重新读取"><ui-icon name="refresh"></ui-icon>刷新</button>
+        <button @click="cacheOpen = true" :disabled="!domain"><ui-icon name="bolt"></ui-icon>清除 / 预热缓存</button>
         <button class="primary" @click="ask" :disabled="!domain"><ui-icon name="sparkles"></ui-icon>让 AI 分析</button>
       </div>
       <p class="source-note small tertiary">腾讯云 EdgeOne 自己的统计，有几分钟延迟{{ hours === 1 ? '（最近 1 小时按分钟统计，最右边几分钟可能还在补齐）' : '' }}。访客地区、IP 行为和风险在「访问分析」里。</p>
@@ -3276,6 +5320,23 @@ const EoStats = {
         </div>
       </template>
     </template>
+
+    <div class="sheet-mask" v-if="cacheOpen" @click.self="cacheOpen = false">
+      <div class="sheet" role="dialog" aria-label="清除或预热缓存">
+        <h2>{{ domain }} 的缓存</h2>
+        <p>会先生成清单，确认后才提交给 EdgeOne。</p>
+        <eo-cache-form :domains="[domain]" @plan="onCachePlan"></eo-cache-form>
+        <div class="sheet-actions"><button @click="cacheOpen = false">关闭</button></div>
+      </div>
+    </div>
+    <div class="sheet-mask" v-if="cachePlan" @click.self="cachePlan = null">
+      <div class="sheet plan-sheet" role="dialog" aria-label="确认清单">
+        <h2>{{ cachePlan.title }}</h2>
+        <p>勾选后点「执行」，确认后才会提交。</p>
+        <plan-card :plan="cachePlan" server-name="腾讯云"></plan-card>
+        <div class="sheet-actions"><button @click="cachePlan = null">关闭</button></div>
+      </div>
+    </div>
   </div>`,
 };
 
@@ -4011,7 +6072,7 @@ const FilePage = {
       <span v-if="list">{{ list.entries.length }} 项<template v-if="selected.length"> · 已选 {{ selected.length }} 项{{ selSize }}</template></span>
       <span v-if="clip.paths.length" class="fm-clip">· 剪贴板：{{ clipText }}<button class="link" @click="clearClip">清空</button></span>
       <span class="grow"></span>
-      <span v-if="list">以 {{ list.user }} 身份登录 · 改动会记在「日志」里</span>
+      <span v-if="list">以 {{ list.user }} 身份登录 · 改动会记在「记录」里</span>
     </div>
 
     <div class="fm-uploads" v-if="uploads.length" role="status">
@@ -4227,8 +6288,8 @@ const LoginApp = {
   template: `
   <div class="login-page">
     <form class="login-card" @submit.prevent="submit">
-      <div class="login-brand"><span class="app-mark"><ui-icon name="layers"></ui-icon></span>
-        <div><div class="login-name">Miao Panel</div><div class="small tertiary">喵面板 · Web 版</div></div></div>
+      <div class="login-brand"><span class="app-mark"><miao-logo></miao-logo></span>
+        <div><div class="login-name">Miao Panel</div><div class="small tertiary">Web 版</div></div></div>
       <h1>{{ setup ? '创建管理员账号' : '登录' }}</h1>
       <p class="small secondary" v-if="setup">第一次使用，需要服务器上的初始化码：运行 <code>docker logs miaopanel</code> 或 <code>journalctl -u miaopanel</code> 就能看到，也保存在数据目录的 <code>setup-code</code> 文件里。</p>
       <div class="login-warn" v-if="insecure" role="alert"><ui-icon name="warn"></ui-icon><span>现在是 HTTP 连接，密码会明文传输。请改用 HTTPS 访问（部署说明里有设置方法）。</span></div>
@@ -4653,7 +6714,7 @@ const AccountPanel = {
 
 const app = createApp({
   setup() {
-    const tab = ref('servers');
+    const tab = ref('home');
     // On a phone the sidebar is a drawer behind the menu button.
     const navOpen = ref(false);
     const navEl = ref(null), navBtn = ref(null);
@@ -4692,7 +6753,58 @@ const app = createApp({
     const msgBox = ref(null);
     let followChat = true;
     const op = reactive({ port: 0, host: '', apiKey: '', hasKey: false, info: '' });
+    const bt = reactive({ port: 0, apiKey: '', hasKey: false, info: '' }); // 宝塔's API
+    // Updates and the diagnostics bundle.
+    const upd = reactive({ current: '', os: '', latest: null, newer: false, enabled: true, canApply: false, why: '', error: '', checkedAt: '' });
+    const updApplying = ref('');
+    // The release notes as plain lines: no Markdown marks, no blank runs.
+    const updNotes = computed(() => {
+      if (!upd.latest) return '';
+      const out = [];
+      for (let l of upd.latest.notes.split('\n')) {
+        l = l.trim().replace(/^#+\s*/, '').replace(/^[-*]\s+/, '· ').replace(/\*\*|`/g, '');
+        if (l || (out.length && out[out.length - 1])) out.push(l);
+      }
+      return out.slice(0, 12).join('\n').trim();
+    });
+    async function loadUpdate() { try { Object.assign(upd, await api('GET', '/api/update')); } catch { /* shown when checked */ } }
+    async function checkUpdate() {
+      await guarded('正在检查更新……', async () => {
+        try { Object.assign(upd, await api('POST', '/api/update/check')); }
+        finally { await loadUpdate(); }
+        notify(upd.newer ? '有新版本 ' + upd.latest.version : '已经是最新版本');
+      });
+    }
+    async function setUpdateCheck(on) { await guarded('', async () => { Object.assign(upd, await api('PUT', '/api/update/settings', { enabled: on })); }); }
+    async function applyUpdate() {
+      if (!confirm(`更新到 ${upd.latest.version}？会下载新版本、核对校验值后替换现在的程序，然后自动重新启动（大约几秒钟）。更新期间不能执行清单。`)) return;
+      await guarded('正在开始更新……', async () => { Object.assign(upd, await api('POST', '/api/update/apply')); });
+      if (!upd.applying) return;
+      const from = upd.current;
+      updApplying.value = '正在下载新版本，核对校验值后会替换程序并自动重新启动……';
+      // Downloading takes a while on a slow line; then the program restarts.
+      for (let i = 0; i < 1800 && updApplying.value; i++) {
+        await new Promise(r => setTimeout(r, 2000));
+        let v;
+        try { v = await api('GET', '/api/update'); } catch {
+          updApplying.value = window.MIAO_MODE === 'server' ? '正在重新启动，稍等几秒页面会自动刷新……' : '新版本已装好，Miao Panel 正在重新启动，会打开新的窗口，这个页面可以关掉。';
+          continue;
+        }
+        if (v.current !== from) { location.reload(); return; }
+        Object.assign(upd, v);
+        if (!v.applying) { updApplying.value = ''; if (v.error) notify(v.error, 'error'); }
+      }
+    }
+    async function downloadDiagnostics() {
+      await guarded('正在准备诊断包……', async () => {
+        const r = await api('POST', '/api/diagnostics/link');
+        const a = document.createElement('a');
+        a.href = r.url; a.download = '';
+        document.body.appendChild(a); a.click(); a.remove();
+      });
+    }
     const tc = reactive({ configured: false, hint: '', secretId: '', secretKey: '', info: '' });
+    const ali = reactive({ configured: false, hint: '', id: '', secret: '', info: '' });
     const freeCmd = reactive({ enabled: false });
     async function loadFree() { Object.assign(freeCmd, await api('GET', '/api/settings/free-command')); }
     async function setFree(on) {
@@ -4736,7 +6848,7 @@ const app = createApp({
     async function select(id, stay) {
       navOpen.value = false;
       if (!stay) tab.value = 'servers';
-      if (selectedId.value !== id) current.value = null;
+      if (selectedId.value !== id) { current.value = null; serverSitesRequest.value = null; serverSiteContext.value = ''; }
       selectedId.value = id;
       cloud.value = null;
       if (tc.configured) {
@@ -4755,6 +6867,10 @@ const app = createApp({
           const o = await api('GET', `/api/servers/${id}/onepanel`);
           if (selectedId.value === id) Object.assign(op, o, { apiKey: '', info: '' });
         }
+        if (prof.server.adapter === 'bt') {
+          const o = await api('GET', `/api/servers/${id}/btpanel`);
+          if (selectedId.value === id) Object.assign(bt, o, { apiKey: '', info: '' });
+        }
       } catch (e) { if (selectedId.value === id) notify(e.message, 'error'); }
     }
     async function saveOnePanel() {
@@ -4762,6 +6878,22 @@ const app = createApp({
         const saved = await api('PUT', `/api/servers/${selectedId.value}/onepanel`, { port: op.port, host: op.host, apiKey: op.apiKey });
         Object.assign(op, saved, { apiKey: '', info: '' });
         notify('已保存');
+      });
+    }
+    async function saveBT() {
+      await guarded('正在保存……', async () => {
+        const saved = await api('PUT', `/api/servers/${selectedId.value}/btpanel`, { port: bt.port, apiKey: bt.apiKey });
+        Object.assign(bt, saved, { apiKey: '', info: '' });
+        notify('已保存，正在测试……');
+        const r = await api('POST', `/api/servers/${selectedId.value}/btpanel/test`);
+        bt.info = '连接成功：' + r.info;
+      });
+    }
+    async function testBT() {
+      await guarded('正在连接宝塔……', async () => {
+        const r = await api('POST', `/api/servers/${selectedId.value}/btpanel/test`);
+        bt.info = '连接成功：' + r.info;
+        notify('宝塔接口可以正常使用');
       });
     }
     async function testOnePanel() {
@@ -4791,6 +6923,26 @@ const app = createApp({
       if (!confirm('确定要清除保存的腾讯云密钥吗？')) return;
       await guarded('正在清除……', async () => { setTencent(await api('DELETE', '/api/settings/tencent')); });
     }
+    function setAliyun(v) { Object.assign(ali, { configured: v.configured, hint: v.accessKeyId || '', id: '', secret: '', info: '' }); }
+    async function loadAliyun() { setAliyun(await api('GET', '/api/settings/aliyun')); }
+    async function saveAliyun() {
+      await guarded('正在保存……', async () => {
+        setAliyun(await api('PUT', '/api/settings/aliyun', { accessKeyId: ali.id, accessKeySecret: ali.secret }));
+        notify('已保存，正在测试……');
+        await testAliyun();
+      });
+    }
+    async function testAliyun() {
+      await guarded('正在连接阿里云……', async () => {
+        const r = await api('POST', '/api/settings/aliyun/test');
+        ali.info = '连接成功：' + r.info;
+        notify('阿里云可以正常使用');
+      });
+    }
+    async function clearAliyun() {
+      if (!confirm('确定要清除保存的阿里云 AccessKey 吗？')) return;
+      await guarded('正在清除……', async () => { setAliyun(await api('DELETE', '/api/settings/aliyun')); });
+    }
     const seen = reactive({}); // pages opened at least once stay mounted
     const termRequest = ref(null);
     // The web edition's logged-in account.
@@ -4802,14 +6954,53 @@ const app = createApp({
     function openTerminal(serverId) { termRequest.value = { serverId, at: Date.now() }; go('terminal'); }
     const filesRequest = ref(null);
     function openFiles(serverId, path) { filesRequest.value = { serverId, path, at: Date.now() }; go('files'); }
+    const sitesRequest = ref(null);
+    function openSite(serverId, siteId, section) { sitesRequest.value = { serverId, siteId, section, at: Date.now() }; go('sites'); }
+    function newSite() { sitesRequest.value = { create: true, at: Date.now() }; go('sites'); }
     // 网站统计 shows the access logs or EdgeOne; remembered per viewer.
     const statsView = ref((() => { try { return localStorage.getItem('miao.statsView') || 'logs'; } catch { return 'logs'; } })());
     const statsSeen = reactive({ [statsView.value]: true });
     watch(statsView, v => { statsSeen[v] = true; try { localStorage.setItem('miao.statsView', v); } catch { /* not kept */ } });
+    // The AI side panel: the same conversation, opened over any page with
+    // ⌘J / Ctrl+J; a question asked there says which page it came from.
+    const aiPanel = ref(false);
+    const siteContext = ref(''), serverSiteContext = ref(''); // 网站管理's site, the workbench's
+    const PAGE_NAMES = { home: '总览', chat: 'AI 助手', inbox: '待处理', certs: '证书', dns: '解析', storage: '存储', terminal: '终端', files: '文件', logs: '记录', settings: '设置', sites: '网站管理', cloud: '云服务器', monitor: '监控' };
+    const pageContext = computed(() => {
+      const t = tab.value;
+      if (t === 'servers') {
+        if (!current.value) return '服务器';
+        if (serverTab.value === 'sites' && serverSiteContext.value) return serverSiteContext.value;
+        const part = serverTab.value === 'overview' ? '' : (SERVER_TABS.find(x => x.id === serverTab.value) || { text: '' }).text;
+        return '服务器 ' + current.value.server.name + (part ? ' · ' + part : '');
+      }
+      if (t === 'sites') return siteContext.value || '网站管理';
+      if (t === 'stats') return statsView.value === 'eo' ? 'EdgeOne 实时统计' : (visitSection.value === 'security' ? '访问统计 · 安全' : '访问统计');
+      return PAGE_NAMES[t] || '';
+    });
+    function toggleAI(open) {
+      if (tab.value === 'chat') return;
+      aiPanel.value = open == null ? !aiPanel.value : open;
+      if (aiPanel.value) nextTick(() => { const el = document.querySelector('.ai-host.panel textarea'); if (el) el.focus(); });
+    }
+    const palette = ref(false);
+    const modKey = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? '⌘' : 'Ctrl ';
+    window.addEventListener('keydown', e => {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === 'j' || e.key === 'J')) { e.preventDefault(); toggleAI(); }
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); palette.value = !palette.value; }
+      if (e.key === 'Escape' && aiPanel.value && !document.querySelector('.sheet-mask')) aiPanel.value = false;
+    });
+    watch(tab, t => { if (t === 'chat') aiPanel.value = false; if (t === 'settings') loadUpdate(); });
+
+    // 建议 and 通知 are parts of 待处理 now.
+    const inboxFocus = ref(null);
+    function openInbox(view) { inboxFocus.value = { view, at: Date.now() }; go('inbox'); }
     function go(id) {
+      if (id === 'plans' || id === 'notices') { inboxFocus.value = { view: id, at: Date.now() }; id = 'inbox'; }
       navOpen.value = false;
       tab.value = id;
       seen[id] = true;
+      if (id === 'home') loadOverview();
       if (id === 'plans') api('GET', '/api/plans').then(v => { plans.value = v; }).catch(e => notify(e.message, 'error'));
       if (id === 'logs') loadAudit();
     }
@@ -4825,6 +7016,18 @@ const app = createApp({
       showAdd.value = true;
       cloudPick.value = '';
       if (tc.configured) api('GET', '/api/tencent/servers').then(r => { cloudList.value = (r.servers || []).filter(s => s.publicIPs && s.publicIPs.length); }).catch(() => {});
+    }
+    // 添加 on the 云服务器 page: the add dialog, filled in from the instance.
+    function addFromCloud(inst) {
+      openAdd();
+      // 阿里云 has no Tencent automation agent: connect over SSH.
+      if (inst.provider === 'aliyun') {
+        Object.assign(addForm, { name: inst.name, host: inst.publicIPs[0], username: 'root', instanceId: '', region: '', authKind: 'password' });
+        return;
+      }
+      if (!cloudList.value.some(x => x.id === inst.id)) cloudList.value = [...cloudList.value, inst];
+      cloudPick.value = inst.id;
+      pickCloud();
     }
     function pickCloud() {
       const s = cloudList.value.find(x => x.id === cloudPick.value);
@@ -4986,7 +7189,7 @@ const app = createApp({
         const res = await fetch('/api/chat/stream', {
           method: 'POST', credentials: 'same-origin', signal: controller.signal,
           headers: { 'X-Miao': '1', 'Content-Type': 'application/json' },
-          body: JSON.stringify({ conversationId: conversationId.value, message: text }),
+          body: JSON.stringify({ conversationId: conversationId.value, message: text, page: aiPanel.value && tab.value !== 'chat' ? pageContext.value : '' }),
         });
         if (!res.ok) {
           const d = await res.json().catch(() => ({}));
@@ -5085,19 +7288,6 @@ const app = createApp({
     }
 
     const p = computed(() => current.value && current.value.profile);
-    const memPct = computed(() => {
-      const m = p.value && p.value.memory;
-      return m && m.totalMB ? Math.round((m.totalMB - m.availableMB) * 100 / m.totalMB) : 0;
-    });
-    const rootDisk = computed(() => {
-      const d = (p.value && p.value.disks) || [];
-      return d.find(x => x.mount === '/') || d[0] || null;
-    });
-    const envSub = computed(() => {
-      const pn = p.value && p.value.panel;
-      if (!pn || pn.kind === 'none') return '没有安装面板';
-      return [pn.version, pn.port && `端口 ${pn.port}`].filter(Boolean).join(' · ') || '已安装';
-    });
     const dockerText = computed(() => {
       const d = p.value && p.value.docker;
       if (!d || !d.status) return '未知';
@@ -5121,14 +7311,9 @@ const app = createApp({
     }
     const mb = v => v >= 1024 ? (v / 1024).toFixed(1) + ' GB' : (v || 0) + ' MB';
     const meterClass = v => v >= 90 ? 'crit' : v >= 80 ? 'warn' : '';
-    const levelClass = l => ({ danger: 'crit', warn: 'warn' }[l] || 'info');
-    const levelIcon = l => ({ danger: 'alert', warn: 'warn' }[l] || 'info');
-    const levelName = l => ({ danger: '严重', warn: '注意', info: '提示' }[l] || l);
-    const riskName = r => ({ R0: '只读', R1: '可撤销', R2: '影响线上', R3: '高风险' }[r] || '');
     const adapterName = a => ({ '1panel': '1Panel', bt: '宝塔', linux: '纯 Linux' }[a] || '未识别');
     const fmtTime = t => t ? new Date(t).toLocaleString('zh-CN', { hour12: false }) : '';
     const serverName = id => id === 0 ? '腾讯云' : (servers.value.find(s => s.id === id) || { name: `服务器 ${id}` }).name;
-    const parseSteps = s => { try { return JSON.parse(s); } catch { return []; } };
     const toolName = t => ({ list_servers: '查看服务器列表', get_server_profile: '读取服务器画像', refresh_server_profile: '重新识别服务器',
       run_check: '执行只读检查', propose_plan: '生成修改清单', tencent_dns: '查询 DNSPod 解析', tencent_eo: '查询 EdgeOne',
       tencent_servers: '查询腾讯云服务器', tencent_server_detail: '查看腾讯云服务器详情', tencent_eo_analytics: '分析网站访问数据',
@@ -5158,13 +7343,79 @@ const app = createApp({
     // Unread notices, for the sidebar; checked every minute.
     const unread = ref(0);
     const loadUnread = () => api('GET', '/api/notices/unread').then(v => { unread.value = v.unread; }).catch(() => {});
-    setInterval(() => { if (document.visibilityState === 'visible' && tab.value !== 'notices') loadUnread(); }, 60000);
+    setInterval(() => { if (document.visibilityState === 'visible' && tab.value !== 'notices' && tab.value !== 'inbox') loadUnread(); }, 60000);
+    // The overview: how each server is doing, and the counts in the sidebar.
+    const overview = ref(null);
+    const loadOverview = () => api('GET', '/api/overview').then(v => { overview.value = v; unread.value = v.unread; }).catch(() => {});
+    setInterval(() => { if (document.visibilityState === 'visible') loadOverview(); }, 120000);
+    const inboxCount = computed(() => (overview.value ? overview.value.pending : 0) + unread.value);
+    const serverState = id => overview.value && overview.value.servers.find(x => x.id === id);
+    // Websites and servers the monitoring finds down now.
+    const monitorDown = computed(() => ((overview.value && overview.value.todo) || []).filter(t => t.kind === 'monitor' && t.level === 'crit').length);
+    const serverDot = id => ({ ok: 'good', warn: 'warn', crit: 'crit' }[(serverState(id) || {}).level] || 'off');
+    function serverMeta(s) {
+      const o = serverState(s.id);
+      const kind = adapterName(s.adapter);
+      if (!o) return kind + ' · ' + s.host;
+      if (o.level === 'warn' || o.level === 'crit') return kind + ' · ' + o.note;
+      if (o.memPct != null) return kind + ' · 内存 ' + o.memPct + '%';
+      return kind + ' · ' + (o.note || s.host);
+    }
+    // The server workbench's tab; the 网站 tab stays open once shown.
+    const serverTab = ref('overview');
+    const seenServerSites = ref(false);
+    watch(serverTab, t => { if (t === 'sites') seenServerSites.value = true; });
+    const serverSitesRequest = ref(null);
+    function openServerSite(siteId) {
+      serverTab.value = 'sites';
+      serverSitesRequest.value = { serverId: selectedId.value, siteId };
+    }
+    function serverStateText(id) {
+      const o = serverState(id);
+      if (!o || o.level === 'unknown') return '还没有识别';
+      return { ok: '运行正常', warn: '需要注意', crit: '有严重问题' }[o.level] || '';
+    }
+    // The line of facts under the server's name.
+    const serverFacts = computed(() => {
+      const c = current.value;
+      if (!c) return [];
+      const x = c.profile, k = cloud.value, out = [];
+      if (x && x.os) out.push({ k: '系统', v: x.os });
+      if (x) out.push({ k: '面板', v: adapterName(x.adapter) + (x.panel && x.panel.version ? ' ' + x.panel.version : '') });
+      const spec = [];
+      if (k) spec.push(k.cpu + ' 核', k.memoryGB + ' GB 内存', k.diskGB + ' GB 硬盘');
+      else if (x) {
+        if (x.cpuCores) spec.push(x.cpuCores + ' 核');
+        if (x.memory && x.memory.totalMB) spec.push(gbText(x.memory.totalMB) + ' 内存');
+        const d = (x.disks || []).find(d => d.mount === '/');
+        if (d) spec.push(d.size + ' 硬盘');
+      }
+      if (spec.length) out.push({ k: '配置', v: spec.join(' · ') });
+      if (k) out.push({ k: '位置', v: (k.kind === 'lighthouse' ? '腾讯云轻量' : '腾讯云 CVM') + ' · ' + k.regionName });
+      out.push({ k: 'IP', v: c.server.host });
+      if (k && k.expiredTime) {
+        const d = daysTo(k.expiredTime);
+        out.push({ k: '到期', v: new Date(k.expiredTime).toLocaleDateString('zh-CN') + (d < 30 ? (d < 0 ? '（已过期）' : `（还剩 ${d} 天）`) : ''), warn: d < 15 });
+      }
+      return out;
+    });
+    // 云服务 › 云服务器, opened on one instance.
+    const cloudRequest = ref(null);
+    function openCloud(c) { cloudRequest.value = { region: c.region, id: c.id }; go('cloud'); }
+    // 网站 › 访问统计 and 安全, 云服务 › EdgeOne: parts of the statistics page.
+    const visitSection = ref(pref('miao.visitSection', 'overview'));
+    const statsRequest = ref(null);
+    function openStats(view, section) {
+      statsView.value = view;
+      if (section) { visitSection.value = section; statsRequest.value = { section, at: Date.now() }; }
+      go('stats');
+    }
 
     onMounted(async () => {
       try {
         info.value = await api('GET', '/api/info');
         presets.value = await api('GET', '/api/ai/presets');
-        await Promise.all([loadServers(), loadAI(), loadSpend(), loadConvs(), loadTencent(), loadFree(), loadUnread()]);
+        await Promise.all([loadServers(), loadAI(), loadSpend(), loadConvs(), loadTencent(), loadAliyun().catch(() => {}), loadFree(), loadUnread(), loadOverview()]);
         if (convs.value.length) await openConv(convs.value[0].id);
         if (servers.value.length) await select(servers.value[0].id, tab.value !== 'servers');
       } catch (e) { notify(e.message, 'error'); }
@@ -5175,10 +7426,12 @@ const app = createApp({
       spendText, plans, audit, logView, logFocus, loadAudit, openLog, showAdd, addForm, messages, draft, chatBusy, msgBox, suggestions,
       select, openAdd, addServer, testConn, discover, removeServer, askAbout, send, onEnter, onChatScroll, newChat, applyPreset, saveAI, testAI,
       convs, showConvs, conversationId, openConv, deleteConv, relTime,
-      op, saveOnePanel, testOnePanel, tc, saveTencent, testTencent, clearTencent, freeCmd, setFree, seen, statsView, statsSeen, termRequest, openTerminal, filesRequest, openFiles, unread, me, logout,
-      cloud, cloudList, cloudPick, pickCloud, askAI, daysTo, fmtBytes, securityForm, securityPlan, proposeSecurity, securityDone,
-      memPct, rootDisk, envSub, dockerText, money, mb, meterClass, levelClass, levelIcon, levelName, riskName, adapterName,
-      fmtTime, serverName, parseSteps, toolName, toolDetail, actorName, actionName, md, live, liveStatus, thinkTail, stopAnswer,
+      op, saveOnePanel, testOnePanel, bt, saveBT, testBT, upd, updApplying, updNotes, checkUpdate, setUpdateCheck, applyUpdate, downloadDiagnostics, tc, saveTencent, testTencent, clearTencent, ali, saveAliyun, testAliyun, clearAliyun, freeCmd, setFree, seen, statsView, statsSeen, termRequest, openTerminal, filesRequest, openFiles, sitesRequest, openSite, newSite, unread, me, logout,
+      overview, loadOverview, inboxCount, inboxFocus, openInbox, aiPanel, toggleAI, pageContext, siteContext, serverSiteContext, palette, modKey, serverDot, serverMeta, visitSection, statsRequest, openStats,
+      cloud, cloudList, cloudPick, pickCloud, askAI, securityForm, securityPlan, proposeSecurity, securityDone,
+      monitorDown, SERVER_TABS, serverTab, seenServerSites, serverSitesRequest, openServerSite, serverStateText, serverFacts, cloudRequest, openCloud, addFromCloud,
+      dockerText, money, mb, meterClass, adapterName,
+      fmtTime, serverName, toolName, toolDetail, actorName, actionName, md, live, liveStatus, thinkTail, stopAnswer,
     };
   },
 });
@@ -5193,6 +7446,16 @@ app.component('rank-list', RankList);
 app.component('terminal-page', TerminalPage);
 app.component('cert-page', CertPage);
 app.component('dns-page', DnsPage);
+app.component('site-page', SitePage);
+app.component('home-page', HomePage);
+app.component('server-ring', ServerRing);
+app.component('server-overview', ServerOverview);
+app.component('server-apps', ServerApps);
+app.component('cloud-page', CloudPage);
+app.component('monitor-page', MonitorPage);
+app.component('command-palette', CommandPalette);
+app.component('inbox-page', InboxPage);
+app.component('eo-cache-form', EoCacheForm);
 app.component('storage-page', StoragePage);
 app.component('file-page', FilePage);
 const UiIcon = {
@@ -5201,6 +7464,7 @@ const UiIcon = {
   template: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path :d="d"></path></svg>',
 };
 app.component('ui-icon', UiIcon);
+app.component('miao-logo', MiaoLogo);
 app.component('account-panel', AccountPanel);
 
 // The web edition shows the login page until someone is logged in; the
@@ -5215,6 +7479,7 @@ app.component('account-panel', AccountPanel);
     el.className = '';
     const login = createApp(LoginApp, { state });
     login.component('ui-icon', UiIcon);
+    login.component('miao-logo', MiaoLogo);
     login.mount(el);
     return;
   }

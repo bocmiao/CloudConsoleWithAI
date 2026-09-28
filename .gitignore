@@ -12,3 +12,6 @@ secrets.json
 # Redis test dumps and other local debris
 dump.rdb
 _devharness/
+
+# Work trees of parallel helpers
+.claude/worktrees/

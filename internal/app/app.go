@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	"github.com/bocmiao/CloudConsoleWithAI/internal/sshx"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/store"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/tatx"
+	"github.com/bocmiao/CloudConsoleWithAI/internal/update"
 	"github.com/bocmiao/CloudConsoleWithAI/scripts"
 )
 
@@ -34,6 +36,18 @@ type App struct {
 	Dial func(ctx context.Context, t sshx.Target) (*sshx.Client, error)
 	// TencentEndpoint overrides Tencent Cloud API addresses; tests set it.
 	TencentEndpoint func(service string) string
+	// Version is the running Miao Panel's version.
+	Version string
+	// Restart starts the program again (after an update); nil where it
+	// cannot restart itself.
+	Restart func(exe string) error
+	// Updater finds and fetches new releases; tests point it elsewhere.
+	Updater *update.Checker
+	// UpdateExe is the program file an update replaces; tests set it.
+	UpdateExe string
+	// AliyunCloudEndpoint overrides 阿里云 API addresses for servers, DNS
+	// and CDN; tests set it.
+	AliyunCloudEndpoint func(product, region string) string
 	// AliyunEndpoint, when set, sends Alibaba Cloud SMS there (tests).
 	AliyunEndpoint string
 	// PollInterval, when set, is how often running actions check on
@@ -42,6 +56,9 @@ type App struct {
 	// Analyst, when set, stands in for the model that reads suspicious IPs
 	// on the statistics page; tests set it.
 	Analyst func(ctx context.Context, prompt string) (string, error)
+	// ProbeTransport, when set, answers the monitoring's website checks
+	// (tests and demos).
+	ProbeTransport http.RoundTripper
 	// CacheDir keeps downloaded files such as EdgeOne's offline logs.
 	CacheDir string
 	// Reviewer, when set, stands in for the model that independently
@@ -53,14 +70,18 @@ type App struct {
 	stops     map[string]context.CancelFunc // answers being given, by conversation
 	locks     serverLocks
 	cloud     cloudCache
+	aliCloud  aliCache
+	upd       updateState
 	certs     certCache
 	visits    snapshots[VisitsView]
 	ipf       ipFacts
 	terms     terminals
 	fpool     filePool
+	ppool     panelPool
 	smsCount  smsCounter
 	eoReports eoReportCache
 	lines     dnsLines
+	mon       monitorState
 }
 
 // New creates an App.
@@ -239,6 +260,8 @@ func (a *App) DeleteServer(id int64) error {
 	if err := a.Store.DeleteServer(id); err != nil {
 		return err
 	}
+	a.forgetServer(id)
+	a.relistTargets()
 	_ = a.Store.Audit("user", "server.delete", sv.Name, sv.Host)
 	return nil
 }
@@ -349,6 +372,7 @@ const maxDiscoverOutput = 256 << 10
 // Discover runs discover.sh. With no sections it runs everything and saves
 // the result as the server's profile; with sections it only returns them.
 func (a *App) Discover(ctx context.Context, id int64, sections []string) (string, *profile.Profile, error) {
+	defer a.relistTargets() // what the server runs may have changed
 	for _, s := range sections {
 		if !scripts.ValidSection(s) {
 			return "", nil, userErr("未知的检查项：%s", s)

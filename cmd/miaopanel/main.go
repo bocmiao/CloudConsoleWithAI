@@ -1,4 +1,4 @@
-// Command miaopanel runs Miao Panel (喵面板) on the local machine: it
+// Command miaopanel runs Miao Panel on the local machine: it
 // serves the UI on 127.0.0.1 and shows it in its own window (Windows, via
 // WebView2) or in the default browser. "miaopanel serve" runs the web
 // edition on a server instead (see serve.go).
@@ -27,6 +27,7 @@ import (
 	"github.com/bocmiao/CloudConsoleWithAI/internal/config"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/secrets"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/store"
+	"github.com/bocmiao/CloudConsoleWithAI/internal/update"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -111,9 +112,13 @@ func run(port int, dataDir string, openBrowser, window bool) error {
 	token := hex.EncodeToString(tok)
 	a := app.New(st, sec)
 	a.CacheDir = filepath.Join(dir, "cache")
+	a.Version, a.Restart = version, restartSelf
+	update.CleanUp()
 	warmCtx, stopWarm := context.WithCancel(context.Background())
 	defer stopWarm()
+	go a.UpdateLoop(warmCtx)
 	go a.KeepWarm(warmCtx, 20*time.Minute) // statistics ready before the pages open
+	go a.Monitor(warmCtx)                  // websites every minute, servers every two
 	srv := &http.Server{
 		Handler:           api.New(a, token, boundPort, version),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -156,7 +161,7 @@ func run(port int, dataDir string, openBrowser, window bool) error {
 		return nil
 	}
 
-	fmt.Printf("Miao Panel（喵面板）%s 已启动\n\n", version)
+	fmt.Printf("Miao Panel %s 已启动\n\n", version)
 	fmt.Printf("  浏览器地址：%s\n", url)
 	fmt.Printf("  数据目录：  %s\n", dir)
 	if sec.Kind() == "keychain" {

@@ -959,12 +959,6 @@ func unpackCmd(p, dest string) (tool, cmd string) {
 	return "", ""
 }
 
-// IsArchive says whether the file manager can unpack a file.
-func IsArchive(name string) bool {
-	tool, _ := unpackCmd(name, "/")
-	return tool != ""
-}
-
 var installHint = map[string]string{
 	"unzip": "apt install unzip（CentOS 用 yum install unzip）", "7z": "apt install p7zip-full（CentOS 用 yum install p7zip）",
 	"unrar": "apt install unrar", "zip": "apt install zip（CentOS 用 yum install zip）",
