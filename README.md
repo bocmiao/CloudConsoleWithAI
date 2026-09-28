@@ -115,7 +115,7 @@ AI 能看存储桶的设置和文件列表，也能生成修改设置的清单�
 
 **1Panel 用户**：在 1Panel「面板设置 → API 接口」开启 API，IP 白名单填 `127.0.0.1`，把密钥粘贴到 Miao Panel 服务器页「连接设置」里的「1Panel 接口」并点「测试」。这样 PHP、MySQL 的修改会走 1Panel 自己的接口，面板里看得到、不会被覆盖。
 
-**更新和诊断**：「设置 → 版本和诊断」显示当前版本，每天问一次 GitHub 有没有新版本（只请求最新的版本号，不发送任何数据，可以关掉），有新版本时总览会提醒。点「更新到 vX」会下载这个系统的新程序，和发布里的 `SHA256SUMS.txt` 核对后换上并自动重启；Docker 版和 systemd 版按 [docs/DEPLOY.md](docs/DEPLOY.md) 的升级步骤更新。遇到问题可以「下载诊断包」附在反馈里：版本、系统、哪些功能配置了、最近的操作记录和故障，没有密钥、密码和对话内容，服务器地址只保留前两段。
+**更新和诊断**：「设置 → 版本和诊断」显示当前版本，每天问一次 GitHub 有没有新版本（只请求最新的版本号，不发送任何数据，可以关掉），有新版本时总览会提醒。点「更新到 vX」会下载这个系统的新程序，和发布里的 `SHA256SUMS.txt` 核对后换上并自动重启（Web 版用安装包装的也可以）；Docker 版和手动配置的 systemd 版按 [docs/DEPLOY.md](docs/DEPLOY.md) 的升级步骤更新。遇到问题可以「下载诊断包」附在反馈里：版本、系统、哪些功能配置了、最近的操作记录和故障，没有密钥、密码和对话内容，服务器地址只保留前两段。
 
 密码和 API Key 保存在 Windows 凭据管理器里。
 
@@ -123,18 +123,21 @@ AI 能看存储桶的设置和文件列表，也能生成修改设置的清单�
 
 ## 部署到自己的服务器（Web 版）
 
+不需要 Docker，也不需要先装数据库。从 [Releases](https://github.com/bocmiao/CloudConsoleWithAI/releases/latest) 下载 Linux 安装包（ARM 服务器用 `linux-arm64`）：
+
 ```bash
-git clone https://github.com/bocmiao/CloudConsoleWithAI.git miaopanel && cd miaopanel
-docker compose up -d --build
-docker logs miaopanel   # 里面有创建管理员账号用的「初始化码」
+tar -xzf MiaoPanel-linux-amd64.tar.gz && cd miaopanel
+sudo sh install.sh      # 装成开机自启的服务，最后显示访问地址和初始化码
 ```
 
-再用 1Panel、宝塔、Nginx 或 Caddy 给它配一个 HTTPS 反向代理（代理到 `http://127.0.0.1:18765`），用浏览器打开你的域名，输入初始化码创建管理员账号。
-也可以不用 Docker，从 [Releases](https://github.com/bocmiao/CloudConsoleWithAI/releases/latest) 下载 Linux 版程序用 systemd 运行。完整步骤见 **[docs/DEPLOY.md](docs/DEPLOY.md)**。
+用浏览器打开 `http://服务器IP:18765`，安装向导分三步：输入初始化码 → 选择数据库（内置数据库，或者填 MySQL / MariaDB 的地址、库名、账号，库不存在时自动创建）→ 创建管理员账号，然后就能用了。
+长期使用请用 1Panel、宝塔、Nginx 或 Caddy 配一个 HTTPS 反向代理，再运行 `sudo sh /opt/miaopanel/install.sh --local` 只让本机访问。
+Docker（`docker compose up -d --build`）和其他部署方式见 **[docs/DEPLOY.md](docs/DEPLOY.md)**。
 
 - 功能和桌面版一样；放在服务器上 7×24 运行，日报、提醒、自动封禁不用等你开电脑；手机浏览器也能用（侧边栏收进左上角的菜单）；
+- 在「设置 → 版本和诊断」一键更新到新版本；数据默认在内置的 SQLite 数据库，也可以放在 MySQL 5.7+ / MariaDB 10.3+；
 - 登录：密码（bcrypt 保存）＋可选的两步验证（身份验证器 App），也可以开启邮箱验证码登录（用你自己的 SMTP 邮箱发信）和手机短信验证码登录（腾讯云或阿里云短信），各自开关；输错多次自动锁定一段时间，能查看和退出登录的设备；
-- 第一个账号必须用服务器日志里的一次性初始化码创建，别人先打开页面也抢不走；忘记密码在服务器上运行 `miaopanel reset-password`；
+- 安装向导和第一个账号必须用服务器上的一次性初始化码，别人先打开页面也抢不走；忘记密码在服务器上运行 `miaopanel reset-password`；
 - 密钥保存在服务器的数据目录（只有运行 Miao Panel 的用户可读），不会发给 AI；用密钥登录服务器时直接粘贴私钥内容。
 
 | 登录页 | 设置 → 账号与安全：开启两步验证 |

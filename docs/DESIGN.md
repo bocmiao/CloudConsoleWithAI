@@ -774,7 +774,7 @@ verify:
 |---|---|---|
 | 后端 | Go | 编译成单个 exe，不需要安装任何运行环境；能交叉编译出 Windows、macOS、Linux 版本；SSH、并发、系统操作成熟；1Panel 也是 Go 写的 |
 | 前端 | Vue 3，构建后嵌进 exe（`go:embed`） | 本地版和 Web 版共用同一套界面 |
-| 数据库 | SQLite（纯 Go 驱动 `modernc.org/sqlite`，不依赖 cgo） | 本地一个文件；Web 版可以换 PostgreSQL |
+| 数据库 | SQLite（纯 Go 驱动 `modernc.org/sqlite`，不依赖 cgo）；Web 版也可以用 MySQL 5.7+ / MariaDB 10.3+（`go-sql-driver/mysql`） | 本地一个文件；Web 版可以在安装向导里改用已有的 MySQL |
 | 密钥存储 | 系统钥匙串（`go-keyring`：Windows 凭据管理器 / macOS 钥匙串 / Linux Secret Service） | 不存明文 |
 | SSH | `golang.org/x/crypto/ssh` | 执行命令，以及到面板 API 的端口转发 |
 | 腾讯云 | `tencentcloud-sdk-go`（官方） | |
@@ -814,7 +814,7 @@ internal/connect/        连接方式：ssh、tat
 internal/adapters/       环境适配器：linux、onepanel、bt
 internal/cloud/tencent/  腾讯云插件：EO、DNSPod、轻量、CVM、云监控
 internal/freecmd/        自由命令：解析、策略、试运行、5 分钟保险
-internal/store/          SQLite、系统钥匙串
+internal/store/          SQLite 和 MySQL、系统钥匙串
 templates/               模板（YAML）
 scripts/discover.sh      环境识别脚本
 web/                     前端（Vue 3）
@@ -1374,7 +1374,7 @@ EdgeOne 的统计接口只有请求数、流量、带宽这类总量和排行，
 - **会话**：登录后发一个 32 字节的随机 Cookie（HttpOnly、SameSite=Strict，HTTPS 下加 Secure），数据库里只存它的 SHA-256；3 天没用或者满 30 天失效，每小时清理一次。「设置 → 账号与安全」列出登录的设备（浏览器、IP、最近使用时间），可以让某个设备退出；
 - **防猜密码**：同一个 IP 15 分钟内输错 5 次，这个 IP 锁 15 分钟；一个账号 15 分钟内被输错 20 次（来自任何地方），这个账号锁 15 分钟。访客 IP 取连接地址；只有来自本机或内网的连接（反向代理）才采信 `X-Real-IP` 或 `X-Forwarded-For` 最后一跳，所以从外网直接连过来的人不能靠伪造请求头绕过限制。登录、登录失败、修改密码都写进操作记录；
 - **请求的保护**：所有接口（包括登录）都要求 `X-Miao: 1` 请求头，别的网站的页面加不了这个头（跨站请求要先预检，我们不回应），加上 SameSite=Strict，防跨站请求伪造；桌面版的 Host 检查（防 DNS 重绑定）在 Web 版不需要：登录 Cookie 只发给面板自己的域名。HTTPS 下加 HSTS；所有页面带 `Referrer-Policy: no-referrer`、`X-Frame-Options: DENY` 和内容安全策略；
-- **页面**：没登录时整页是登录页（第一次是「创建管理员账号」），通过 HTTP 从别的机器访问时提示密码会明文传输；会话失效时任何接口返回 `code: login`，页面回到登录页。侧边栏显示当前账号和「退出」；有些说明按运行方式改变措辞（比如密钥保存在哪里）。手机上（宽度 720px 以下）侧边栏收进左上角的菜单按钮，点开从左边滑出，选了页面、点外面或按 Esc 就收起，未读通知数显示在按钮上；各页面的标题栏滚动时停在顶部，按钮多的一行可以左右滑。添加服务器时可以直接粘贴私钥内容（Web 版读不到你电脑上的密钥文件；桌面版两种都行），私钥存 secrets.json；
+- **页面**：没登录时整页是登录页（第一次是安装向导，见「免 Docker 安装」一节），通过 HTTP 从别的机器访问时提示密码会明文传输；会话失效时任何接口返回 `code: login`，页面回到登录页。侧边栏显示当前账号和「退出」；有些说明按运行方式改变措辞（比如密钥保存在哪里）。手机上（宽度 720px 以下）侧边栏收进左上角的菜单按钮，点开从左边滑出，选了页面、点外面或按 Esc 就收起，未读通知数显示在按钮上；各页面的标题栏滚动时停在顶部，按钮多的一行可以左右滑。添加服务器时可以直接粘贴私钥内容（Web 版读不到你电脑上的密钥文件；桌面版两种都行），私钥存 secrets.json；
 - **部署**：`Dockerfile`（多阶段构建，运行在 alpine 上，uid 10001，数据卷 `/data`，自带健康检查）、`docker-compose.yml`（只映射到 127.0.0.1）、`deploy/miaopanel.service`（systemd，专用用户和一组加固选项）、`deploy/nginx.conf` 和 `deploy/Caddyfile`（关闭缓冲让 AI 回答和终端实时显示、上传不限大小、长连接超时）。CI 另外构建 Linux ARM64，并实际构建镜像、启动容器、检查登录页和初始化码。
 
 测试：账号服务的初始化码（错误、大小写和横线、用过作废）、弱密码、登录、会话只存哈希、按设备退出、3 天和 30 天过期、IP 锁定和账号锁定、命令行重设、两步验证（开启前要验证、需要验证码、验证码只能用一次、时间容差、关闭要密码）、修改密码让其他登录退出，以及 RFC 6238 的标准测试向量；接口层的未登录、X-Miao 头、HTTPS 反向代理下的 Secure Cookie 和 HSTS、外网伪造 X-Forwarded-For 不能绕过锁定、下载要登录、退出登录；桌面版没有账号且仍检查 Host；粘贴私钥用测试 SSH 服务器实际登录。浏览器里走了初始化、登录、开启两步验证（用真实算出的验证码）、退出、带验证码登录、输错被锁和 HTTP 提示，看了浅色、深色和手机宽度；用示例 Nginx 配置实际代理了一次登录（HTTP/2、Secure Cookie、HSTS、HTTP 跳转 HTTPS）；容器实际运行了一遍（初始化码在日志里、数据卷属于 uid 10001、`docker exec … reset-password`、正常退出）。
@@ -1558,5 +1558,15 @@ Web 版除了「用户名 + 密码」，可以用邮箱或手机收到的验证�
 
 - **检查**（`internal/update`）：问 GitHub 最新的发布（`releases/latest`，只是一个 GET，不带任何数据），发布版（`vX.Y.Z`）启动一分钟后查一次，之后每天一次；「设置 → 版本和诊断」可以关掉（设置项 `update_check`），也能手动「检查更新」。有新版本时总览的「需要你处理」多一条，设置里显示发布说明的前几行。自己编译的开发版不检查。
 - **一键更新**：在后台进行，页面一直问进度（下载可能要几分钟，不会被反向代理的超时打断）。下载这个系统的程序（`MiaoPanel-<系统>-<架构>`），和发布里的 `SHA256SUMS.txt` 核对，不对就丢掉；新文件先写在程序旁边，再改名换上（Windows 上正在运行的程序只能改名，旧的变成 `.old`，下次启动删掉）。然后重启进新程序：Linux 和 macOS 直接 `exec`，Windows 启动新程序再退出（新程序等旧窗口关掉再拿单实例锁）。有清单在执行时不能开始更新；开始后到重启前也不能执行新的清单，所以重启不会打断修改。Web 版页面看到版本变了就刷新。
-- **不能一键更新的**：Docker 版（在项目目录 `git pull && docker compose up -d --build`）、程序目录不能写的（systemd 服务文件用了 `ProtectSystem=strict`，按部署文档用 `sudo install` 替换）、开发版。页面上写明原因。
+- **不能一键更新的**：Docker 版（在项目目录 `git pull && docker compose up -d --build`）、程序目录不能写的（手动配置的 systemd 服务文件用了 `ProtectSystem=strict`；安装包装的服务专门放开了自己的程序目录，可以一键更新），按部署文档用 `sudo install` 替换）、开发版。页面上写明原因。
 - **诊断包**：「下载诊断包」生成一个 zip：`miaopanel.json`（版本、系统、哪些功能配置了——只有是否配置，服务器列表的地址只留前两段）、`recent-activity.json`（最近 200 条查看和修改记录的标题和结果，失败的附上最后 1500 个字符的输出；服务器名称、标题、输出和故障原因里的服务器地址、IPv4 和 IPv6 地址都部分隐藏）、`incidents.json`（7 天的监控故障）和说明。不含密钥、密码、对话内容和访问日志。下载走一次性链接（`POST /api/diagnostics/link`）。
+
+### 免 Docker 安装：安装包、安装向导和 MySQL（已完成）
+
+目标：下载一个安装包，解压、运行一个脚本，打开网页按向导填好数据库和管理员账号就能用，不需要 Docker，也不需要先装数据库。
+
+- **安装包**（`deploy/linux/`）：发布里多了 `MiaoPanel-linux-amd64.tar.gz` 和 `-arm64.tar.gz`，解开是 `miaopanel/`：程序、`install.sh`、`uninstall.sh`、`README.txt`（`package.sh` 打包，CI 的构建任务调用它；原来的单个程序文件保留，一键更新下载的是它）。`install.sh`（POSIX sh，dash 下也能跑，过 shellcheck）：要 root 和 systemd；先运行一次程序的 `version`，CPU 架构不对立刻说清楚；建系统用户 `miaopanel`；程序放 `/opt/miaopanel/bin`（属于 `miaopanel`，一键更新要在这里写新文件再改名），数据放 `/opt/miaopanel/data`（0700），脚本和说明放 `/opt/miaopanel`（属于 root，服务改不了以后 root 会运行的卸载脚本）；写 systemd 服务（`ProtectSystem=strict` 加 `ReadWritePaths` 只放开这两个目录，其余加固选项和 `deploy/miaopanel.service` 一样），默认监听 `0.0.0.0:18765`，`--port`、`--local`（只监听 127.0.0.1，交给反向代理）；服务器开着 ufw 或 firewalld 时放行端口，并记下来，改成 `--local`、换端口或卸载时收回；启动后等初始化码文件出现，打印访问地址（`ip route get` 找出的本机地址，不向外发请求）和初始化码，启动失败就打印服务日志。再运行一次就是升级或改设置：沿用原服务文件里的监听地址、数据目录和时区（手动配置的 `/var/lib/miaopanel` 也照样接管），自定义设置用 `systemctl edit` 的附加文件，不会被覆盖。`uninstall.sh` 默认保留数据目录，`--purge` 连数据和用户一起删，用 MySQL 时提醒库要自己删。
+- **安装向导**（`internal/api/install.go`，页面是 `InstallApp`）：数据目录里既没有 `database.json` 也没有 `miaopanel.db` 时，`serve` 先以安装向导运行（除了页面本身和安装接口，其他接口都回答「还没有安装完成」），日志里打印初始化码（和创建第一个账号用的是同一个，存在 `setup-code`）。三步：① 初始化码（错的次数按 IP 计入登录限制）；② 选数据库：内置，或者 MySQL 的地址、端口、库名、用户名和密码，可以「测试连接」（查版本、确认账号能在库里建表，库不存在时说「下一步会自动创建」）；③ 管理员账号，走原来的 `/api/auth/setup`。第 ② 步每个请求都要带初始化码；选好后打开数据库、记下选择，再把整个服务器原地换成 Miao Panel 本身（`atomic.Pointer` 里的 handler，不用重启进程）。连上的 MySQL 库里已经有账号时（比如重装后指向原来的库）直接去登录。已有数据的老版本数据目录（只有 `miaopanel.db`）不会看到向导。Docker 版的新数据卷同样先出现向导。
+- **选择记在哪**（`internal/dbconf`）：`database.json`（0600）只记类型和 MySQL 的地址、端口、库名、用户名；MySQL 密码和其他密钥一样存 `secrets.json`（键 `database/mysql_password`），不写进数据库。`reset-password` 也按它打开数据库。
+- **MySQL 存储**（`internal/store`）：同一个 `Store`，按方言挑语句——`ON CONFLICT … excluded` 对 `ON DUPLICATE KEY UPDATE … VALUES()`，保留字 `key`、`undo` 加反引号，SQLite 的 `rowid` 换成 `created_at`。表结构单独一份：键用 VARCHAR、长文本用 MEDIUMTEXT（MySQL 5.7 不允许默认值）、`utf8mb4_bin` 精确比较文本（和 SQLite 一致），邮箱和手机号「有值才唯一」用生成列（`NULLIF(…, '')` 的 STORED 列加唯一索引，MySQL 没有部分索引）。连接用 UTC 时区、最多 4 个连接、3 分钟换新（赶在服务器的空闲超时前）。库不存在时，账号有建库权限就建（`utf8mb4`），没有就说清楚要先建库并授权；常见错误（密码不对、没有库、没有权限、连不上、超时、主机名不对）都翻译成中文。拒绝太旧的服务器：MySQL 5.7 以前、MariaDB 10.3 以前。
+- **测试**：设置环境变量 `MIAO_TEST_MYSQL`（比如 `root:pw@tcp(127.0.0.1:3306)/`）时，所有用到数据库的测试都在一个临时的 `miaotest_…` 库里跑，结束时删掉；CI 对 MySQL 5.7、8.0、8.4 和 MariaDB 10.3、11.4 各跑一遍 store、dbconf、auth、api、app 的测试。向导测试：内置和 MySQL 两条路、错误的初始化码、安装前其他接口不可用、库不存在时自动创建、已有账号的库直接接上、密码不写进 `database.json`。CI 另有一个任务在真的 systemd 上装安装包：安装、用 curl 走完向导、确认服务能一键更新（能写自己的程序目录）、再装一次（升级，账号还在）、`--local`、`--purge` 卸载干净；Docker 任务和浏览器冒烟测试也改成先走向导。本地用模拟的 systemctl 跑过安装、升级、改端口、`--local`、卸载后重装保留数据、接管手动配置的旧服务和 `--purge`，在浏览器里（桌面和手机宽度）走过内置和 MySQL 两种安装。

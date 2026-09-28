@@ -6,7 +6,48 @@ Web 版和桌面版是同一个程序：`miaopanel serve` 在服务器上运行�
 > **先想清楚放在哪台机器上。** Miao Panel 保存着你所有服务器的 SSH 密码或私钥、腾讯云密钥和 AI Key，谁能登录它，谁就能管理你所有的服务器。
 > 建议放在一台只有你能登录的服务器上，只通过 HTTPS 访问，并开启两步验证。
 
-## 方式一：Docker（推荐）
+## 方式一：安装包（推荐，不需要 Docker）
+
+适用于有 systemd 的 Linux（Ubuntu、Debian、CentOS、Rocky、AlmaLinux、OpenCloudOS 等），不需要 Docker，也不需要先装数据库。
+从 [Releases](https://github.com/bocmiao/CloudConsoleWithAI/releases/latest) 下载安装包（ARM 服务器把 `amd64` 换成 `arm64`）：
+
+```bash
+curl -fLO https://github.com/bocmiao/CloudConsoleWithAI/releases/latest/download/MiaoPanel-linux-amd64.tar.gz
+tar -xzf MiaoPanel-linux-amd64.tar.gz && cd miaopanel
+sudo sh install.sh
+```
+
+`install.sh` 会：
+
+- 创建系统用户 `miaopanel`，程序放在 `/opt/miaopanel/bin`，数据放在 `/opt/miaopanel/data`（只有 `miaopanel` 用户能读）；
+- 写好 systemd 服务 `miaopanel`（开机自启、出错自动重启，只能写自己的程序目录和数据目录）并启动；
+- 默认监听 `0.0.0.0:18765`，浏览器直接用 `http://服务器IP:18765` 访问；服务器上开着 ufw 或 firewalld 时顺便放行这个端口；
+- 最后显示访问地址和**初始化码**。
+
+云服务器还要在控制台的安全组 / 防火墙里放行 TCP 18765 端口。参数：`--port 8080` 换端口；`--local` 只监听 `127.0.0.1`，交给本机的反向代理。
+
+然后在浏览器里按安装向导操作（见下文「第一次打开：安装向导」）。
+
+**长期使用一定要加 HTTPS**：按下文「配置 HTTPS 反向代理」配好域名和证书后，运行 `sudo sh /opt/miaopanel/install.sh --local`，让 Miao Panel 只接受本机反向代理的连接（会收回刚才在防火墙放行的端口）。
+
+常用命令：
+
+```bash
+systemctl status miaopanel            # 状态
+journalctl -u miaopanel -f            # 日志
+sudo systemctl restart miaopanel      # 重启
+sudo sh /opt/miaopanel/uninstall.sh           # 卸载，保留数据目录
+sudo sh /opt/miaopanel/uninstall.sh --purge   # 连数据和 miaopanel 用户一起删除
+```
+
+**升级**：在「设置 → 版本和诊断」点「更新到 vX」，会下载新程序、核对 `SHA256SUMS.txt` 后替换并自动重启。也可以下载新的安装包，解压后再运行一次 `sudo sh install.sh`：端口、数据和设置都保留。
+重新运行 `install.sh` 会重写服务文件；要加自己的设置（比如 `Environment=MIAO_TRUSTED_PROXIES=...`），用 `sudo systemctl edit miaopanel`，它写在单独的文件里，不会被覆盖。
+
+之前按「方式三」手动配置过 systemd 的，直接运行 `install.sh` 就会接管：沿用原来的数据目录（`/var/lib/miaopanel`）和监听地址，以后也能一键更新；`/usr/local/bin/miaopanel` 不再使用，可以删掉。
+
+不想装成服务、只想先试试：解压后在 `miaopanel` 目录里运行 `./miaopanel serve --listen 0.0.0.0:18765 --data ./data`，按 Ctrl+C 停止。
+
+## 方式二：Docker
 
 需要 Docker 和 Docker Compose（1Panel、宝塔都自带）。
 
@@ -21,12 +62,41 @@ docker logs miaopanel          # 找到「初始化码」
 
 默认只在本机的 `127.0.0.1:18765` 上监听，需要再配一个带 HTTPS 的反向代理（见下文）才能从外面访问。
 数据（数据库和密钥）在 Docker 卷 `miaopanel-data` 里，删除容器不会丢；**删除这个卷就全没了**。
+在安装向导里选 MySQL 时，地址不能填 `127.0.0.1`（那是容器自己），要填 MySQL 所在机器的内网 IP，或者同一个 Docker 网络里 MySQL 容器的名字。
 
 升级：`git pull && docker compose up -d --build`。有新版本时「设置 → 版本和诊断」和总览会提醒（每天问一次 GitHub，可以关掉），Docker 版不能在页面上一键更新。
 
-### 备份与恢复 Web 版数据
+## 数据库：内置还是 MySQL
 
-数据目录同时保存 SQLite 数据库和服务器、云服务的密钥。升级前先做一次备份，备份文件也要按密钥保管。SQLite 使用 WAL 模式，**不要在服务运行时只复制 `miaopanel.db`**。
+安装向导的第二步选择数据保存在哪里：
+
+- **内置数据库（推荐）**：SQLite，数据在数据目录的 `miaopanel.db`，什么都不用准备，备份数据目录就是全部；
+- **MySQL / MariaDB**：需要 MySQL 5.7+ 或 MariaDB 10.3+。填地址、端口、库名、用户名和密码，可以先「测试连接」。
+  库还不存在、账号又有建库权限时自动创建（字符集 utf8mb4）；否则先在 MySQL（或 1Panel、宝塔的「数据库」页面）建好库和能使用它的账号。
+  适合已经有 MySQL、习惯用它统一备份的服务器。
+
+不管选哪种，服务器密码、云服务密钥、AI Key 这些**密钥仍然只保存在数据目录的 `secrets.json`**，不写进数据库；
+选择记在数据目录的 `database.json`，MySQL 的密码也在 `secrets.json` 里。所以用 MySQL 时，数据目录同样要备份。
+
+想换一种数据库：数据不会自动搬过去。停掉服务，把数据目录里的 `database.json`（和 `miaopanel.db`）移走，再启动就会重新出现安装向导（初始化码在日志和数据目录的 `setup-code` 文件里）；
+选一个已经被 Miao Panel 用过的 MySQL 库时，向导会直接接上原来的账号和数据。
+
+## 备份与恢复
+
+数据目录同时保存数据库和服务器、云服务的密钥。升级前先做一次备份，备份文件也要按密钥保管，不要提交到 GitHub。SQLite 使用 WAL 模式，**不要在服务运行时只复制 `miaopanel.db`**。
+
+安装包版（数据目录 `/opt/miaopanel/data`；手动配置的 systemd 版是 `/var/lib/miaopanel`）：
+
+```bash
+sudo systemctl stop miaopanel
+sudo sh -c 'umask 077; tar -C /opt/miaopanel/data -czf /root/miaopanel-backup.tar.gz .'
+sudo systemctl start miaopanel
+```
+
+在新机器上恢复：先运行 `sudo sh install.sh` 安装，然后 `sudo systemctl stop miaopanel`，清空 `/opt/miaopanel/data` 后解包备份，
+运行 `sudo chown -R miaopanel:miaopanel /opt/miaopanel/data`，再 `sudo systemctl start miaopanel`。
+
+用 MySQL 时再备份那个库（`mysqldump --single-transaction 库名 > miaopanel.sql`，或者用 1Panel、宝塔的数据库备份）；恢复时先导入库，再恢复数据目录。
 
 Docker 版在项目目录执行（短暂停机，生成仅所有者可读的压缩包）：
 
@@ -49,19 +119,11 @@ docker compose run --rm --no-deps --user 0 \
 docker compose up -d
 ```
 
-systemd 版同样先停服务，再将整个数据目录打包：
+恢复演练要检查原账号能登录、服务器列表和密钥可用、执行日志仍在。
 
-```bash
-sudo systemctl stop miaopanel
-sudo sh -c 'umask 077; tar -C /var/lib/miaopanel -czf /root/miaopanel-backup.tar.gz .'
-sudo systemctl start miaopanel
-```
+## 方式三：手动配置 systemd
 
-在新机器的空数据目录恢复时，先安装好服务但不要启动，解包后运行 `sudo chown -R miaopanel:miaopanel /var/lib/miaopanel`，然后启动服务。恢复演练要检查原账号能登录、服务器列表和密钥可用、执行日志仍在。不要把含密钥的备份提交到 GitHub。
-
-## 方式二：直接运行程序（systemd）
-
-从 [Releases](https://github.com/bocmiao/CloudConsoleWithAI/releases/latest) 下载 Linux 版程序（ARM 服务器把下面的 `amd64` 换成 `arm64`），然后：
+安装包（方式一）做的就是这些，一般不需要手动配置。想自己控制每一步的话：
 
 ```bash
 curl -fLO https://github.com/bocmiao/CloudConsoleWithAI/releases/latest/download/MiaoPanel-linux-amd64
@@ -103,13 +165,17 @@ client_max_body_size 0;
 
 不想用反向代理，也可以让 Miao Panel 自己提供 HTTPS：`miaopanel serve --listen 0.0.0.0:443 --tls-cert 证书.pem --tls-key 私钥.pem`。
 
-## 第一次登录
+## 第一次打开：安装向导
 
-打开你的域名，填日志里的初始化码、用户名和密码（至少 10 个字符），创建管理员账号。初始化码只能用来创建第一个账号，用过就失效，
-所以就算别人先打开了这个页面，没有服务器的登录权限也拿不到初始化码。
+打开你的域名（或 `http://服务器IP:18765`），安装向导分三步：
+
+1. **初始化码**：安装脚本最后显示的那串，也在日志里（`journalctl -u miaopanel`、`docker logs miaopanel`）和数据目录的 `setup-code` 文件里。
+   只有能登录这台服务器的人才拿得到，所以就算别人先打开了这个页面，也抢不走安装；输错多次会被限制一段时间；
+2. **数据库**：内置数据库或 MySQL，见上文「数据库：内置还是 MySQL」；
+3. **管理员账号**：用户名和密码（至少 10 个字符）。初始化码用过就失效。
 
 登录后建议马上在「设置 → 账号与安全」开启两步验证（Google Authenticator、Microsoft Authenticator、腾讯身份验证器等都可以），
-这里也能修改密码、查看哪些设备登录着、让某个设备退出。
+这里也能修改密码、查看哪些设备登录着、让某个设备退出。数据保存在哪里显示在「设置」的「安全」一栏。
 
 登录的保护：同一个 IP 连续输错 5 次要等 15 分钟；一个账号 15 分钟内被输错 20 次，也要等 15 分钟。
 3 天没使用或者登录满 30 天会自动退出。所有登录、登录失败、修改密码都记在「日志 → 操作记录」里。
@@ -145,19 +211,20 @@ client_max_body_size 0;
 在服务器上重设密码（同时关闭两步验证、重新开启密码登录、退出所有登录）：
 
 ```bash
-docker exec -it miaopanel miaopanel reset-password                                   # Docker
-sudo -u miaopanel miaopanel reset-password --data /var/lib/miaopanel                  # systemd
+sudo -u miaopanel /opt/miaopanel/bin/miaopanel reset-password --data /opt/miaopanel/data   # 安装包
+docker exec -it miaopanel miaopanel reset-password                                         # Docker
+sudo -u miaopanel miaopanel reset-password --data /var/lib/miaopanel                        # 手动配置的 systemd
 ```
 
 ## 设置参考
 
 | 参数 | 环境变量 | 默认 | 说明 |
 |---|---|---|---|
-| `--listen` | `MIAO_LISTEN` | `127.0.0.1:18765`（Docker 里是 `0.0.0.0:18765`） | 监听地址 |
+| `--listen` | `MIAO_LISTEN` | `127.0.0.1:18765`（Docker 和安装包是 `0.0.0.0:18765`） | 监听地址 |
 | `--trusted-proxies` | `MIAO_TRUSTED_PROXIES` | 空（仍信任本机回环地址） | 额外可信反向代理的 IP 或 CIDR，逗号分隔 |
-| `--data` | `MIAO_DATA` | 当前用户的配置目录（Docker 里是 `/data`） | 数据库和密钥的位置 |
+| `--data` | `MIAO_DATA` | 当前用户的配置目录（Docker 里是 `/data`，安装包是 `/opt/miaopanel/data`） | 数据库设置、SQLite 数据库和密钥的位置 |
 | `--tls-cert` / `--tls-key` | `MIAO_TLS_CERT` / `MIAO_TLS_KEY` | 无 | 由 Miao Panel 自己提供 HTTPS |
-| | `TZ` | `Asia/Shanghai`（Docker） | 日报按这个时区生成 |
+| | `TZ` | `Asia/Shanghai`（Docker 和安装包） | 日报按这个时区生成 |
 
 ## 和桌面版的区别
 
