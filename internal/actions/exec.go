@@ -38,6 +38,8 @@ type Env struct {
 	Aliyun *aliyun.Client
 	// BT is set when the server's 宝塔 API is configured.
 	BT *btpanel.Client
+	// Local changes Miao Panel's own settings.
+	Local Local
 	// Reconnect replaces SSH after a dropped connection while waiting.
 	Reconnect func(ctx context.Context) (sshx.Conn, error)
 	// PollInterval defaults to one second.
@@ -89,6 +91,8 @@ func Apply(ctx context.Context, env *Env, r Resolved, progress Progress) Outcome
 		return out
 	case r.Impl.Cloud != "":
 		return applyCloud(ctx, env, r, progress)
+	case r.Impl.Local != "":
+		return applyLocal(ctx, env, r)
 	case strings.HasPrefix(r.Impl.Panel, "bt_"):
 		return applyBT(ctx, env, r, progress)
 	}
@@ -159,6 +163,8 @@ func Undo(ctx context.Context, env *Env, r Resolved, undo map[string]string) Out
 		return runScript(ctx, env, r, "undo", undo, nil)
 	case r.Impl.Cloud != "":
 		return undoCloud(ctx, env, r, undo)
+	case r.Impl.Local != "":
+		return undoLocal(ctx, env, r, undo)
 	case strings.HasPrefix(r.Impl.Panel, "bt_"):
 		return undoBT(ctx, env, r, undo)
 	}

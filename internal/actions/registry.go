@@ -52,6 +52,7 @@ type Impl struct {
 	Args     []string // parameter names passed to the script, in order
 	Panel    string   // panel operation (API implementations)
 	Cloud    string   // Tencent Cloud operation
+	Local    string   // Miao Panel's own settings, changed by the app
 	Downtime string   // what the user will notice while it runs
 	Undo     string   // what rolling it back does, in plain words
 	// Encode passes the script's arguments base64-encoded (free text).
@@ -587,6 +588,18 @@ func Names() []string {
 	return out
 }
 
+// Pending lists the capabilities the AI may propose that cannot run yet
+// (free commands run through their own checks).
+func Pending() []string {
+	var out []string
+	for _, n := range core.Capabilities() {
+		if _, ok := registry[n]; !ok && n != "free_command" {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 // Describe documents the executable capabilities for the AI's tool list.
 func Describe() string {
 	names := make([]string, 0, len(registry))
@@ -603,7 +616,11 @@ func Describe() string {
 		}
 		sort.Strings(envs)
 		where := "支持环境：" + strings.ReplaceAll(strings.Join(envs, "/"), "*", "全部")
-		if impl, ok := c.Impls["*"]; ok && impl.Cloud != "" {
+		if impl, ok := c.Impls["*"]; ok && impl.Local != "" {
+			where = "Miao Panel 自己的设置，不需要服务器"
+		} else if ok && strings.HasPrefix(impl.Cloud, "ali_") {
+			where = "阿里云，不需要服务器"
+		} else if ok && impl.Cloud != "" {
 			where = "腾讯云，不需要服务器"
 		}
 		fmt.Fprintf(&b, "- %s（%s；%s）", n, c.Title, where)

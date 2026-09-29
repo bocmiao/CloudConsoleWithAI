@@ -157,7 +157,8 @@ func TestCDNPage(t *testing.T) {
 func TestCloudAlarms(t *testing.T) {
 	a, f := tencentApp(t)
 	ctx := context.Background()
-	at := func(ago time.Duration) string { return time.Now().Add(-ago).UTC().Format(time.RFC3339) }
+	now := time.Now() // one clock for the data and the checks: a second may pass in between
+	at := func(ago time.Duration) string { return now.Add(-ago).UTC().Format(time.RFC3339) }
 	f.Alarms = []tencent.Alarm{
 		{ID: "a1", Object: "blog (10.0.0.3)", Content: "CPU利用率 > 90%", Policy: "默认", Status: "ALARM", Level: "Serious", First: at(2 * time.Hour), Last: at(time.Minute)},
 		{ID: "a2", Object: "shop (10.0.0.4)", Content: "内存利用率 > 85%", Status: "OK", Level: "Warn", First: at(30 * time.Hour), Last: at(29 * time.Hour)},

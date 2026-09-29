@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
 	"sort"
 	"strings"
@@ -247,6 +248,71 @@ func (a *App) blockPlanForZone(ctx context.Context, actor, source string, ips []
 		return PlanView{}, err
 	}
 	return a.Plan(p.ID)
+}
+
+// screenBlocks takes out of the AI's eo.ip.block steps what the
+// statistics page never blocks: private addresses, EdgeOne's own nodes and
+// search engine crawlers already verified. A step left with no IP is
+// dropped. It says what it took out.
+func (a *App) screenBlocks(ctx context.Context, steps []core.Step) ([]core.Step, []string, error) {
+	check := map[string]string{}
+	split := func(st core.Step) []string {
+		s, _ := st.Params["ips"].(string)
+		return strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ' ' || r == '，' || r == ';' || r == '\n' })
+	}
+	for _, st := range steps {
+		if st.Capability == "eo.ip.block" {
+			for _, ip := range split(st) {
+				if net.ParseIP(ip) != nil && !visits.Private(ip) {
+					check[ip] = ""
+				}
+			}
+		}
+	}
+	if len(check) == 0 {
+		return steps, nil, nil
+	}
+	nodes, err := a.edgeOneNodes(ctx, check)
+	if err != nil {
+		return nil, nil, userErr("没能向 EdgeOne 核对这些 IP 是不是它的节点（%v），为了不误封，这次没有提交", err)
+	}
+	a.ipf.mu.Lock()
+	crawler := map[string]string{}
+	for ip := range check {
+		if f, ok := a.ipf.crawler[ip]; ok && f.v.name != "" {
+			crawler[ip] = f.v.name
+		}
+	}
+	a.ipf.mu.Unlock()
+	var out []core.Step
+	var notes []string
+	for _, st := range steps {
+		if _, ok := st.Params["ips"].(string); st.Capability != "eo.ip.block" || !ok {
+			out = append(out, st) // not written as text: the check of the step says so
+			continue
+		}
+		var keep []string
+		for _, ip := range split(st) {
+			switch {
+			case net.ParseIP(ip) != nil && visits.Private(ip):
+				notes = append(notes, ip+"：内网地址")
+			case nodes[ip]:
+				notes = append(notes, ip+"：EdgeOne 的节点，不是访客")
+			case crawler[ip] != "":
+				notes = append(notes, ip+"：已验证的搜索引擎爬虫（"+crawler[ip]+"）")
+			default:
+				keep = append(keep, ip)
+			}
+		}
+		if len(keep) == 0 {
+			continue
+		}
+		params := maps.Clone(st.Params)
+		params["ips"] = strings.Join(keep, ",")
+		st.Params = params
+		out = append(out, st)
+	}
+	return out, notes, nil
 }
 
 // ProposeUnblock makes a checklist that lifts Miao Panel's block on IPs

@@ -337,6 +337,12 @@ func (p *Profile) Summary() string {
 		fmt.Fprintf(&b, "磁盘 %s: %s/%s (%d%%)\n", d.Mount, d.Used, d.Size, d.UsePct)
 	}
 	fmt.Fprintf(&b, "面板: %s %s 端口 %s; 适配器 %s\n", p.Panel.Kind, p.Panel.Version, p.Panel.Port, p.Adapter)
+	ssh := strings.TrimSpace(p.value("security", "sshd_port"))
+	if ssh == "" {
+		ssh = "22（默认）"
+	}
+	fmt.Fprintf(&b, "SSH: 端口 %s, 密码登录 %s, root 登录 %s\n", ssh, orDefault(p.value("security", "sshd_password_auth"), "默认"),
+		orDefault(p.value("security", "sshd_root_login"), "默认"))
 	if len(p.Panel.Apps) > 0 {
 		fmt.Fprintf(&b, "面板应用: %s\n", strings.Join(p.Panel.Apps, ", "))
 	}
@@ -358,4 +364,11 @@ func (p *Profile) Summary() string {
 		fmt.Fprintf(&b, "发现[%s]: %s（%s）\n", f.Level, f.Title, f.Detail)
 	}
 	return b.String()
+}
+
+func orDefault(s, d string) string {
+	if s = strings.TrimSpace(s); s == "" {
+		return d
+	}
+	return s
 }

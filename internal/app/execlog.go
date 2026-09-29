@@ -220,7 +220,7 @@ func (a *App) rollback(ctx context.Context, e *store.ExecLog) (store.ExecLog, er
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	sv := store.Server{ID: e.ServerID, Name: e.ServerName}
-	env := &actions.Env{Cloud: a.tencentClient(), Aliyun: a.aliyunClient(), PollInterval: a.PollInterval}
+	env := a.baseEnv()
 	if r.Impl.NeedsServer() {
 		if sv, env, err = a.env(ctx, e.ServerID); err != nil {
 			return store.ExecLog{}, friendlySSHError(err)

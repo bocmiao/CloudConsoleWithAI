@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/bocmiao/CloudConsoleWithAI/internal/actions"
+	"github.com/bocmiao/CloudConsoleWithAI/internal/btpanel"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/onepanel"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/sshx"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/store"
@@ -180,15 +181,29 @@ func (a *App) toolPanelBackups(ctx context.Context, raw json.RawMessage) (string
 		ServerID int64  `json:"server_id"`
 		Website  string `json:"website"`
 	}
-	if err := json.Unmarshal(raw, &in); err != nil {
+	if err := parseArgs(raw, &in); err != nil {
 		return "", err
 	}
+	if msg := a.noPanel(in.ServerID, true); msg != "" {
+		return msg, nil
+	}
 	var id uint
-	err := a.withPanel(ctx, in.ServerID, func(_ store.Server, _ sshx.Conn, p *onepanel.Client) error {
-		s, err := findPanelSite(ctx, p, in.Website)
-		id = s.ID
-		return err
-	})
+	panel := "1Panel"
+	var err error
+	if a.isBT(in.ServerID) {
+		panel = "宝塔"
+		err = a.withBT(ctx, in.ServerID, func(_ store.Server, _ sshx.Conn, b *btpanel.Client) error {
+			s, err := b.Site(ctx, strings.TrimSpace(in.Website))
+			id = uint(s.ID)
+			return err
+		})
+	} else {
+		err = a.withPanel(ctx, in.ServerID, func(_ store.Server, _ sshx.Conn, p *onepanel.Client) error {
+			s, err := findPanelSite(ctx, p, strings.TrimSpace(in.Website))
+			id = s.ID
+			return err
+		})
+	}
 	if err != nil {
 		return "", err
 	}
@@ -197,7 +212,10 @@ func (a *App) toolPanelBackups(ctx context.Context, raw json.RawMessage) (string
 		return "", err
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "网站 %s 的备份（1Panel）：\n", in.Website)
+	fmt.Fprintf(&b, "网站 %s 的备份（%s）：\n", in.Website, panel)
+	if panel == "宝塔" {
+		b.WriteString("宝塔的定时备份在宝塔面板「计划任务」里设置，Miao Panel 不能设置；宝塔的网站备份也只能在宝塔面板里恢复。\n")
+	}
 	if v.Schedule != nil {
 		fmt.Fprintf(&b, "定时备份（Miao Panel 设置）：%s，保留 %d 份，放在 %s", orText(v.Schedule.Time, v.Schedule.Spec), v.Schedule.Keep, v.Schedule.Account)
 		if v.Schedule.LastAt != "" {

@@ -920,6 +920,9 @@ func (a *App) toolPanelWebsite(ctx context.Context, raw json.RawMessage) (string
 	if err != nil {
 		return "", fmt.Errorf("找不到服务器 %d", arg.ServerID)
 	}
+	if msg := a.noPanel(sv.ID, true); msg != "" {
+		return msg, nil
+	}
 	if sv.Adapter == "bt" {
 		return a.toolBTWebsite(ctx, sv, strings.TrimSpace(arg.Website), arg.LogLines)
 	}
@@ -970,9 +973,9 @@ func (a *App) toolPanelWebsite(ctx context.Context, raw json.RawMessage) (string
 		if strings.TrimSpace(v.Rewrite) == "" {
 			b.WriteString("伪静态规则：没有\n")
 		} else {
-			fmt.Fprintf(&b, "伪静态规则（模板 %s）：\n%s\n", orDash(v.RewriteName), clipText(v.Rewrite, 4000))
+			fmt.Fprintf(&b, "伪静态规则（模板 %s）：\n%s\n", orDash(v.RewriteName), clipText(v.Rewrite, 16000))
 		}
-		fmt.Fprintf(&b, "Nginx 配置文件 %s：\n%s\n", v.ConfPath, clipText(v.Conf, 16000))
+		fmt.Fprintf(&b, "Nginx 配置文件 %s：\n%s\n", v.ConfPath, clipText(v.Conf, 40000))
 		for _, p := range v.Problems {
 			fmt.Fprintf(&b, "（%s）\n", p)
 		}

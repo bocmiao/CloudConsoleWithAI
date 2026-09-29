@@ -168,6 +168,16 @@ const STEP_STATUS = {
   interrupted: { icon: 'warn', cls: 'warn', text: '中断：Miao Panel 在执行时被关闭，结果未知' },
 };
 const RISK_NAME = { R0: '只读', R1: '可撤销', R2: '影响线上', R3: '高风险' };
+// Where a checklist runs: its server, or, without one, the cloud it
+// changes or Miao Panel itself.
+const LOCAL_CAPS = ['monitor.settings.set', 'autoblock.set', 'notice.settings.set'];
+function planPlace(plan, servers) {
+  if (plan.serverId) return ((servers || []).find(s => s.id === plan.serverId) || {}).name || '已删除的服务器';
+  const caps = (plan.stepList || []).map(s => s.capability);
+  if (caps.length && caps.every(c => LOCAL_CAPS.includes(c))) return 'Miao Panel';
+  if (caps.length && caps.every(c => c.startsWith('aliyun.'))) return '阿里云';
+  return '腾讯云';
+}
 
 const mbText = v => v >= 1024 ? (v / 1024).toFixed(1) + ' GB' : (v || 0) + ' MB';
 
@@ -3784,7 +3794,7 @@ const InboxPage = {
     watch(() => props.active, v => { if (v) load(); }, { immediate: true });
     watch(() => props.focus, f => { if (f && f.view) view.value = f.view; });
     const waiting = computed(() => (plans.value || []).filter(p => p.status === 'proposed'));
-    const serverName = id => id ? ((props.servers.find(s => s.id === id) || {}).name || '已删除的服务器') : '腾讯云';
+    const serverName = pl => planPlace(pl, props.servers);
     const fmt = t => t ? new Date(t).toLocaleString('zh-CN', { hour12: false, month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
     const done = () => { load(); emit('changed'); };
     const tick = ref(0); // the refresh button reads the reminders again too
@@ -3803,13 +3813,13 @@ const InboxPage = {
     <div class="notice" v-if="error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ error }}</div>
     <template v-if="view === 'todo'">
       <p class="small secondary inbox-lead">AI 和各个页面生成、还没有执行的清单。勾选后执行，执行后可以撤销；不需要的可以不管它。</p>
-      <plan-card v-for="pl in waiting" :key="pl.id" :plan="pl" :server-name="serverName(pl.serverId) + ' · ' + fmt(pl.createdAt)" @done="done"></plan-card>
+      <plan-card v-for="pl in waiting" :key="pl.id" :plan="pl" :server-name="serverName(pl) + ' · ' + fmt(pl.createdAt)" @done="done"></plan-card>
       <div class="group" v-if="plans && !waiting.length"><div class="row secondary"><span class="sdot good"></span>没有等你确认的清单。</div></div>
     </template>
     <notice-page v-if="view === 'notices'" :key="tick" :active="active && view === 'notices'" @unread="n => $emit('unread', n)"></notice-page>
     <template v-if="view === 'plans'">
       <p class="small secondary inbox-lead">所有清单都在这里，可以随时回来执行或撤销。</p>
-      <plan-card v-for="pl in plans || []" :key="pl.id" :plan="pl" :server-name="serverName(pl.serverId) + ' · ' + fmt(pl.createdAt)" @done="done"></plan-card>
+      <plan-card v-for="pl in plans || []" :key="pl.id" :plan="pl" :server-name="serverName(pl) + ' · ' + fmt(pl.createdAt)" @done="done"></plan-card>
       <div class="group" v-if="plans && !plans.length"><div class="row secondary">还没有清单。在「AI 助手」里说出你想做什么，AI 会把修改方案整理成清单。</div></div>
     </template>
   </div>`,
@@ -4021,7 +4031,7 @@ const SitePage = {
       }
     }
     const planServerName = computed(() => {
-      if (plan.value && plan.value.serverId === 0) return '腾讯云';
+      if (plan.value && plan.value.serverId === 0) return planPlace(plan.value);
       return detail.value ? detail.value.serverName : ((props.servers.find(s => s.id === createForm.serverId) || {}).name || '');
     });
 
@@ -7992,11 +8002,16 @@ const app = createApp({
     const adapterName = a => ({ '1panel': '1Panel', bt: '宝塔', linux: '纯 Linux' }[a] || '未识别');
     const fmtTime = t => t ? new Date(t).toLocaleString('zh-CN', { hour12: false }) : '';
     const serverName = id => id === 0 ? '腾讯云' : (servers.value.find(s => s.id === id) || { name: `服务器 ${id}` }).name;
+    const planName = pl => planPlace(pl, servers.value);
     const toolName = t => ({ list_servers: '查看服务器列表', get_server_profile: '读取服务器画像', refresh_server_profile: '重新识别服务器',
       run_check: '执行只读检查', propose_plan: '生成修改清单', tencent_dns: '查询 DNSPod 解析', tencent_eo: '查询 EdgeOne',
       tencent_servers: '查询腾讯云服务器', tencent_server_detail: '查看腾讯云服务器详情', tencent_eo_analytics: '分析网站访问数据',
       certificates: '查看 HTTPS 证书', tencent_eo_security: '查看 EdgeOne 安全防护', panel_websites: '查看 1Panel 网站',
-      site_visits: '统计网站访问日志' }[t] || t);
+      site_visits: '统计网站访问日志', panel_website: '查看网站配置', panel_backups: '查看网站备份', panel_databases: '查看数据库',
+      monitor_status: '查看监控', cloud_account: '查看云账号', cdn_domains: '查看 CDN', cloud_alarms: '查看云监控告警',
+      recent_changes: '查看操作记录', reminders: '查看通知', miao_panel: '查看 Miao Panel 状态', blocked_ips: '查看封禁的 IP',
+      server_files: '读取服务器文件', aliyun_dns: '查询阿里云解析', aliyun_cdn: '查询阿里云 CDN', aliyun_servers: '查询阿里云服务器',
+      tencent_cos: '查询对象存储' }[t] || t);
     // What a lookup is about, in a few words: the server, domain, checks.
     function toolDetail(tool, args) {
       let a;
@@ -8109,7 +8124,7 @@ const app = createApp({
       cloud, cloudList, cloudPick, pickCloud, askAI, securityForm, securityPlan, proposeSecurity, securityDone,
       monitorDown, SERVER_TABS, serverTab, seenServerSites, serverSitesRequest, openServerSite, serverStateText, serverFacts, cloudRequest, openCloud, addFromCloud,
       dockerText, money, mb, meterClass, adapterName,
-      fmtTime, serverName, toolName, toolDetail, actorName, actionName, md, live, liveStatus, thinkTail, stopAnswer,
+      fmtTime, serverName, planName, toolName, toolDetail, actorName, actionName, md, live, liveStatus, thinkTail, stopAnswer,
     };
   },
 });

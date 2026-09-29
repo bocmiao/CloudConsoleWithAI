@@ -119,6 +119,24 @@ func (a *App) btClient(id int64, c sshx.Conn) (*btpanel.Client, error) {
 }
 
 // isBT says whether a server's panel is 宝塔.
+// noPanel explains why a panel tool has nothing to show on a server,
+// or is "" when it may: plain Linux has no panel, and 宝塔 only when bt
+// says the tool reads it too.
+func (a *App) noPanel(id int64, bt bool) string {
+	sv, err := a.Store.GetServer(id)
+	switch {
+	case err != nil:
+		return ""
+	case sv.Adapter == "linux":
+		return sv.Name + " 是没装面板的纯 Linux 服务器，没有面板里的网站、数据库和备份。可以用 run_check（web、db 检查项）看网站和数据库，" +
+			"用 server_files 读 Nginx 配置文件，修改用 free_command。"
+	case sv.Adapter == "bt" && !bt:
+		return sv.Name + " 是宝塔服务器，这一项只支持 1Panel。宝塔的网站用 panel_websites、panel_website、panel_backups 查看，数据库请在宝塔面板里看，" +
+			"或者用 run_check 的 db 检查项。"
+	}
+	return ""
+}
+
 func (a *App) isBT(id int64) bool {
 	sv, err := a.Store.GetServer(id)
 	return err == nil && sv.Adapter == "bt"

@@ -329,7 +329,7 @@
                   </div>
                 </details>
                 <div v-html="md(m.text)"></div>
-                <plan-card v-for="pl in m.plans" :key="pl.id" :plan="pl" :server-name="serverName(pl.serverId)"></plan-card>
+                <plan-card v-for="pl in m.plans" :key="pl.id" :plan="pl" :server-name="planName(pl)"></plan-card>
                 <div class="msg-meta" v-if="m.usage && m.usage.input + m.usage.output > 0">本次约 {{ money(m.cost, m.currency) }} · 输入 {{ m.usage.input }} tokens（缓存 {{ m.usage.cachedInput }}）· 输出 {{ m.usage.output }}</div>
               </div>
             </div>

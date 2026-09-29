@@ -246,7 +246,7 @@ func (a *App) env(ctx context.Context, id int64) (store.Server, *actions.Env, er
 			return sv, nil, err
 		}
 	}
-	env.Cloud, env.Aliyun = a.tencentClient(), a.aliyunClient()
+	env.Cloud, env.Aliyun, env.Local = a.tencentClient(), a.aliyunClient(), localSettings{a}
 	return sv, env, nil
 }
 
@@ -411,7 +411,7 @@ func (a *App) runPlan(planID, serverID int64, who string) {
 			needServer = true
 		}
 	}
-	env := &actions.Env{Cloud: a.tencentClient(), Aliyun: a.aliyunClient(), PollInterval: a.PollInterval}
+	env := a.baseEnv()
 	if needServer {
 		if sv, env, err = a.env(ctx, serverID); err != nil {
 			fail(friendlySSHError(err).Error())

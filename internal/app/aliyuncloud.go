@@ -578,6 +578,9 @@ func serverNameFor(sv store.Server, capability string) string {
 	if sv.ID == 0 && strings.HasPrefix(capability, "aliyun.") {
 		return "阿里云"
 	}
+	if sv.ID == 0 && actions.IsLocal(capability) {
+		return "Miao Panel"
+	}
 	return sv.Name
 }
 

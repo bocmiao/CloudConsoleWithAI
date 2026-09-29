@@ -134,6 +134,9 @@ func (a *App) toolPanelWebsites(ctx context.Context, raw json.RawMessage) (strin
 	if err := parseArgs(raw, &arg); err != nil {
 		return "", err
 	}
+	if msg := a.noPanel(arg.ServerID, true); msg != "" {
+		return msg, nil
+	}
 	if a.isBT(arg.ServerID) {
 		return a.toolBTWebsites(ctx, arg.ServerID)
 	}
@@ -192,6 +195,19 @@ func (a *App) toolPanelWebsites(ctx context.Context, raw json.RawMessage) (strin
 			}
 			fmt.Fprintf(&b, "已安装的应用：%s\n", orDash(strings.Join(apps, "、")))
 		}
+		// What cert.issue can use: the ACME accounts, and the DNS accounts
+		// that DNS validation (and wildcard certificates) need.
+		acct := func(list []onepanel.Account, err error) string {
+			if err != nil {
+				return "读取失败：" + err.Error()
+			}
+			var out []string
+			for _, x := range list {
+				out = append(out, strings.TrimSpace(orText(x.Name, x.Email)+"（"+x.Type+"）"))
+			}
+			return orText(strings.Join(out, "、"), "没有")
+		}
+		fmt.Fprintf(&b, "证书账号：Let's Encrypt 等 %s；DNS 账号（cert.issue method=dns 的 dns_account）%s\n", acct(op.AcmeAccounts(ctx)), acct(op.DNSAccounts(ctx)))
 		b.WriteString("新建网站需要已安装并运行 OpenResty；反向代理网站可以用 site.create 的 app 参数指向上面的应用。")
 	}
 	e.Commands = strings.Join(append([]string{"# 在服务器本机调用 1Panel 接口（只读）"}, cmds...), "\n")

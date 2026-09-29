@@ -938,16 +938,54 @@ func (a *App) ServerHistory(serverID int64, hours int) ([]store.ServerSample, er
 	return out, nil
 }
 
-// toolMonitorStatus tells the AI what the monitoring knows.
-func (a *App) toolMonitorStatus(ctx context.Context, _ json.RawMessage) (string, error) {
-	v, err := a.MonitorPage(ctx)
+// toolMonitorStatus tells the AI what the monitoring knows: everything
+// now, or one website's or server's history.
+func (a *App) toolMonitorStatus(ctx context.Context, raw json.RawMessage) (string, error) {
+	var arg struct {
+		Refresh  bool   `json:"refresh"`
+		Site     string `json:"site"`
+		ServerID int64  `json:"server_id"`
+		Hours    int    `json:"hours"`
+	}
+	if err := parseArgs(raw, &arg); err != nil {
+		return "", err
+	}
+	if arg.Hours <= 0 || arg.Hours > 24*7 {
+		arg.Hours = 24
+	}
+	if arg.ServerID > 0 {
+		return a.serverHistoryText(arg.ServerID, arg.Hours)
+	}
+	var v MonitorView
+	var err error
+	if arg.Refresh {
+		v, err = a.CheckNow(ctx)
+	} else {
+		v, err = a.MonitorPage(ctx)
+	}
 	if err != nil {
 		return "", err
 	}
-	var b strings.Builder
-	if !v.Settings.Enabled {
-		b.WriteString("监控已关闭（监控页 → 设置 可以打开）。\n")
+	if arg.Site != "" {
+		return a.siteHistoryText(v, arg.Site, arg.Hours)
 	}
+	var b strings.Builder
+	st := v.Settings
+	if !st.Enabled {
+		b.WriteString("监控已关闭（可以用 monitor.settings.set 打开）。\n")
+	}
+	fmt.Fprintf(&b, "监控设置：自动监控所有网站 %s，采集服务器 %s，提醒线 磁盘 %d%% 内存 %d%%（持续 6 分钟）CPU %d%%（持续 10 分钟），告警邮箱 %s",
+		kaiGuan(st.Auto), kaiGuan(st.Servers), st.DiskPct, st.MemPct, st.CPUPct, orDash(st.Email))
+	if st.Email != "" && !v.Mail {
+		b.WriteString("（邮件还没配置，发不出去）")
+	}
+	if len(st.Extra) > 0 {
+		b.WriteString("；另外监控：" + strings.Join(st.Extra, "、"))
+	}
+	if len(st.Skip) > 0 {
+		b.WriteString("；不监控：" + strings.Join(st.Skip, "、"))
+	}
+	b.WriteString("\n")
 	fmt.Fprintf(&b, "网站（每分钟检查一次，%d 个）：\n", len(v.Sites))
 	if len(v.Sites) == 0 {
 		b.WriteString("  还没有要监控的网站\n")
@@ -1007,6 +1045,117 @@ func (a *App) toolMonitorStatus(ctx context.Context, _ json.RawMessage) (string,
 			end = "持续 " + lasted(in)
 		}
 		fmt.Fprintf(&b, "  %s %s %s：%s（%s）\n", in.StartedAt, incidentKind[in.Kind], in.Name, in.Reason, end)
+	}
+	return b.String(), nil
+}
+
+// siteHistoryText is one website's checks over the last hours.
+func (a *App) siteHistoryText(v MonitorView, site string, hours int) (string, error) {
+	want := strings.ToLower(strings.TrimSpace(site))
+	var target *SiteMonitor
+	for i, s := range v.Sites {
+		if strings.EqualFold(s.URL, want) || strings.EqualFold(s.Name, want) {
+			target = &v.Sites[i]
+			break
+		}
+	}
+	if target == nil {
+		for i, s := range v.Sites {
+			if strings.Contains(strings.ToLower(s.URL), want) {
+				target = &v.Sites[i]
+				break
+			}
+		}
+	}
+	if target == nil {
+		return "", userErr("监控里没有 %s，先不填 site 看有哪些网站", site)
+	}
+	points, err := a.SiteHistory(target.URL, hours)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s（%s）最近 %d 小时每段的检查次数、失败次数和平均响应时间：\n", target.Name, target.URL, hours)
+	if len(points) == 0 {
+		b.WriteString("没有检查记录\n")
+	}
+	var n, fails int
+	for _, p := range points {
+		n, fails = n+p.N, fails+p.Fails
+		line := fmt.Sprintf("%s 检查 %d 次", time.Unix(p.T, 0).Format("01-02 15:04"), p.N)
+		if p.Fails > 0 {
+			line += fmt.Sprintf(" 失败 %d 次", p.Fails)
+		}
+		if p.N > p.Fails {
+			line += fmt.Sprintf(" 平均 %dms", p.MS)
+		}
+		b.WriteString(line + "\n")
+	}
+	if n > 0 {
+		fmt.Fprintf(&b, "合计检查 %d 次，失败 %d 次，可用率 %.2f%%\n", n, fails, float64(n-fails)*100/float64(n))
+	}
+	return b.String(), nil
+}
+
+// serverHistoryText is one server's samples over the last hours, an
+// hour (or a few) to a line.
+func (a *App) serverHistoryText(serverID int64, hours int) (string, error) {
+	sv, err := a.Store.GetServer(serverID)
+	if err != nil {
+		return "", userErr("找不到服务器 %d", serverID)
+	}
+	list, err := a.Store.ServerSamples(serverID, time.Now().Add(-time.Duration(hours)*time.Hour).UTC().Format(time.RFC3339))
+	if err != nil {
+		return "", err
+	}
+	per := max(1, hours/48) // at most about 48 lines
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s 最近 %d 小时（每行 %d 小时：CPU 平均/最高、内存平均/最高、磁盘、负载最高、网络入/出平均）：\n", sv.Name, hours, per)
+	type bucket struct {
+		n, fails                 int
+		cpu, cpuMax, mem, memMax float64
+		disk, load, rx, tx       float64
+	}
+	var keys []int64
+	buckets := map[int64]*bucket{}
+	for _, m := range list {
+		t, err := time.Parse(time.RFC3339, m.At)
+		if err != nil {
+			continue
+		}
+		k := t.Unix() / int64(per*3600) * int64(per*3600)
+		x := buckets[k]
+		if x == nil {
+			x = &bucket{}
+			buckets[k] = x
+			keys = append(keys, k)
+		}
+		if !m.OK {
+			x.fails++
+			continue
+		}
+		x.n++
+		x.cpu, x.mem, x.rx, x.tx = x.cpu+m.CPU, x.mem+m.Mem, x.rx+m.RX, x.tx+m.TX
+		x.cpuMax, x.memMax, x.load, x.disk = max(x.cpuMax, m.CPU), max(x.memMax, m.Mem), max(x.load, m.Load1), m.Disk
+	}
+	if len(keys) == 0 {
+		b.WriteString("没有采样记录（监控关着、这台服务器不采样，或者是新加的）\n")
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	for _, k := range keys {
+		x := buckets[k]
+		at := time.Unix(k, 0).Format("01-02 15:04")
+		if x.n == 0 {
+			fmt.Fprintf(&b, "%s 连不上（%d 次）\n", at, x.fails)
+			continue
+		}
+		n := float64(x.n)
+		fmt.Fprintf(&b, "%s CPU %.0f%%/%.0f%% 内存 %.0f%%/%.0f%% 磁盘 %.0f%% 负载 %.2f 入 %s/s 出 %s/s", at, x.cpu/n, x.cpuMax, x.mem/n, x.memMax,
+			x.disk, x.load, bytesText(int64(x.rx/n)), bytesText(int64(x.tx/n)))
+		if x.fails > 0 {
+			fmt.Fprintf(&b, " 连不上 %d 次", x.fails)
+		}
+		b.WriteString("\n")
 	}
 	return b.String(), nil
 }

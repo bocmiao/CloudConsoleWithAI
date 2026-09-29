@@ -328,9 +328,9 @@ func (a *App) toolBTWebsite(ctx context.Context, sv store.Server, domain string,
 		if strings.TrimSpace(v.Rewrite) == "" {
 			b.WriteString("伪静态规则：没有\n")
 		} else {
-			fmt.Fprintf(&b, "伪静态规则：\n%s\n", clipText(v.Rewrite, 4000))
+			fmt.Fprintf(&b, "伪静态规则：\n%s\n", clipText(v.Rewrite, 16000))
 		}
-		fmt.Fprintf(&b, "Nginx 配置文件 %s：\n%s\n", v.ConfPath, clipText(v.Conf, 16000))
+		fmt.Fprintf(&b, "Nginx 配置文件 %s：\n%s\n", v.ConfPath, clipText(v.Conf, 40000))
 		for _, p := range v.Problems {
 			fmt.Fprintf(&b, "（%s）\n", p)
 		}

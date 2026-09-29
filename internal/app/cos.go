@@ -1040,6 +1040,8 @@ func (a *App) toolTencentCOS(ctx context.Context, raw json.RawMessage) (string, 
 		Bucket string `json:"bucket"`
 		Region string `json:"region"`
 		Prefix string `json:"prefix"`
+		Marker string `json:"marker"`
+		Usage  bool   `json:"usage"`
 	}
 	if err := parseArgs(raw, &arg); err != nil {
 		return "", err
@@ -1083,8 +1085,10 @@ func (a *App) toolTencentCOS(ctx context.Context, raw json.RawMessage) (string, 
 		fmt.Fprintf(&b, "存储桶 %s（%s）访问权限=%s\n", d.Name, d.Region, d.ACL.Canned)
 		fmt.Fprintf(&b, "防盗链=%s %s %s 空Referer=%s\n", d.Referer.Status, d.Referer.Type, strings.Join(d.Referer.Domains, ","), d.Referer.EmptyRefer)
 		fmt.Fprintf(&b, "跨域规则 %d 条", len(d.CORS))
-		for _, r := range d.CORS {
-			fmt.Fprintf(&b, "；来源 %s 方法 %s", strings.Join(r.Origins, ","), strings.Join(r.Methods, ","))
+		if len(d.CORS) > 0 {
+			// As cos.cors.set takes them: change one rule, send them all.
+			rules, _ := json.Marshal(d.CORS)
+			fmt.Fprintf(&b, "（cos.cors.set 的 rules 格式）：%s", rules)
 		}
 		b.WriteString("\n生命周期规则：")
 		if len(d.Lifecycle) == 0 {
@@ -1096,16 +1100,39 @@ func (a *App) toolTencentCOS(ctx context.Context, raw json.RawMessage) (string, 
 				b.WriteString("（不能用 cos.lifecycle.set 编辑，修改时放进 keep 原样保留）")
 			}
 		}
-		fmt.Fprintf(&b, "\n版本控制=%s 服务端加密=%s 静态网站=%v 存储桶策略允许匿名=%s\n", orDash(d.Versioning), orDash(d.Encryption), d.Website.Enabled, orDash(d.PolicyPublic))
+		fmt.Fprintf(&b, "\n版本控制=%s 服务端加密=%s", orDash(d.Versioning), orDash(d.Encryption))
+		if w := d.Website; w.Enabled {
+			fmt.Fprintf(&b, " 静态网站=开 首页=%s 错误页=%s 跳转HTTPS=%v 访问地址=%s", w.Index, orDash(w.Error), w.HTTPS, orDash(w.Endpoint))
+		} else {
+			b.WriteString(" 静态网站=关")
+		}
+		if strings.TrimSpace(d.Policy) == "" {
+			b.WriteString("\n存储桶策略：无\n")
+		} else {
+			fmt.Fprintf(&b, "\n存储桶策略（允许匿名=%s；cos.policy.set 要写完整的新策略）：%s\n", orDash(d.PolicyPublic), clipText(d.Policy, 8000))
+		}
 		for _, f := range d.Findings {
 			fmt.Fprintf(&b, "发现（%s）：%s\n", f.Level, f.Text)
 		}
 		for k, v := range d.Errors {
 			fmt.Fprintf(&b, "读不到 %s：%s\n", k, v)
 		}
-		l, err := c.ListObjects(ctx, arg.Bucket, arg.Region, arg.Prefix, "/", "", 50)
+		if arg.Usage {
+			if u, err := a.COSUsage(ctx, arg.Bucket, d.Region); err != nil {
+				fmt.Fprintf(&b, "读不到用量：%v\n", err)
+			} else if !u.Available {
+				fmt.Fprintf(&b, "用量：%s\n", orDash(u.Note))
+			} else {
+				fmt.Fprintf(&b, "用量：存储 %s，最近 24 小时外网下行流量 %s（前 24 小时 %s）", humanSize(int64(u.StorageBytes)), humanSize(int64(u.Traffic24h)), humanSize(int64(u.TrafficPrev)))
+				if u.Spike {
+					b.WriteString("，流量突增，可能被盗刷")
+				}
+				b.WriteString("\n")
+			}
+		}
+		l, err := c.ListObjects(ctx, arg.Bucket, arg.Region, arg.Prefix, "/", arg.Marker, 100)
 		if err == nil {
-			fmt.Fprintf(&b, "%s 下的内容（最多 50 个）：", orDefault(arg.Prefix, "根目录"))
+			fmt.Fprintf(&b, "%s 下的内容（一次最多 100 个）：", orDefault(arg.Prefix, "根目录"))
 			for _, f := range l.Folders {
 				b.WriteString("\n  " + f)
 			}
@@ -1113,7 +1140,7 @@ func (a *App) toolTencentCOS(ctx context.Context, raw json.RawMessage) (string, 
 				fmt.Fprintf(&b, "\n  %s %s", o.Key, humanSize(o.Size))
 			}
 			if l.NextMarker != "" {
-				b.WriteString("\n  ……还有更多")
+				fmt.Fprintf(&b, "\n  ……还有更多，marker=%s 接着看", l.NextMarker)
 			}
 		}
 		return b.String(), nil
