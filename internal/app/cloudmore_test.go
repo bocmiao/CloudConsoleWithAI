@@ -263,3 +263,27 @@ func TestEOProtection(t *testing.T) {
 		t.Error("a rule without a threshold was accepted")
 	}
 }
+
+// Once a checklist shows as finished its server is free: undoing a step
+// right away is not refused as "something else is running", even when
+// the clean-up after the run is slow.
+func TestUndoRightAfterDone(t *testing.T) {
+	a, f := tencentApp(t)
+	ctx := context.Background()
+	f.CDN = []*tencent.CDNDomain{{Domain: "old.example.com", Status: "offline", ServiceType: "web", Area: "mainland", Origins: []string{"1.2.3.4"}, OriginType: "ip"}}
+	p, err := a.ProposeCDN(ctx, CDNRequest{Provider: "tencent", Domain: "old.example.com", Op: "on"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.certs.mu.Lock() // the clean-up after the run waits for this
+	go func() { time.Sleep(300 * time.Millisecond); a.certs.mu.Unlock() }()
+	if done := runPlanAll(t, a, p); done.Status != core.PlanDone {
+		t.Fatalf("ran: %s", done.Status)
+	}
+	if _, err := a.UndoPlan(ctx, p.ID); err != nil {
+		t.Fatalf("undo right after: %v", err)
+	}
+	if f.CDN[0].Status != "offline" {
+		t.Errorf("not undone: %s", f.CDN[0].Status)
+	}
+}

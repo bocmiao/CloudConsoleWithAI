@@ -374,8 +374,13 @@ func (a *App) executePlan(id int64, selected []int, who string) (PlanView, error
 func now() string { return time.Now().UTC().Format(time.RFC3339) }
 
 func (a *App) runPlan(planID, serverID int64, who string) {
-	defer a.locks.release(serverID)
-	defer a.forgetCertificates() // a step may have issued or changed one
+	// The server is free again before the checklist says it has finished,
+	// so undoing a step right after it shows as done is not refused.
+	finish := sync.OnceFunc(func() {
+		a.forgetCertificates() // a step may have issued or changed one
+		a.locks.release(serverID)
+	})
+	defer finish()
 	ctx, cancel := context.WithTimeout(withOrigin(context.Background(), OriginPlan), runTimeout)
 	defer cancel()
 	v, err := a.Plan(planID)
@@ -390,6 +395,7 @@ func (a *App) runPlan(planID, serverID int64, who string) {
 			}
 		}
 		v.Status = core.PlanPartial
+		finish()
 		_ = a.savePlan(&v)
 	}
 	sv, err := a.planServer(serverID)
@@ -468,6 +474,7 @@ func (a *App) runPlan(planID, serverID int64, who string) {
 	if !ok {
 		v.Status = core.PlanPartial
 	}
+	finish()
 	_ = a.savePlan(&v)
 }
 
