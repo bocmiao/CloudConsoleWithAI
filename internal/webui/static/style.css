@@ -439,6 +439,7 @@ details.guide code { font: 12px ui-monospace, "SF Mono", Menlo, Consolas, monosp
 .phone-menu, .nav-scrim { display: none; }
 .sidebar:focus { outline: none; }
 @media (max-width: 720px) {
+  .tiles.two { grid-template-columns: minmax(0, 1fr); }
   .app { grid-template-columns: 1fr; height: auto; }
   .main { overflow: visible; overflow-x: clip; }
   .toolbar { padding: 9px 16px 9px 58px; flex-wrap: wrap; row-gap: 8px; }
@@ -613,6 +614,7 @@ button.th-sort:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .kpi-group { margin-bottom: 18px; }
 .kpi-title { font-size: 12px; font-weight: 600; color: var(--text-3); margin: 0 4px 8px; letter-spacing: .02em; }
 .tiles.four { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 0; }
+.tiles.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .tiles.three { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 0; }
 .tile .sub .up { color: var(--good); font-weight: 600; } .tile .sub .down { color: var(--crit); font-weight: 600; }
 

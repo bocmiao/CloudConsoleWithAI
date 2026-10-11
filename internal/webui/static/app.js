@@ -690,6 +690,96 @@ const RankList = {
   </div>`,
 };
 
+// Baize is a separate analytics source. Its tracker metrics must not be
+// added to the request-log totals shown by VisitStats.
+const BaizeStats = {
+  props: { active: Boolean },
+  emits: ['ask'],
+  setup(props, { emit }) {
+    const saved = ref({ baseUrl: '', siteId: '', name: '', hasToken: false });
+    const form = reactive({ baseUrl: '', siteId: '', name: '', token: '' });
+    const editing = ref(false), busy = ref(false), loading = ref(false);
+    const days = ref(7), report = ref(null), error = ref('');
+    let loadAgain = false;
+    const loadKey = () => [saved.value.baseUrl, saved.value.siteId, days.value].join('|');
+    const count = n => n == null ? '—' : Number(n).toLocaleString('zh-CN');
+    const percent = n => n == null ? '—' : (Number(n) * 100).toFixed(1) + '%';
+    async function loadSettings() {
+      try {
+        saved.value = await api('GET', '/api/baize/settings');
+        Object.assign(form, { baseUrl: saved.value.baseUrl || '', siteId: saved.value.siteId || '', name: saved.value.name || '', token: '' });
+        editing.value = !saved.value.hasToken;
+        if (saved.value.hasToken) await load();
+      } catch (e) { error.value = e.message; }
+    }
+    async function load() {
+      if (!saved.value.hasToken) return;
+      if (loading.value) { loadAgain = true; return; }
+      const key = loadKey();
+      loading.value = true; error.value = '';
+      try { const next = await api('GET', '/api/baize/stats?days=' + days.value); if (key === loadKey()) report.value = next; }
+      catch (e) { if (key === loadKey()) error.value = e.message; }
+      finally {
+        loading.value = false;
+        if (loadAgain || key !== loadKey()) { loadAgain = false; if (saved.value.hasToken) load(); }
+      }
+    }
+    async function save() {
+      busy.value = true; error.value = '';
+      try {
+        saved.value = await api('PUT', '/api/baize/settings', { ...form });
+        form.token = ''; editing.value = false; report.value = null;
+        await load();
+      } catch (e) { error.value = e.message; }
+      finally { busy.value = false; }
+    }
+    async function remove() {
+      if (!confirm('从 Miao Panel 移除这个 Baize 站点连接？Baize 内的数据不会删除。')) return;
+      busy.value = true; error.value = '';
+      try { await api('DELETE', '/api/baize/settings'); report.value = null; await loadSettings(); }
+      catch (e) { error.value = e.message; }
+      finally { busy.value = false; }
+    }
+    function ask() {
+      const r = report.value;
+      if (!r) return;
+      const pages = (r.pages || []).slice(0, 5).map(p => `${p.path} ${p.pv} PV`).join('；');
+      const sources = (r.sources || []).slice(0, 5).map(s => `${s.channel} ${s.pv} PV`).join('；');
+      emit('ask', `分析 Baize 站点「${r.name}」最近 ${days.value} 天的数据。PV ${r.pv ?? '不可用'}，UV ${r.uv ?? '不可用'}，会话 ${r.sessions ?? '不可用'}；统计覆盖率 ${percent(r.coverage)}，范围状态 ${r.rangeStatus}。热门页面：${pages || '无'}。来源：${sources || '无'}。请先说明覆盖率和不同统计口径的限制，再给建议。`);
+    }
+    watch(days, load);
+    watch(() => props.active, on => { if (on && !saved.value.hasToken) loadSettings(); });
+    onMounted(loadSettings);
+    return { saved, form, editing, busy, loading, days, report, error, count, percent, load, save, remove, ask };
+  },
+  template: `
+    <div class="vs">
+      <div class="notice"><ui-icon name="info"></ui-icon>Baize 使用站点追踪事件，下面的 PV、UV 与服务器日志、EdgeOne 请求统计口径不同，不能相加。</div>
+      <div class="notice" v-if="error"><ui-icon name="alert"></ui-icon>{{ error }}</div>
+      <section class="card" v-if="editing">
+        <header class="card-head"><h3>连接 Baize 站点</h3></header>
+        <div class="row form"><label class="k" for="baize-url">Baize 地址</label><span class="v"><input id="baize-url" v-model.trim="form.baseUrl" placeholder="https://analytics.example.com" autocomplete="url"></span></div>
+        <div class="row form"><label class="k" for="baize-id">站点 ID</label><span class="v"><input id="baize-id" v-model.trim="form.siteId" placeholder="Baize 站点 ID" autocomplete="off"></span></div>
+        <div class="row form"><label class="k" for="baize-name">显示名称</label><span class="v"><input id="baize-name" v-model.trim="form.name" placeholder="我的网站"></span></div>
+        <div class="row form"><label class="k" for="baize-token">只读 API Token</label><span class="v"><input id="baize-token" v-model="form.token" type="password" :placeholder="saved.hasToken ? '留空则保持原 Token' : '在 Baize 站点内创建 read Token'" autocomplete="off"></span></div>
+        <div class="row"><button class="primary" @click="save" :disabled="busy">保存并读取统计</button><button class="plain" v-if="saved.hasToken" @click="editing = false">取消</button></div>
+        <p class="small secondary">Token 只保存在 Miao Panel 的密钥存储中；创建时选择 read 权限，不要填写采集 write-key。更换地址或站点时需要重新填写 Token。</p>
+      </section>
+      <template v-if="saved.hasToken && !editing">
+        <div class="stat-bar"><b>{{ saved.name }}</b><span class="segmented" role="tablist" aria-label="Baize 时间范围"><button v-for="d in [1, 7, 30]" :key="d" role="tab" :aria-selected="days === d" :class="{on: days === d}" @click="days = d">{{ d === 1 ? '24 小时' : d + ' 天' }}</button></span><span class="grow"></span><button class="plain" @click="load" :disabled="loading">刷新</button><button class="plain" @click="editing = true">连接设置</button><button class="plain" @click="remove" :disabled="busy">移除</button></div>
+        <p class="small secondary"><a :href="saved.baseUrl" target="_blank" rel="noopener noreferrer">打开 Baize 完整分析 ↗</a></p>
+        <div class="notice" v-if="loading && !report"><span class="spinner"></span>正在读取 Baize 统计……</div>
+        <template v-if="report">
+          <div class="notice" v-if="report.coverage !== 1 || report.rangeStatus !== 'complete'">当前统计覆盖率 {{ percent(report.coverage) }}，范围状态 {{ report.rangeStatus }}。未聚合或不可用的区间不能当成零访问。</div>
+          <div class="tiles four"><div class="tile"><div class="label">PV · 页面浏览</div><div class="value">{{ count(report.pv) }}</div></div><div class="tile"><div class="label">UV · 访客</div><div class="value">{{ count(report.uv) }}</div><div class="sub" v-if="report.uv === null">此站点的隐私模式可能不支持跨日 UV</div></div><div class="tile"><div class="label">会话</div><div class="value">{{ count(report.sessions) }}</div></div><div class="tile"><div class="label">跳出率</div><div class="value">{{ percent(report.bounceRate) }}</div></div></div>
+          <p class="small secondary">统计区间 {{ report.from }} 至 {{ report.to }}（UTC） · 平均会话时长 {{ report.averageDuration == null ? '—' : Math.round(report.averageDuration) + ' 秒' }} · 聚合水位 {{ report.watermark || '未知' }}</p>
+          <div class="row"><button class="primary" @click="ask">让 AI 分析这份摘要</button></div>
+          <div class="tiles two"><section class="card"><header class="card-head"><h3>热门页面</h3></header><div class="row" v-for="p in report.pages" :key="p.path"><span class="grow mono">{{ p.path }}</span><b>{{ count(p.pv) }} PV</b></div><div class="row secondary" v-if="!report.pages.length">暂无可用数据</div></section><section class="card"><header class="card-head"><h3>访问来源</h3></header><div class="row" v-for="s in report.sources" :key="s.channel"><span class="grow">{{ s.channel }}</span><b>{{ count(s.pv) }} PV</b></div><div class="row secondary" v-if="!report.sources.length">暂无可用数据</div></section></div>
+        </template>
+      </template>
+    </div>`
+};
+
 // 访问分析: visits counted from access logs (EdgeOne's or a server's),
 // in four sections, with the IPs worth a look and blocking.
 const VisitStats = {
@@ -2338,6 +2428,7 @@ const PALETTE_PAGES = [
   { tab: 'certs', label: '证书', icon: 'lock', keys: 'certs ssl https 证书 续签' },
   { tab: 'cloud', label: '云服务器', icon: 'cloud', keys: 'cloud lighthouse cvm ecs aliyun 阿里云 腾讯云 轻量 云服务器 实例 防火墙 安全组 快照 开机 关机 重启 到期 续费 自动续费 余额 欠费 充值 域名到期' },
   { stats: ['eo'], label: 'EdgeOne', icon: 'bolt', keys: 'edgeone eo cdn 缓存 cache' },
+  { stats: ['baize'], label: 'Baize 分析', icon: 'chart', keys: 'baize 网站分析 访客 追踪' },
   { tab: 'cdn', label: 'CDN', icon: 'layers', keys: 'cdn 加速 缓存 刷新 预热 purge prefetch 腾讯云 阿里云 https 证书' },
   { tab: 'dns', label: '解析', icon: 'globe', keys: 'dns dnspod 解析 域名' },
   { tab: 'storage', label: '存储', icon: 'bucket', keys: 'cos storage bucket 存储桶' },
@@ -7663,7 +7754,7 @@ const app = createApp({
         return '服务器 ' + current.value.server.name + (part ? ' · ' + part : '');
       }
       if (t === 'sites') return siteContext.value || '网站管理';
-      if (t === 'stats') return statsView.value === 'eo' ? 'EdgeOne 实时统计' : (visitSection.value === 'security' ? '访问统计 · 安全' : '访问统计');
+      if (t === 'stats') return statsView.value === 'eo' ? 'EdgeOne 实时统计' : statsView.value === 'baize' ? 'Baize 分析' : (visitSection.value === 'security' ? '访问统计 · 安全' : '访问统计');
       return PAGE_NAMES[t] || '';
     });
     function toggleAI(open) {
@@ -8026,7 +8117,7 @@ const app = createApp({
     }
     const actorName = a => ({ user: '你', ai: 'AI', system: '系统', auto: '自动' }[a] || a);
     const actionName = a => ({ 'server.add': '添加服务器', 'server.delete': '删除服务器', 'server.test': '测试连接', 'server.discover': '识别环境',
-      'server.hostkey.recorded': '记录服务器指纹', 'settings.ai': '修改 AI 设置', 'ai.chat': 'AI 对话', 'plan.propose': 'AI 生成清单',
+      'server.hostkey.recorded': '记录服务器指纹', 'settings.ai': '修改 AI 设置', 'settings.baize': '修改 Baize 连接', 'ai.chat': 'AI 对话', 'plan.propose': 'AI 生成清单',
       'plan.execute': '执行清单', 'plan.step': '执行步骤', 'plan.undo': '撤销步骤', 'exec.rollback': '回滚', 'onepanel.settings': '修改 1Panel 接口设置', 'settings.tencent': '修改腾讯云密钥',
       'terminal.open': '打开终端', 'terminal.close': '关闭终端', 'settings.autoblock': '修改自动封禁', 'settings.notices': '修改通知设置',
       'settings.webhook': '修改推送地址', 'visits.judge': 'AI 研判 IP',
@@ -8136,6 +8227,7 @@ app.component('line-chart', LineChart);
 app.component('eo-stats', EoStats);
 app.component('notice-page', NoticePage);
 app.component('visit-stats', VisitStats);
+app.component('baize-stats', BaizeStats);
 app.component('rank-list', RankList);
 app.component('terminal-page', TerminalPage);
 app.component('cert-page', CertPage);

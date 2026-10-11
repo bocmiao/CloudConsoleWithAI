@@ -153,6 +153,10 @@ func (s *Server) routes() {
 	api("POST /api/servers/{id}/apps/plan", s.serverAppsPlan)
 	api("GET /api/visits/sources", s.visitSources)
 	api("GET /api/visits", s.getVisits)
+	api("GET /api/baize/settings", s.getBaizeSettings)
+	api("PUT /api/baize/settings", s.putBaizeSettings)
+	api("DELETE /api/baize/settings", s.deleteBaizeSettings)
+	api("GET /api/baize/stats", s.getBaizeStats)
 	api("GET /api/visits/blocked", s.blockedIPs)
 	api("POST /api/visits/block", s.blockIPs)
 	api("POST /api/servers/{id}/realip", s.proposeRealIP)
@@ -544,6 +548,33 @@ func (s *Server) testAI(_ http.ResponseWriter, r *http.Request) (any, error) {
 
 func (s *Server) visitSources(_ http.ResponseWriter, _ *http.Request) (any, error) {
 	return s.app.VisitSources()
+}
+
+func (s *Server) getBaizeSettings(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return s.app.BaizeSettings()
+}
+
+func (s *Server) putBaizeSettings(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req struct {
+		app.BaizeSettings
+		Token string `json:"token"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.SaveBaizeSettings(req.BaizeSettings, req.Token)
+}
+
+func (s *Server) deleteBaizeSettings(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return map[string]bool{"ok": true}, s.app.DeleteBaizeSettings()
+}
+
+func (s *Server) getBaizeStats(_ http.ResponseWriter, r *http.Request) (any, error) {
+	days, err := strconv.Atoi(r.URL.Query().Get("days"))
+	if err != nil {
+		return nil, &app.UserError{Msg: "时间范围只能是 1、7 或 30 天"}
+	}
+	return s.app.BaizeStats(r.Context(), days)
 }
 
 // getVisits answers at once with the last visits report of a source
