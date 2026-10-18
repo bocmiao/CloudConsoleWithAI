@@ -304,6 +304,59 @@ func (a *App) eoCerts(ctx context.Context, c *tencent.Client) ([]CertEntry, stri
 	return out, ""
 }
 
+// SSLCertOption is one certificate in Tencent Cloud's SSL 证书, for picking
+// an existing certificate on the 解析 page's HTTPS setting.
+type SSLCertOption struct {
+	ID        string   `json:"id"`
+	Names     []string `json:"names"` // main domain and subject alternative names
+	Alias     string   `json:"alias,omitempty"`
+	Issuer    string   `json:"issuer,omitempty"`
+	Expires   string   `json:"expires,omitempty"` // YYYY-MM-DD
+	DaysLeft  *int     `json:"daysLeft,omitempty"`
+	AutoRenew bool     `json:"autoRenew"` // hosted by Tencent Cloud, renewed there
+	Usable    bool     `json:"usable"`    // issued and not expired
+	Status    string   `json:"status"`
+}
+
+// SSLCertOptions lists the account's certificates in Tencent Cloud's SSL
+// 证书, newest and usable ones first.
+func (a *App) SSLCertOptions(ctx context.Context) ([]SSLCertOption, error) {
+	c, err := needTencent(a)
+	if err != nil {
+		return nil, err
+	}
+	list, err := c.SSLCertificates(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("读取腾讯云 SSL 证书失败：%w", err)
+	}
+	out := make([]SSLCertOption, 0, len(list))
+	for _, s := range list {
+		o := SSLCertOption{ID: s.ID, Names: uniqLower(s.Names()), Alias: s.Alias, Issuer: orDash(s.Product),
+			Status: orDash(s.StatusName), AutoRenew: s.HostingStatus != nil && *s.HostingStatus >= 0}
+		if t, ok := parseAnyTime(s.EndTime); ok {
+			o.Expires, o.DaysLeft = t.Format("2006-01-02"), days(t)
+		}
+		o.Usable = s.Status == 1 && (o.DaysLeft == nil || *o.DaysLeft >= 0)
+		switch s.Status {
+		case 1:
+			o.Status = "已签发"
+		case 3:
+			o.Status = "已过期"
+		}
+		out = append(out, o)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Usable != out[j].Usable {
+			return out[i].Usable
+		}
+		if out[i].DaysLeft != nil && out[j].DaysLeft != nil && *out[i].DaysLeft != *out[j].DaysLeft {
+			return *out[i].DaysLeft > *out[j].DaysLeft
+		}
+		return strings.Join(out[i].Names, ",") < strings.Join(out[j].Names, ",")
+	})
+	return out, nil
+}
+
 // sslCerts reads Tencent Cloud's SSL certificate service.
 func sslCerts(ctx context.Context, c *tencent.Client) ([]CertEntry, string) {
 	list, err := c.SSLCertificates(ctx)

@@ -48,7 +48,7 @@ run_check 做只读检查，server_files 读任意配置文件和日志、列出
 - 先查清楚：域名是否在 DNSPod、EdgeOne 里有没有它所在的站点、加速域名是否已经存在、这个主机记录现在解析到哪里、网站在哪台服务器（公网 IP 用 list_servers 查）；
   1Panel 服务器用 panel_websites 看网站是否已经建好、有哪些应用可以代理；
 - 完整的清单顺序：eo.zone.create（EdgeOne 里还没有这个主域名的站点时）→ site.create（服务器上还没有这个网站时，1Panel 服务器）→ eo.domain.add（回源到服务器公网 IP）
-  → dns.record.set（point_to=eo）→ eo.https.set（免费证书）。已经做好的步骤不要重复加；
+  → dns.record.set（point_to=eo）→ eo.https.set（免费证书，或者用腾讯云 SSL 证书里已有的证书）。已经做好的步骤不要重复加；
 - eo.zone.create 要绑定账号里现有的、还能绑定站点的套餐（tencent_eo 不填 domain 会列出套餐）；没有可用套餐时告诉用户先在 EdgeOne 控制台购买或领取（涉及计费，要用户自己操作）。
   加速区域包括中国大陆时域名要有 ICP 备案，没备案用 overseas；
 - 腾讯云和服务器操作可以放在同一份清单里（server_id 填这台服务器）；只涉及腾讯云的清单 server_id 填 0；
@@ -119,7 +119,7 @@ EdgeOne 安全防护：先用 tencent_eo_security 看现有规则，再结合访
 - 已经封禁了哪些 IP 用 blocked_ips 看完整列表（tencent_eo_security 里的规则内容会截断）。
 
 HTTPS 证书：先用 certificates 看现状。
-- 经过 EdgeOne 的网站，访问者看到的是 EdgeOne 边缘的证书：用 eo.https.set 申请 EdgeOne 免费证书，EdgeOne 会自动续签；EdgeOne 用 HTTP 回源时源站不需要证书；
+- 经过 EdgeOne 的网站，访问者看到的是 EdgeOne 边缘的证书：用 eo.https.set 申请 EdgeOne 免费证书（mode=eofreecert，默认），EdgeOne 会自动续签；用户想用腾讯云 SSL 证书里已有的证书（比如上传的泛域名证书）时，mode=sslcert、cert 填 certificates 里的 ssl- 开头的 ID，证书必须包含这个加速域名；EdgeOne 用 HTTP 回源时源站不需要证书；
 - 直接访问服务器的网站（1Panel）：用 cert.issue 让 1Panel 向 Let's Encrypt 申请并开启自动续签（1Panel 在服务器上 24 小时自动续签，不依赖 Miao Panel 开着），同时给网站开启 HTTPS；
   默认 HTTP 验证，域名必须已经解析到这台服务器（或经过 EdgeOne）；泛域名证书必须用 method=dns，需要 1Panel 里有 DNS 账号（panel_websites 会列出证书账号和 DNS 账号）；1Panel 里还没有 Let's Encrypt 账号时要向用户要一个邮箱；
   网站前面有 EdgeOne 并且用 HTTP 回源时，http_mode 保持 HTTPAlso，不要设成跳转，否则会循环跳转；

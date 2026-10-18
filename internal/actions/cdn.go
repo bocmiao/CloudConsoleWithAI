@@ -207,7 +207,7 @@ func applyCDNHTTPS(ctx context.Context, env *Env, v map[string]string, out *Outc
 			return refused(out, "腾讯云 SSL 证书里没有证书 %s", cert)
 		case found.Status != 1:
 			return refused(out, "证书 %s 还不能用（%s）", cert, found.StatusName)
-		case !sslCovers(*found, d.Domain):
+		case !found.Covers(d.Domain):
 			return refused(out, "证书 %s 不包含 %s（证书的域名：%s）", cert, d.Domain, strings.Join(append([]string{found.Domain}, found.SANs...), "、"))
 		}
 	}
@@ -231,23 +231,6 @@ func applyCDNHTTPS(ctx context.Context, env *Env, v map[string]string, out *Outc
 	}
 	out.Status = StatusDone
 	return *out
-}
-
-// sslCovers reports whether a certificate is for host (a wildcard covers
-// one level).
-func sslCovers(c tencent.SSLCert, host string) bool {
-	for _, n := range append([]string{c.Domain}, c.SANs...) {
-		n = strings.ToLower(n)
-		if n == host {
-			return true
-		}
-		if rest, ok := strings.CutPrefix(n, "*."); ok {
-			if sub, ok := strings.CutSuffix(host, "."+rest); ok && sub != "" && !strings.Contains(sub, ".") {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func cdnStatusText(on bool) string {

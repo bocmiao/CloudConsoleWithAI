@@ -2,6 +2,7 @@ package tencent
 
 import (
 	"context"
+	"strings"
 )
 
 const sslVersion = "2019-12-05"
@@ -21,6 +22,44 @@ type SSLCert struct {
 	IsDV          bool     `json:"IsDv"`
 	AutoRenewFlag int      `json:"AutoRenewFlag"`
 	HostingStatus *int     `json:"HostingStatus"` // 0/5/10 hosted (renewed and replaced automatically), -1 not
+}
+
+// Names lists the names a certificate is for: its main domain and the
+// subject alternative names, without repeats.
+func (s SSLCert) Names() []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(n string) {
+		n = strings.TrimSpace(n)
+		if n == "" || seen[strings.ToLower(n)] {
+			return
+		}
+		seen[strings.ToLower(n)] = true
+		out = append(out, n)
+	}
+	add(s.Domain)
+	for _, n := range s.SANs {
+		add(n)
+	}
+	return out
+}
+
+// Covers reports whether the certificate is for host: a name itself, or one
+// level under a wildcard.
+func (s SSLCert) Covers(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	for _, n := range s.Names() {
+		n = strings.ToLower(strings.TrimSuffix(n, "."))
+		if n == host {
+			return true
+		}
+		if rest, ok := strings.CutPrefix(n, "*."); ok {
+			if sub, ok := strings.CutSuffix(host, "."+rest); ok && sub != "" && !strings.Contains(sub, ".") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // SSLCertificates lists the account's server certificates.

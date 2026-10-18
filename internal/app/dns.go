@@ -320,7 +320,8 @@ type DNSRequest struct {
 	Target   string `json:"target"` // quick: server, ip, host
 	ServerID int64  `json:"serverId"`
 	EdgeOne  bool   `json:"edgeone"`
-	HTTPS    bool   `json:"https"`    // quick with EdgeOne: a free certificate
+	HTTPS    bool   `json:"https"`    // quick with EdgeOne: turn on HTTPS
+	Cert     string `json:"cert"`     // quick with EdgeOne: a Tencent SSL certificate ID; empty means EdgeOne's free certificate
 	Protocol string `json:"protocol"` // quick with EdgeOne: HTTP or HTTPS to the origin
 	Area     string `json:"area"`     // quick with EdgeOne, new site: mainland, overseas, global
 
@@ -641,9 +642,22 @@ func (a *App) dnsQuick(ctx context.Context, c *tencent.Client, req DNSRequest) (
 	steps = append(steps, core.Step{Capability: "dns.record.set", Summary: fmt.Sprintf("把 %s 的解析改成 EdgeOne 分配的 CNAME", name),
 		Params: map[string]any{"domain": req.Domain, "subdomain": req.Sub, "point_to": "eo"}})
 	if req.HTTPS {
-		steps = append(steps, core.Step{Capability: "eo.https.set", Summary: fmt.Sprintf("给 %s 申请 EdgeOne 免费证书，开启 HTTPS（自动续签）", name),
-			Params: map[string]any{"domain": name, "mode": "eofreecert"}})
-		notes = append(notes, "免费证书要等解析生效后才能申请下来；如果这一步提示还没生效，过几分钟再单独执行它就行。")
+		if certID := strings.TrimSpace(req.Cert); certID != "" {
+			cert, err := sslCertFor(ctx, c, certID, name)
+			if err != nil {
+				return "", "", nil, err
+			}
+			steps = append(steps, core.Step{Capability: "eo.https.set", Summary: fmt.Sprintf("用腾讯云 SSL 证书 %s 给 %s 开启 HTTPS", strings.Join(cert.Names(), "、"), name),
+				Params: map[string]any{"domain": name, "mode": "sslcert", "cert": cert.ID}})
+			notes = append(notes, "HTTPS 用腾讯云 SSL 证书里已有的证书（"+strings.Join(cert.Names(), "、")+"），不会申请新证书；到期前要在腾讯云 SSL 证书控制台续签或换一张。")
+			if !existing {
+				notes = append(notes, "加速域名刚添加时还在配置中，证书部署可能失败；如果这一步提示失败，等加速域名上线后再单独执行一次就行。")
+			}
+		} else {
+			steps = append(steps, core.Step{Capability: "eo.https.set", Summary: fmt.Sprintf("给 %s 申请 EdgeOne 免费证书，开启 HTTPS（自动续签）", name),
+				Params: map[string]any{"domain": name, "mode": "eofreecert"}})
+			notes = append(notes, "免费证书要等解析生效后才能申请下来；如果这一步提示还没生效，过几分钟再单独执行它就行。")
+		}
 	}
 	if proto == "HTTP" {
 		notes = append(notes, "EdgeOne 用 HTTP 回源，服务器上不需要证书。")
@@ -653,6 +667,28 @@ func (a *App) dnsQuick(ctx context.Context, c *tencent.Client, req DNSRequest) (
 	reason := fmt.Sprintf("让 %s 经过 EdgeOne：访客先到 EdgeOne 节点，再由 EdgeOne 回源到 %s。这个名字原来的 A、AAAA、CNAME 记录会被替换成 EdgeOne 的 CNAME，按 TTL 几分钟内在各地生效。每一步都可以撤销。\n%s",
 		name, via, strings.Join(notes, ""))
 	return "解析 " + name + " → " + via + "（经过 EdgeOne）", reason, steps, nil
+}
+
+// sslCertFor reads one certificate from Tencent Cloud's SSL service and
+// makes sure it can serve name.
+func sslCertFor(ctx context.Context, c *tencent.Client, id, name string) (tencent.SSLCert, error) {
+	list, err := c.SSLCertificates(ctx)
+	if err != nil {
+		return tencent.SSLCert{}, fmt.Errorf("读取腾讯云 SSL 证书失败：%w", err)
+	}
+	for _, s := range list {
+		if s.ID != id {
+			continue
+		}
+		switch {
+		case s.Status != 1:
+			return s, userErr("证书 %s 还不能用（%s）", id, orDash(s.StatusName))
+		case !s.Covers(name):
+			return s, userErr("证书 %s 不包含 %s（证书的域名：%s）", id, name, strings.Join(s.Names(), "、"))
+		}
+		return s, nil
+	}
+	return tencent.SSLCert{}, userErr("腾讯云 SSL 证书里没有证书 %s，请刷新后重新选", id)
 }
 
 func (a *App) eoDomainFor(ctx context.Context, c *tencent.Client, name string) (tencent.AccelerationDomain, error) {

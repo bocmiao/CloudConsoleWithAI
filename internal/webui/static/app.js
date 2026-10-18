@@ -2216,7 +2216,16 @@ const DnsPage = {
     }
 
     // One click: a name to a server, an IP or a host, through EdgeOne if wanted.
-    const quick = reactive({ open: false, sub: '', target: 'server', serverId: 0, value: '', edgeone: false, https: true, protocol: 'HTTP', area: 'mainland' });
+    const quick = reactive({ open: false, sub: '', target: 'server', serverId: 0, value: '', edgeone: false, https: true, cert: '', protocol: 'HTTP', area: 'mainland' });
+    // Certificates in Tencent Cloud's SSL 证书, to pick one instead of a free one.
+    const certOptions = ref([]), certsLoading = ref(false), certsError = ref(''), certsLoaded = ref(false);
+    async function loadCerts() {
+      if (provider.value !== 'dnspod' || certsLoading.value || certsLoaded.value) return;
+      certsLoading.value = true; certsError.value = '';
+      try { certOptions.value = await api('GET', '/api/certificates/tencent'); certsLoaded.value = true; }
+      catch (e) { certsError.value = e.message; }
+      finally { certsLoading.value = false; }
+    }
     const originEdit = reactive({ open: false, sub: '', protocol: 'HTTPS' });
     function openOrigin(r) { formError.value = ''; Object.assign(originEdit, { open: true, sub: r.name, protocol: 'HTTPS' }); }
     function submitOrigin() { propose({ op: 'eo_origin', sub: originEdit.sub, protocol: originEdit.protocol }); }
@@ -2224,15 +2233,22 @@ const DnsPage = {
       formError.value = '';
       const s = props.servers[0];
       Object.assign(quick, { open: true, sub: '', target: s ? 'server' : 'ip', serverId: s ? s.id : 0, value: '',
-        edgeone: !!(zone.value && zone.value.type === 'partial' && eoUsable.value), https: true, protocol: 'HTTP', area: 'mainland' }, pre || {});
+        edgeone: !!(zone.value && zone.value.type === 'partial' && eoUsable.value), https: true, cert: '', protocol: 'HTTP', area: 'mainland' }, pre || {});
+      loadCerts();
     }
     function submitQuick() {
       propose({ op: 'quick', sub: quick.sub.trim() || '@', target: quick.target, serverId: quick.serverId, value: quick.value.trim(),
-        edgeone: quick.edgeone, https: quick.https, protocol: quick.protocol, area: quick.area });
+        edgeone: quick.edgeone, https: quick.https, cert: quick.edgeone && quick.https ? quick.cert : '', protocol: quick.protocol, area: quick.area });
     }
     // An error is about what was sent; editing the form clears it.
     watch(() => JSON.stringify([editor, quick, originEdit]), () => { if (!planning.value) formError.value = ''; });
     const quickName = computed(() => ((quick.sub.trim() || '@') === '@' ? '' : quick.sub.trim() + '.') + domain.value);
+    // Only the certificates that can serve this name, newest first.
+    const certChoices = computed(() => certOptions.value.filter(c => c.usable && certCovers(c.names, quickName.value)));
+    const certPicked = computed(() => certOptions.value.find(c => c.id === quick.cert) || null);
+    const certNotListed = computed(() => !!(quick.cert && certPicked.value && !certChoices.value.some(c => c.id === quick.cert)));
+    const certWrongName = computed(() => !!(quick.cert && certPicked.value && !certCovers(certPicked.value.names, quickName.value)));
+    const certLabel = c => `${c.alias ? c.alias + ' · ' : ''}${c.names.join('、')}（${c.expires ? c.expires + ' 到期' : c.status}${c.autoRenew ? '，腾讯云托管续期' : ''}）`;
 
     const del = r => propose({ op: 'delete', id: r.id, rid: r.rid });
     const toggle = r => propose({ op: 'status', id: r.id, rid: r.rid, status: r.enabled ? 'disable' : 'enable' });
@@ -2244,6 +2260,7 @@ const DnsPage = {
 
     return { RECORD_TYPES, EO_AREAS, VALUE_HINT, domains, domainsLoaded, loadDomains, eoError, domain, data, loading, error, q, typeFilter, plan, planning, lines, formError,
       current, zone, eoUsable, shown, load, planDone, closePlan, editor, openEditor, editorTTLs, submitEditor, quick, openQuick, submitQuick, quickName, originEdit, openOrigin, submitOrigin,
+      certChoices, certPicked, certNotListed, certWrongName, certLabel, certsLoading, certsError,
       del, toggle, eoPoint, eoOff, eoOn, canEO, ttlText, planServerName, anyCloud, both, listErrors, provider, pick, dkey };
   },
   template: `
@@ -2310,7 +2327,7 @@ const DnsPage = {
                   <span class="tag warn" v-if="!r.enabled">已暂停</span>
                   <span class="tag" v-if="r.system">DNSPod 自带</span>
                   <template v-if="r.edgeone">
-                    <template v-if="r.edgeone.points"><span class="tag on">经过 EdgeOne</span><div class="small tertiary">回源到 {{ r.edgeone.origin }}<template v-if="r.edgeone.https === 'eofreecert'"> · 免费证书</template></div></template>
+                    <template v-if="r.edgeone.points"><span class="tag on">经过 EdgeOne</span><div class="small tertiary">回源到 {{ r.edgeone.origin }}<template v-if="r.edgeone.https === 'eofreecert'"> · 免费证书</template><template v-else-if="r.edgeone.https === 'sslcert'"> · 腾讯云证书</template></div></template>
                     <template v-else><span class="tag warn">没走 EdgeOne</span><div class="small tertiary">{{ r.line === '默认' ? 'EdgeOne 里有这个域名，解析没指过去' : '这条线路的访客不经过 EdgeOne' }}</div></template>
                   </template>
                   <span class="tertiary" v-if="r.enabled && !r.system && !r.edgeone">—</span>
@@ -2371,13 +2388,26 @@ const DnsPage = {
               <button :class="{on: quick.protocol === 'HTTP'}" @click="quick.protocol = 'HTTP'">HTTP</button>
               <button :class="{on: quick.protocol === 'HTTPS'}" @click="quick.protocol = 'HTTPS'">HTTPS</button></span>
               <span class="small secondary block">服务器上这个网站没有证书就选 HTTP。</span></span></div>
-            <label class="row form dns-check"><input type="checkbox" v-model="quick.https"><span class="grow">申请 EdgeOne 免费证书，开启 HTTPS<span class="small secondary block">自动续签；要等解析生效后才申请得下来。</span></span></label>
+            <label class="row form dns-check"><input type="checkbox" v-model="quick.https"><span class="grow">开启 HTTPS<span class="small secondary block">可以申请 EdgeOne 免费证书，也可以选一张已经托管在腾讯云 SSL 证书里的证书。</span></span></label>
+            <div class="row form" v-if="quick.https"><span class="k">证书</span><span class="v">
+              <select v-model="quick.cert" aria-label="HTTPS 证书">
+                <option value="">申请 EdgeOne 免费证书（自动续签）</option>
+                <option v-for="c in certChoices" :key="c.id" :value="c.id">{{ certLabel(c) }}</option>
+                <option v-if="certNotListed" :value="quick.cert">{{ certLabel(certPicked) }}（不包含 {{ quickName }}）</option>
+              </select>
+              <span class="small secondary block" v-if="!quick.cert">自动续签；要等解析生效后才申请得下来。</span>
+              <span class="small secondary block" v-else-if="certPicked">用腾讯云 SSL 证书里已有的证书，不会申请新证书；{{ certPicked.autoRenew ? '腾讯云托管会续期' : '到期前要自己续签或换一张' }}{{ certPicked.expires ? '，' + certPicked.expires + ' 到期' : '' }}。</span>
+              <span class="small secondary block" v-if="certsLoading"><span class="spinner inline"></span>正在读腾讯云 SSL 证书……</span>
+              <span class="small secondary block" v-else-if="certsError">读不到腾讯云 SSL 证书：{{ certsError }}。仍然可以申请 EdgeOne 免费证书。</span>
+              <span class="small secondary block" v-else-if="!certChoices.length && !quick.cert">腾讯云 SSL 证书里没有包含 {{ quickName }} 的可用证书；可以在「证书」页申请一张，或者用上面的免费证书。</span>
+              <span class="small warn block" v-if="certWrongName">选中的证书不包含 {{ quickName }}，请重新选一张。</span>
+            </span></div>
           </template>
         </div>
         <div class="dns-preview small secondary">{{ quickName }} → {{ quick.target === 'server' ? ((servers.find(s => s.id === quick.serverId) || {}).host || '') : (quick.value || '…') }}{{ quick.edgeone ? '（经过 EdgeOne）' : '' }}</div>
         <div class="notice" v-if="formError"><ui-icon name="alert" class="st-crit"></ui-icon>{{ formError }}</div>
         <div class="sheet-actions"><button @click="quick.open = false">取消</button>
-          <button class="primary" @click="submitQuick" :disabled="planning || (quick.target !== 'server' && !quick.value.trim())">{{ planning ? '正在生成……' : '生成清单' }}</button></div>
+          <button class="primary" @click="submitQuick" :disabled="planning || certWrongName || (quick.target !== 'server' && !quick.value.trim())">{{ planning ? '正在生成……' : '生成清单' }}</button></div>
       </div>
     </div>
 

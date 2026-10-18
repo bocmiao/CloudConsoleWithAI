@@ -33,6 +33,7 @@ type Record = tencent.Record
 type Domain struct {
 	Zone, Name, Status, Cname, Origin, Protocol string
 	CertMode, CertStatus                        string
+	CertIDs                                     []string // mode sslcert: the certificates from SSL
 }
 
 // Fake is the running fake.
@@ -340,11 +341,17 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			var certs []map[string]string
-			if d.CertMode == "eofreecert" {
+			switch d.CertMode {
+			case "eofreecert":
 				certs = []map[string]string{{"CertId": "eofree-1", "Type": "managed", "Status": d.CertStatus,
 					"ExpireTime": time.Now().Add(80 * 24 * time.Hour).UTC().Format(time.RFC3339)}}
 				if d.CertStatus == "applying" {
 					d.CertStatus = "deployed" // issued by the next look
+				}
+			case "sslcert":
+				for _, id := range d.CertIDs {
+					certs = append(certs, map[string]string{"CertId": id, "Type": "upload", "Status": d.CertStatus,
+						"ExpireTime": time.Now().Add(80 * 24 * time.Hour).UTC().Format(time.RFC3339)})
 				}
 			}
 			out = append(out, map[string]any{
@@ -406,9 +413,23 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for _, name := range strs("Hosts") {
 			for _, d := range f.Domains {
 				if d.Name == name {
-					d.CertMode, d.CertStatus = str("Mode"), ""
-					if d.CertMode == "eofreecert" {
+					d.CertMode, d.CertStatus, d.CertIDs = str("Mode"), "", nil
+					switch d.CertMode {
+					case "eofreecert":
 						d.CertStatus = "applying"
+					case "sslcert":
+						if list, _ := in["ServerCertInfo"].([]any); len(list) > 0 {
+							for _, item := range list {
+								if m, _ := item.(map[string]any); m != nil {
+									if id, _ := m["CertId"].(string); id != "" {
+										d.CertIDs = append(d.CertIDs, id)
+									}
+								}
+							}
+						}
+						if len(d.CertIDs) > 0 {
+							d.CertStatus = "deployed"
+						}
 					}
 				}
 			}
