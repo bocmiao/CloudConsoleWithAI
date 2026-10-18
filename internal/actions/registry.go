@@ -177,10 +177,21 @@ func init() {
 		Name: "eo.https.set", Title: "设置 EdgeOne HTTPS 证书", Risk: core.R2, Reversible: true,
 		Params: []Param{
 			{Name: "domain", Kind: "host", Required: true, Desc: "EdgeOne 加速域名，例如 blog.example.com"},
-			{Name: "mode", Kind: "enum", Enum: []string{"eofreecert", "disable"}, Default: "eofreecert",
-				Desc: "eofreecert：申请并部署免费证书（自动续签，要求域名已经解析到 EdgeOne）；disable：关闭"},
+			{Name: "mode", Kind: "enum", Enum: []string{"eofreecert", "sslcert", "disable"}, Default: "eofreecert",
+				Desc: "eofreecert：申请并部署 EdgeOne 免费证书（自动续签，要求域名已经解析到 EdgeOne）；sslcert：部署腾讯云 SSL 证书里已有的证书（要填 cert）；disable：关闭"},
+			{Name: "cert", Kind: "name",
+				Desc: "mode=sslcert 时用：腾讯云 SSL 证书的 ID（ssl- 开头，certificates 或 ssl.cert.apply 返回的 ID）；证书要包含这个加速域名"},
 		},
-		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "eo_https", Downtime: "不影响访问，证书签发一般需要几分钟",
+		Check: func(v map[string]string) error {
+			if v["mode"] == "sslcert" && v["cert"] == "" {
+				return fmt.Errorf("mode=sslcert 时要填 cert（腾讯云 SSL 证书 ID）")
+			}
+			if v["mode"] != "sslcert" && v["cert"] != "" {
+				return fmt.Errorf("cert 只在 mode=sslcert 时填")
+			}
+			return nil
+		},
+		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "eo_https", Downtime: "不影响访问，证书签发或部署一般需要几分钟",
 			Undo: "把证书设置恢复成修改前的样子"}},
 	})
 	register(&Capability{

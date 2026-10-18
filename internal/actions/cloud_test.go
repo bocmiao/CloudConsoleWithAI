@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bocmiao/CloudConsoleWithAI/internal/tencent"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/tencent/tencenttest"
 )
 
@@ -71,6 +72,46 @@ func TestEdgeOneSiteFlowAndUndo(t *testing.T) {
 	}
 	if u := Undo(ctx, env, add, out1.Undo); u.Status != StatusUndone || f.Domain("blog.example.com") != nil {
 		t.Fatalf("undo eo domain: %+v", u)
+	}
+}
+
+func TestEdgeOneCertificateFromSSL(t *testing.T) {
+	env, f := cloudEnv(t)
+	ctx := context.Background()
+	add := mustResolve(t, "eo.domain.add", map[string]any{"domain": "blog.example.com", "origin": "81.68.79.253"})
+	if out := Apply(ctx, env, add, nil); out.Status != StatusDone {
+		t.Fatalf("eo.domain.add: %+v", out)
+	}
+	f.SSLCerts = append(f.SSLCerts, &tencent.SSLCert{ID: "ssl-own", Domain: "*.example.com", SANs: []string{"*.example.com"},
+		Status: 1, StatusName: "已通过", Product: "TrustAsia C1 DV Free"})
+
+	https := mustResolve(t, "eo.https.set", map[string]any{"domain": "blog.example.com", "mode": "sslcert", "cert": "ssl-own"})
+	out := Apply(ctx, env, https, nil)
+	d := f.Domain("blog.example.com")
+	if out.Status != StatusDone || d.CertMode != "sslcert" || len(d.CertIDs) != 1 || d.CertIDs[0] != "ssl-own" {
+		t.Fatalf("eo.https.set sslcert: %+v domain=%+v", out, d)
+	}
+	if again := Apply(ctx, env, https, nil); again.Status != StatusDone || len(again.Undo) != 0 {
+		t.Fatalf("setting the same certificate again should change nothing: %+v", again)
+	}
+
+	// A certificate for another name is refused before anything changes.
+	bad := mustResolve(t, "eo.https.set", map[string]any{"domain": "blog.example.com", "mode": "sslcert", "cert": "ssl-abc"})
+	if refused := Apply(ctx, env, bad, nil); refused.Status != StatusRefused || !strings.Contains(strings.Join(refused.Log, ""), "不包含") {
+		t.Fatalf("certificate for another name: %+v", refused)
+	}
+	if d := f.Domain("blog.example.com"); d.CertMode != "sslcert" || d.CertIDs[0] != "ssl-own" {
+		t.Fatalf("refused change touched the domain: %+v", d)
+	}
+
+	// mode=sslcert needs a certificate ID.
+	if _, err := Resolve("eo.https.set", map[string]any{"domain": "blog.example.com", "mode": "sslcert"}, "-"); err == nil {
+		t.Fatal("mode=sslcert without cert accepted")
+	}
+
+	// Undo goes back to the certificate setting before it.
+	if u := Undo(ctx, env, https, out.Undo); u.Status != StatusUndone || f.Domain("blog.example.com").CertMode != "disable" {
+		t.Fatalf("undo https: %+v domain=%+v", u, f.Domain("blog.example.com"))
 	}
 }
 

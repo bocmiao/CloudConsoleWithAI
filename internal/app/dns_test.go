@@ -190,6 +190,68 @@ func TestDNSPage(t *testing.T) {
 	}
 }
 
+func TestDNSQuickWithOwnCertificate(t *testing.T) {
+	a := newApp(t)
+	f := tencenttest.Start(t)
+	a.TencentEndpoint = f.Endpoint
+	a.PollInterval = 10 * time.Millisecond
+	ctx := context.Background()
+	if _, err := a.SaveTencent(tencenttest.SecretID, tencenttest.SecretKey); err != nil {
+		t.Fatal(err)
+	}
+	f.SSLCerts = append(f.SSLCerts, &tencent.SSLCert{ID: "ssl-own", Domain: "*.example.com", SANs: []string{"*.example.com"},
+		Status: 1, StatusName: "已通过", EndTime: "2030-01-02 15:04:05"})
+
+	opts, err := a.SSLCertOptions(ctx)
+	var own *SSLCertOption
+	for i := range opts {
+		if opts[i].ID == "ssl-own" {
+			own = &opts[i]
+		}
+	}
+	if err != nil || own == nil || !own.Usable || len(own.Names) != 1 || own.Names[0] != "*.example.com" {
+		t.Fatalf("options = %+v %v", opts, err)
+	}
+
+	// A certificate from Tencent Cloud's SSL service instead of a free one.
+	v, err := a.ProposeDNS(ctx, DNSRequest{Op: "quick", Domain: "example.com", Sub: "blog", Target: "ip", Value: "5.6.7.8",
+		EdgeOne: true, HTTPS: true, Cert: "ssl-own"})
+	if err != nil || caps(v) != "eo.domain.add dns.record.set eo.https.set" {
+		t.Fatalf("quick with own certificate = %+v %v", v, err)
+	}
+	https := v.StepList[len(v.StepList)-1]
+	if https.Params["mode"] != "sslcert" || https.Params["cert"] != "ssl-own" || !strings.Contains(https.Summary, "*.example.com") ||
+		!strings.Contains(v.Reason, "不会申请新证书") {
+		t.Fatalf("certificate step = %+v reason=%s", https, v.Reason)
+	}
+	var all []int
+	for i := range v.StepList {
+		all = append(all, i)
+	}
+	if _, err := a.ExecutePlan(v.ID, all); err != nil {
+		t.Fatal(err)
+	}
+	done := waitPlan(t, a, v.ID)
+	for i, s := range done.StepList {
+		if s.Status != actions.StatusDone {
+			t.Fatalf("step %d = %+v", i+1, s)
+		}
+	}
+	if d := f.Domain("blog.example.com"); d == nil || d.CertMode != "sslcert" || len(d.CertIDs) != 1 || d.CertIDs[0] != "ssl-own" {
+		t.Fatalf("domain = %+v", d)
+	}
+
+	// A certificate that does not cover the name is refused by the form.
+	if _, err := a.ProposeDNS(ctx, DNSRequest{Op: "quick", Domain: "example.com", Sub: "shop", Target: "ip", Value: "5.6.7.8",
+		EdgeOne: true, HTTPS: true, Cert: "ssl-abc"}); err == nil || !isUserErr(err) || !strings.Contains(err.Error(), "不包含") {
+		t.Fatalf("certificate for another name: %v", err)
+	}
+	if _, err := a.ProposeDNS(ctx, DNSRequest{Op: "quick", Domain: "example.com", Sub: "shop", Target: "ip", Value: "5.6.7.8",
+		EdgeOne: true, HTTPS: true, Cert: "ssl-nope"}); err == nil || !strings.Contains(err.Error(), "没有证书") {
+		t.Fatalf("missing certificate: %v", err)
+	}
+}
+
 func must(v PlanView, err error) PlanView {
 	if err != nil {
 		panic(err)

@@ -118,6 +118,7 @@ func (s *Server) routes() {
 	api("PUT /api/settings/ai", s.putAISettings)
 	api("POST /api/settings/ai/test", s.testAI)
 	api("GET /api/certificates", s.getCertificates)
+	api("GET /api/certificates/tencent", s.tencentSSLCerts)
 	api("GET /api/settings/free-command", s.getFreeCommand)
 	api("PUT /api/settings/free-command", s.putFreeCommand)
 	api("GET /api/settings/tencent", s.getTencent)
@@ -851,6 +852,10 @@ func (s *Server) getCertificates(_ http.ResponseWriter, r *http.Request) (any, e
 		return s.app.Certificates(r.Context(), q.Get("refresh") == "1")
 	}
 	return s.app.LatestCertificates(r.Context())
+}
+
+func (s *Server) tencentSSLCerts(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.SSLCertOptions(r.Context())
 }
 
 func (s *Server) getFreeCommand(_ http.ResponseWriter, _ *http.Request) (any, error) {

@@ -512,7 +512,7 @@ func undoEODomain(ctx context.Context, env *Env, undo map[string]string) error {
 
 func applyEOHTTPS(ctx context.Context, env *Env, v map[string]string, out *Outcome, report func(string, ...any)) Outcome {
 	c := env.Cloud
-	name, mode := strings.ToLower(v["domain"]), v["mode"]
+	name, mode, certID := strings.ToLower(v["domain"]), v["mode"], strings.TrimSpace(v["cert"])
 	z, err := findZone(ctx, c, name)
 	if err != nil {
 		out.Status = StatusRefused
@@ -533,11 +533,56 @@ func applyEOHTTPS(ctx context.Context, env *Env, v map[string]string, out *Outco
 		}
 		return false
 	}
-	if d.Certificate.Mode == mode && (mode == "disable" || deployed(d)) {
-		report("%s 的证书设置已经是 %s，不需要修改", name, mode)
-		out.Status = StatusDone
-		out.Undo = map[string]string{}
-		return *out
+	// The selected certificate from Tencent Cloud's SSL service: it has to
+	// be issued and cover this name before anything is changed.
+	certLabel := ""
+	if mode == "sslcert" {
+		certs, err := c.SSLCertificates(ctx)
+		if err != nil {
+			out.Status = StatusRefused
+			out.logf("读取腾讯云 SSL 证书失败：%v", err)
+			return *out
+		}
+		var found *tencent.SSLCert
+		for i := range certs {
+			if certs[i].ID == certID {
+				found = &certs[i]
+			}
+		}
+		switch {
+		case found == nil:
+			out.Status = StatusRefused
+			out.logf("腾讯云 SSL 证书里没有证书 %s", certID)
+			return *out
+		case found.Status != 1:
+			out.Status = StatusRefused
+			out.logf("证书 %s 还不能用（%s）", certID, orDash(found.StatusName))
+			return *out
+		case !found.Covers(name):
+			out.Status = StatusRefused
+			out.logf("证书 %s 不包含 %s（证书的域名：%s）", certID, name, strings.Join(found.Names(), "、"))
+			return *out
+		}
+		certLabel = strings.Join(found.Names(), "、")
+	}
+	// The status of the certificate this step cares about: EdgeOne's free
+	// one, or the chosen certificate from SSL.
+	certState := func(d tencent.AccelerationDomain) string {
+		state := ""
+		for _, cert := range d.Certificate.List {
+			if mode == "eofreecert" || cert.CertID == certID {
+				state = cert.Status
+			}
+		}
+		return state
+	}
+	if d.Certificate.Mode == mode {
+		if mode == "disable" || (mode == "eofreecert" && deployed(d)) || (mode == "sslcert" && certState(d) == "deployed") {
+			report("%s 的证书设置已经是 %s，不需要修改", name, mode)
+			out.Status = StatusDone
+			out.Undo = map[string]string{}
+			return *out
+		}
 	}
 	if mode == "eofreecert" && z.Type == "partial" {
 		// A free certificate is validated through the domain's CNAME.
@@ -565,12 +610,17 @@ func applyEOHTTPS(ctx context.Context, env *Env, v map[string]string, out *Outco
 		prev = "disable"
 	}
 	out.Undo["zone_id"], out.Undo["domain"], out.Undo["mode"], out.Undo["cert_ids"] = z.ZoneID, name, prev, strings.Join(ids, ",")
-	if mode == "disable" {
+	var setIDs []string
+	switch mode {
+	case "disable":
 		report("正在关闭 %s 的 HTTPS 证书", name)
-	} else {
+	case "sslcert":
+		setIDs = []string{certID}
+		report("正在把腾讯云 SSL 证书 %s（%s）部署到 %s", certID, certLabel, name)
+	default:
 		report("正在为 %s 申请并部署 EdgeOne 免费证书（到期自动续签）", name)
 	}
-	if err := c.SetCertificate(ctx, z.ZoneID, name, mode, nil); err != nil {
+	if err := c.SetCertificate(ctx, z.ZoneID, name, mode, setIDs); err != nil {
 		out.Status = StatusRefused
 		out.Undo = map[string]string{}
 		out.logf("设置失败：%v", err)
@@ -584,17 +634,18 @@ func applyEOHTTPS(ctx context.Context, env *Env, v map[string]string, out *Outco
 	var state string
 	_, _ = waitFor(ctx, env, 30, func() (bool, error) {
 		d, _, err := c.AccelerationDomain(ctx, z.ZoneID, name)
-		state = ""
-		for _, cert := range d.Certificate.List {
-			state = cert.Status
-		}
-		return deployed(d) || state == "failed", err
+		state = certState(d)
+		return state == "deployed" || state == "failed", err
 	})
 	switch state {
 	case "deployed":
 		report("完成：证书已部署，现在可以用 https://%s 访问", name)
 	case "failed":
-		report("免费证书申请失败，正在恢复原来的证书设置")
+		if mode == "sslcert" {
+			report("证书部署失败，正在恢复原来的证书设置")
+		} else {
+			report("免费证书申请失败，正在恢复原来的证书设置")
+		}
 		ids := []string(nil)
 		if out.Undo["cert_ids"] != "" {
 			ids = strings.Split(out.Undo["cert_ids"], ",")
@@ -605,10 +656,18 @@ func applyEOHTTPS(ctx context.Context, env *Env, v map[string]string, out *Outco
 			return *out
 		}
 		out.Status = StatusRolledBack
-		out.logf("可以在 EdgeOne 控制台的「证书」里查看申请失败的原因")
+		if mode == "sslcert" {
+			out.logf("可以在 EdgeOne 控制台的「证书」里查看部署失败的原因")
+		} else {
+			out.logf("可以在 EdgeOne 控制台的「证书」里查看申请失败的原因")
+		}
 		return *out
 	default:
-		report("完成：已提交免费证书申请（当前状态：%s），一般几分钟内签发，可以稍后让 AI 查一下", state)
+		if mode == "sslcert" {
+			report("完成：已提交证书部署（当前状态：%s），一般几分钟内生效", orDash(state))
+		} else {
+			report("完成：已提交免费证书申请（当前状态：%s），一般几分钟内签发，可以稍后让 AI 查一下", orDash(state))
+		}
 	}
 	out.Status = StatusDone
 	return *out

@@ -41,7 +41,7 @@
 | **监控**：每分钟打开一次每个网站，每两分钟看一次服务器，打不开马上提醒 | **备份**：立即备份、每天自动备份（由 1Panel 在服务器上跑），一键恢复 |
 | ![监控](docs/screenshots/monitor.png) | ![网站备份](docs/screenshots/backup.png) |
 
-**解析**：DNSPod、阿里云云解析和 EdgeOne 放在一起管，哪些名字经过 EdgeOne、哪些还没解析过去一眼就能看到；一键解析能同时把加速域名、CNAME 和免费证书都配好。
+**解析**：DNSPod、阿里云云解析和 EdgeOne 放在一起管，哪些名字经过 EdgeOne、哪些还没解析过去一眼就能看到；一键解析能同时把加速域名、CNAME 和 HTTPS 都配好，证书可以申请 EdgeOne 免费证书，也可以直接选一张托管在腾讯云 SSL 证书里的。
 
 ![解析](docs/screenshots/dns.png)
 
@@ -77,7 +77,7 @@
 
 **解析**：侧边栏「解析」页列出 DNSPod 里每个域名的解析记录（A、AAAA、CNAME、MX、TXT、NS、CAA、SRV，各条线路），可以搜索、按类型筛选，添加、修改、暂停、启用和删除记录；每次修改都先生成清单，确认后执行，执行后能一键撤销。经过 EdgeOne 的名字会标出来（回源到哪里、有没有免费证书），EdgeOne 里有加速域名但解析还没指过去的，页面顶部会提醒并能一键「解析到 EdgeOne」。
 
-**一键解析**：填一个名字（比如 blog），选择指向「我的服务器」、IP 地址或另一个域名，勾上「经过 EdgeOne」，就生成一份清单：（域名还没接入 EdgeOne 时）先接入 → 添加加速域名并回源到服务器 → 把解析改成 EdgeOne 的 CNAME → 申请免费证书开启 HTTPS；不勾就直接解析过去。已经走 EdgeOne 的记录可以一键「不走 EdgeOne」（直接解析回源站，EdgeOne 里的加速域名保留），普通记录可以一键「开启 EdgeOne」。DNSPod 自带的 NS 记录不能改。
+**一键解析**：填一个名字（比如 blog），选择指向「我的服务器」、IP 地址或另一个域名，勾上「经过 EdgeOne」，就生成一份清单：（域名还没接入 EdgeOne 时）先接入 → 添加加速域名并回源到服务器 → 把解析改成 EdgeOne 的 CNAME → 开启 HTTPS；证书可以申请 EdgeOne 免费证书（自动续签），也可以从腾讯云 SSL 证书里选一张已经签发、包含这个域名的证书（包括托管的证书），不会重复申请。不勾就直接解析过去。已经走 EdgeOne 的记录可以一键「不走 EdgeOne」（直接解析回源站，EdgeOne 里的加速域名保留），普通记录可以一键「开启 EdgeOne」。DNSPod 自带的 NS 记录不能改。
 
 **存储**：侧边栏「存储」页管理腾讯云 COS（子账号要有 QcloudCOSFullAccess；只想看不想改用 QcloudCOSReadOnlyAccess）。左边是所有存储桶和它们的访问权限，公开读写的标红。选中一个桶：
 
