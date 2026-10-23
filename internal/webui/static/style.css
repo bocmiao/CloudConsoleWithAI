@@ -1661,3 +1661,17 @@ details[open] > summary .icon { transition: transform var(--dur-2) var(--ease-ou
     box-shadow: var(--shadow-lg); z-index: 30;
   }
 }
+/* 侧栏底部（账号/退出/花费/外观开关）吸底：侧栏内容比视口高时也始终可见 */
+.sidebar { display: flex; flex-direction: column; }
+.sidebar > .side-section, .sidebar > .side-search, .sidebar > .app-title { flex: none; }
+.sidebar > .sidebar-foot {
+  position: sticky; bottom: 0; z-index: 4; flex: none;
+  margin-top: auto; padding-top: 8px;
+  background: var(--sidebar);
+  box-shadow: 0 -8px 18px -12px rgba(0, 0, 0, .25);
+}
+html.glass .sidebar > .sidebar-foot {
+  background: color-mix(in srgb, var(--sidebar) 88%, transparent);
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+}
