@@ -585,7 +585,7 @@ button.th-sort:focus-visible { outline: 2px solid var(--accent); outline-offset:
 @media (max-width: 720px) { .term-page { height: 80vh; } }
 
 /* 网站统计 → 访问分析: filter bar, sections, cards */
-.page.wide { max-width: 1180px; }
+.page.wide { max-width: 1400px; }
 .stat-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); padding: 10px 14px; }
 .stat-bar .field { display: inline-flex; flex-direction: row; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); white-space: nowrap; }
 .stat-bar .field input { height: 30px; font-size: 13px; }
@@ -1378,3 +1378,286 @@ button.wb-site:hover:not(:disabled) { background: var(--hover); }
 .eo-rl-threshold { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .eo-rl-threshold select { width: auto; }
 .eo-rl-threshold input { width: 90px; }
+
+/* ---- 布局修正（NAS 部署后追加）---- */
+/* 1) 粘性工具栏改为不透明，滚动时卡片不再“穿透”露出半截 */
+.toolbar { background: var(--bg); }
+/* 2) 首页底行卡片等高，避免高低不齐 */
+.home-row { align-items: stretch; }
+.home-row > .card { height: 100%; margin-bottom: 0; }
+/* 3) 首页卡片行底部留白一致 */
+.home-row { margin-bottom: 14px; }
+/* ================= 对标优化（参考 Beszel / 1Panel / Dashy） ================= */
+/* 1) 内容限宽 1500px 居中：宽屏下卡片不再被拉成超宽（Beszel --container: 1500px 同值） */
+.home { max-width: 1500px; margin: 0 auto; padding: 24px 28px 44px; width: 100%; }
+@media (max-width: 700px) { .home { padding: 16px 14px 32px; } }
+
+/* 2) 卡片层次：1px 边框 + 极轻阴影（1Panel: 1px solid #f2f2f2 / Beszel: border var(--border)） */
+.card, button.home-card { border: 1px solid var(--sep); box-shadow: 0 1px 2px rgba(0, 0, 0, .03); }
+.card { border-radius: 12px; }
+button.home-card { border-radius: 12px; }
+button.home-card:hover:not(:disabled) { border-color: var(--accent-track); box-shadow: 0 2px 6px rgba(0, 0, 0, .05), 0 0 0 2px var(--accent-track); }
+
+/* 3) 表格：表头浅底 + 粘性 + 数字列右对齐（1Panel 表格工具类 / Beszel --table-header） */
+.table thead th { position: sticky; top: 0; background: var(--surface-2); z-index: 1; font-weight: 600; }
+.table th.num, .table td.num { text-align: right; }
+.table td { border-bottom: 1px solid var(--sep); }
+.table tbody tr:last-child td { border-bottom: 0; }
+
+/* 4) 数字统一等宽，避免跳动 */
+.home-card-value, .home-pv b, .delta, .srv-grid, .metric, .num { font-variant-numeric: tabular-nums; }
+
+/* 5) 首页底行卡片等高后，内部内容顶部对齐 */
+.home-row > .card { display: flex; flex-direction: column; }
+/* ================= 修复 2026-10-24（溢出 / 对齐 / 截断） ================= */
+/* flex 子项默认 min-width:auto 会把容器撑破 */
+.grow { min-width: 0; }
+.chat, .chat > *, .messages, .messages-inner, .conv-list, .conv-item, .answer { min-width: 0; }
+
+/* AI 回答：长路径/URL/表格不再把页面顶出横向滚动条 */
+.answer, .answer p, .answer li, .answer td, .answer th { overflow-wrap: anywhere; word-break: break-word; }
+.answer table { display: block; max-width: 100%; overflow-x: auto; }
+.answer pre { max-width: 100%; overflow-x: auto; }
+
+/* 会话标题过长时省略，不撑破左栏 */
+.conv-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+/* 服务器页：指标卡少于 4 个时自动铺满一行，不再左右缺一块 */
+.wb-rings { grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+/* 滚动条占位，保证消息区与输入框左右对齐 */
+.messages { scrollbar-gutter: stable; }
+/* ================= 响应式补丁 + 清单按钮排版 ================= */
+@media (max-width: 1280px) {
+  .home-row.three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 980px) {
+  .home-row, .home-row.three, .wb-row { grid-template-columns: minmax(0, 1fr); }
+}
+@media (prefers-color-scheme: dark) {
+  :root { --sep: rgba(120, 120, 128, .62); }
+}
+.plan-foot { flex-wrap: wrap; row-gap: 8px; }
+.plan-foot button { flex: none; }
+/* ================= PWA / 骨架屏 / 紧凑模式 / 可访问性 ================= */
+/* 骨架屏 */
+.home-skeleton { max-width: 1400px; margin: 0 auto; padding: 8px 28px; }
+.home-skeleton .sk-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px; }
+.sk-card, .sk-block { position: relative; overflow: hidden; background: var(--surface); border: 1px solid var(--sep); border-radius: 12px; }
+.sk-card { height: 108px; }
+.home-skeleton .sk-block { height: 260px; margin-bottom: 14px; }
+.home-skeleton .sk-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+.sk-card::after, .sk-block::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(0,0,0,.045), transparent);
+  transform: translateX(-100%); animation: sk-shine 1.2s infinite;
+}
+@media (prefers-color-scheme: dark) {
+  .sk-card::after, .sk-block::after { background: linear-gradient(90deg, transparent, rgba(255,255,255,.06), transparent); }
+}
+@keyframes sk-shine { 100% { transform: translateX(100%); } }
+
+/* 紧凑模式：更小的行高与内边距 */
+html.compact .table th, html.compact .table td { padding: 6px 12px; }
+html.compact .card-head { padding: 9px 14px; }
+html.compact .row { padding: 8px 14px; }
+html.compact .todo-row, html.compact .wb-check, html.compact .wb-site { padding: 7px 14px; }
+html.compact .home-cards { gap: 10px; margin-bottom: 12px; }
+html.compact .home-row .card { margin-bottom: 10px; }
+html.compact .plan .row.step { padding: 8px 14px; }
+html.compact .page { padding-top: 18px; }
+
+/* 侧边栏分组标题在滚动时保持可见 */
+.sidebar { position: relative; }
+.side-label { position: sticky; top: 0; z-index: 2; background: var(--sidebar); }
+
+/* 键盘焦点可见（可访问性） */
+:focus-visible { outline: 2px solid var(--accent-track); outline-offset: 2px; border-radius: 6px; }
+button:focus:not(:focus-visible) { outline: none; }
+
+/* 空状态更整齐 */
+.home-empty { align-items: center; line-height: 1.5; }
+/* ================= 玻璃拟态外观（默认开启，可切回经典） ================= */
+html.glass body {
+  background:
+    radial-gradient(1100px 620px at 8% -8%, rgba(0, 122, 255, .16), transparent 60%),
+    radial-gradient(900px 520px at 100% 0%, rgba(52, 199, 89, .12), transparent 55%),
+    radial-gradient(820px 520px at 62% 112%, rgba(255, 149, 0, .10), transparent 60%),
+    var(--bg);
+  background-attachment: fixed;
+}
+html.glass .sidebar {
+  background: color-mix(in srgb, var(--sidebar) 70%, transparent);
+  backdrop-filter: blur(26px) saturate(180%);
+  -webkit-backdrop-filter: blur(26px) saturate(180%);
+  border-right: 1px solid rgba(255, 255, 255, .5);
+}
+html.glass .toolbar {
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
+  backdrop-filter: blur(22px) saturate(180%);
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
+  border-bottom: 1px solid rgba(255, 255, 255, .45);
+}
+html.glass .card,
+html.glass button.home-card,
+html.glass .group,
+html.glass .sheet,
+html.glass .notice {
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  backdrop-filter: blur(26px) saturate(180%);
+  -webkit-backdrop-filter: blur(26px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, .55);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .07), inset 0 1px 0 rgba(255, 255, 255, .5);
+  border-radius: 18px;
+}
+html.glass .side-item { border-radius: 12px; }
+html.glass .side-item.active {
+  background: rgba(255, 255, 255, .55);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .65), 0 1px 2px rgba(0, 0, 0, .04);
+}
+html.glass button, html.glass .chip, html.glass input, html.glass select, html.glass textarea {
+  backdrop-filter: blur(10px);
+}
+html.glass .table-wrap { background: transparent; }
+
+@media (prefers-color-scheme: dark) {
+  html.glass .sidebar { border-right-color: rgba(255, 255, 255, .08); background: color-mix(in srgb, var(--sidebar) 66%, transparent); }
+  html.glass .toolbar { border-bottom-color: rgba(255, 255, 255, .08); background: color-mix(in srgb, var(--bg) 58%, transparent); }
+  html.glass .card, html.glass button.home-card, html.glass .group, html.glass .sheet, html.glass .notice {
+    border-color: rgba(255, 255, 255, .10);
+    box-shadow: 0 12px 34px rgba(0, 0, 0, .38), inset 0 1px 0 rgba(255, 255, 255, .06);
+  }
+  html.glass .side-item.active { background: rgba(255, 255, 255, .10); }
+}
+/* 兼容不支持 backdrop-filter 的浏览器：退回不透明，避免看不清 */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  html.glass .sidebar, html.glass .toolbar, html.glass .card, html.glass .group, html.glass .sheet { background: var(--surface); }
+}
+/* ================= 动效：过渡曲线、悬停、按压、进场 ================= */
+:root {
+  --ease-out: cubic-bezier(.22, .61, .36, 1);
+  --ease-spring: cubic-bezier(.34, 1.3, .64, 1);
+  --dur-1: .14s;
+  --dur-2: .22s;
+  --dur-3: .34s;
+}
+
+/* 平滑滚动（主内容区） */
+.main, .sidebar, .sheet, .messages { scroll-behavior: smooth; }
+
+/* 主题切换时背景与卡片平滑过渡 */
+body, .sidebar, .toolbar, .card, .group, button.home-card, .sheet {
+  transition: background-color var(--dur-3) var(--ease-out), border-color var(--dur-3) var(--ease-out),
+              box-shadow var(--dur-3) var(--ease-out), color var(--dur-2) var(--ease-out);
+}
+
+/* 按钮：悬停更有反馈，按下有回弹感 */
+button, .chip {
+  transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out),
+              border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-2) var(--ease-out),
+              transform var(--dur-1) var(--ease-out), opacity var(--dur-1) var(--ease-out);
+}
+button:not(:disabled):hover, .chip:not(:disabled):hover { transform: translateY(-1px); }
+button:not(:disabled):active, .chip:not(:disabled):active { transform: scale(.97); transition-duration: .06s; }
+button:disabled { opacity: .55; }
+
+/* 可点击卡片：轻微抬起 */
+button.home-card { transition: transform var(--dur-2) var(--ease-out), box-shadow var(--dur-2) var(--ease-out),
+                                border-color var(--dur-2) var(--ease-out), background-color var(--dur-3) var(--ease-out); }
+button.home-card:hover { transform: translateY(-2px); }
+button.home-card:active { transform: translateY(0) scale(.995); }
+
+/* 侧边栏：悬停与选中的过渡，选中有一道滑动感的底色 */
+.side-item {
+  transition: background-color var(--dur-2) var(--ease-out), color var(--dur-2) var(--ease-out),
+              transform var(--dur-2) var(--ease-out), box-shadow var(--dur-2) var(--ease-out);
+}
+.side-item:hover { transform: translateX(1px); }
+.side-item.active { transition-duration: var(--dur-3); }
+
+/* 列表行悬停 */
+.row, .todo-row, .wb-check, .wb-site, .change-row, .table tbody tr {
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+
+/* 页面进场：淡入 + 轻微上移（每次切页播放一次） */
+@keyframes page-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+.page, .home, .monitor-page, .inbox, .wb-overview, .wb-apps, .wb-row, .settings-page, .chat-layout {
+  animation: page-in var(--dur-3) var(--ease-out) both;
+}
+
+/* 卡片进场：轻缩放 */
+@keyframes card-in {
+  from { opacity: 0; transform: translateY(8px) scale(.995); }
+  to   { opacity: 1; transform: none; }
+}
+.home-cards > *, .wb-rings > *, .tiles > .tile {
+  animation: card-in var(--dur-3) var(--ease-out) both;
+}
+.home-cards > *:nth-child(1), .wb-rings > *:nth-child(1), .tiles > *:nth-child(1) { animation-delay: .02s; }
+.home-cards > *:nth-child(2), .wb-rings > *:nth-child(2), .tiles > *:nth-child(2) { animation-delay: .05s; }
+.home-cards > *:nth-child(3), .wb-rings > *:nth-child(3), .tiles > *:nth-child(3) { animation-delay: .08s; }
+.home-cards > *:nth-child(4), .wb-rings > *:nth-child(4), .tiles > *:nth-child(4) { animation-delay: .11s; }
+
+/* 弹窗 / 抽屉：遮罩淡入，面板弹入 */
+@keyframes mask-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sheet-in { from { opacity: 0; transform: translateY(12px) scale(.98); } to { opacity: 1; transform: none; } }
+.sheet-mask { animation: mask-in var(--dur-2) var(--ease-out) both; }
+.sheet { animation: sheet-in var(--dur-3) var(--ease-spring) both; }
+.drawer { animation: sheet-in var(--dur-3) var(--ease-spring) both; }
+
+/* 提示条：从上方滑入 */
+@keyframes notice-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+.notice { animation: notice-in var(--dur-2) var(--ease-out) both; }
+
+/* 骨架屏呼吸 */
+@keyframes sk-pulse { 0%, 100% { opacity: .55; } 50% { opacity: .9; } }
+.sk-card, .sk-block { animation: sk-pulse 1.6s ease-in-out infinite; }
+
+/* Toast / 通知 */
+.toast, .toasts > * { animation: notice-in var(--dur-2) var(--ease-out) both; }
+
+/* 折叠展开的箭头 */
+details > summary { transition: color var(--dur-1) var(--ease-out); }
+details[open] > summary .icon { transition: transform var(--dur-2) var(--ease-out); transform: rotate(90deg); }
+
+/* 进度条 / 计量条数值变化平滑 */
+.meter > div, .fm-up .bar > i, .ring-value { transition: width var(--dur-3) var(--ease-out), stroke-dasharray var(--dur-3) var(--ease-out); }
+
+/* 跟随系统减少动态效果 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+/* ================= 原生 View Transitions（切页过渡） ================= */
+@keyframes vt-out { to { opacity: 0; transform: scale(.995); } }
+@keyframes vt-in { from { opacity: .3; transform: translateY(6px) scale(.998); } to { opacity: 1; transform: none; } }
+::view-transition-old(root) { animation: vt-out .16s ease both; }
+::view-transition-new(root) { animation: vt-in .26s cubic-bezier(.22, .61, .36, 1) both; }
+
+/* 空状态：统一留白与虚线框，显得是有意为之 */
+.home-empty {
+  display: flex; align-items: center; gap: 8px;
+  padding: 18px 16px; border-radius: 12px;
+  background: color-mix(in srgb, var(--fill) 45%, transparent);
+  border: 1px dashed var(--sep);
+  color: var(--text-2); font-size: 13px;
+}
+.home-empty .spinner.inline { margin-right: 2px; }
+
+/* 右侧 AI 面板在中等宽度下更窄一点，避免挤压主内容 */
+@media (max-width: 1400px) {
+  .main.beside-ai .ai-panel, .main.beside-ai .ai-drawer { width: min(380px, 34vw); }
+}
+@media (max-width: 1180px) {
+  .main.beside-ai .ai-panel, .main.beside-ai .ai-drawer {
+    position: fixed; right: 14px; bottom: 14px; top: auto; height: min(72vh, 640px); width: min(420px, 92vw);
+    box-shadow: var(--shadow-lg); z-index: 30;
+  }
+}

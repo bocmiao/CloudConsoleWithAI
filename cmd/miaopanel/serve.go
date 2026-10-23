@@ -224,7 +224,7 @@ func resetPasswordMain(args []string) error {
 			name = u.Name
 		}
 	}
-	pw, err := readPassword("为 " + name + " 设置新密码（至少 10 个字符）：")
+	pw, err := readPassword("为 " + name + " 设置新密码（至少 8 个字符）：")
 	if err != nil {
 		return err
 	}

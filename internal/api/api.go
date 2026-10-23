@@ -80,6 +80,7 @@ func NewServer(a *app.App, au *auth.Service, version string) *Server {
 func (s *Server) routes() {
 	s.mux = http.NewServeMux()
 	s.mux.Handle("GET /", webui.Handler())
+	s.mux.HandleFunc("GET /status/{token}", s.publicStatusPage)
 	s.authRoutes()
 
 	api := func(pattern string, h func(w http.ResponseWriter, r *http.Request) (any, error)) {
@@ -91,6 +92,7 @@ func (s *Server) routes() {
 	}
 	api("GET /api/servers/{id}/files", s.listFiles)
 	api("GET /api/servers/{id}/files/text", s.readFileText)
+	api("GET /api/servers/{id}/files/tail", s.tailFile)
 	big("PUT /api/servers/{id}/files/text", 6<<20, s.writeFileText)
 	big("POST /api/servers/{id}/files/upload", 0, s.uploadFiles)
 	api("POST /api/servers/{id}/files/op", s.fileOp)
@@ -163,6 +165,8 @@ func (s *Server) routes() {
 	api("POST /api/servers/{id}/realip", s.proposeRealIP)
 	api("GET /api/overview", s.overview)
 	api("GET /api/monitor", s.monitor)
+	api("GET /api/statuspage", s.getStatusPage)
+	api("PUT /api/statuspage", s.saveStatusPage)
 	api("PUT /api/monitor/settings", s.monitorSettings)
 	api("POST /api/monitor/check", s.monitorCheck)
 	api("GET /api/monitor/site", s.monitorSite)
@@ -212,6 +216,8 @@ func (s *Server) routes() {
 	api("POST /api/plans/{id}/execute", s.executePlan)
 	api("POST /api/plans/{id}/steps/{idx}/undo", s.undoStep)
 	api("POST /api/plans/{id}/undo", s.undoPlan)
+	api("DELETE /api/plans/{id}", s.deletePlan)
+	api("POST /api/plans/clear", s.clearPlans)
 	api("GET /api/exec", s.execLogs)
 	api("GET /api/exec/{id}", s.execEntry)
 	api("POST /api/exec/{id}/rollback", s.rollback)
@@ -1285,6 +1291,23 @@ func (s *Server) undoPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
 	return s.app.UndoPlan(r.Context(), id)
 }
 
+func (s *Server) deletePlan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]bool{"ok": true}, s.app.DeletePlan(id)
+}
+
+func (s *Server) clearPlans(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req struct {
+		Status string `json:"status"`
+	}
+	_ = decode(r, &req)
+	n, err := s.app.ClearPlans(req.Status)
+	return map[string]int{"deleted": n}, err
+}
+
 func (s *Server) execLogs(_ http.ResponseWriter, r *http.Request) (any, error) {
 	server, _ := strconv.ParseInt(r.URL.Query().Get("server"), 10, 64)
 	return s.app.ExecLogs(r.URL.Query().Get("changes") == "1", server)
@@ -1401,6 +1424,14 @@ func (s *Server) readFileText(_ http.ResponseWriter, r *http.Request) (any, erro
 	return s.app.ReadFileText(r.Context(), id, r.URL.Query().Get("path"))
 }
 
+func (s *Server) tailFile(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	lines, _ := strconv.Atoi(r.URL.Query().Get("lines"))
+	return s.app.TailFile(r.Context(), id, r.URL.Query().Get("path"), lines)
+}
 func (s *Server) writeFileText(_ http.ResponseWriter, r *http.Request) (any, error) {
 	id, err := pathID(r)
 	if err != nil {

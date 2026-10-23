@@ -776,7 +776,16 @@ func (a *App) MonitorPage(ctx context.Context) (MonitorView, error) {
 			}
 		}
 	}
+	skipHost := map[string]bool{}
+	for _, x := range s.Skip {
+		if u, err := url.Parse(x); err == nil && u.Host != "" {
+			skipHost[u.Host] = true
+		}
+	}
 	for _, t := range targets {
+		if u, err := url.Parse(t.URL); err == nil && skipHost[u.Host] {
+			continue
+		}
 		sm := SiteMonitor{URL: t.URL, Name: t.Name, Source: t.Source, Recent: []int{}}
 		checks, _ := a.Store.UptimeChecks(t.URL, day)
 		if n := len(checks); n > 0 {

@@ -208,6 +208,39 @@ func (a *App) Plans(limit int) ([]PlanView, error) {
 	return out, nil
 }
 
+// DeletePlan forgets a checklist. Only lists that are not running can go.
+func (a *App) DeletePlan(id int64) error {
+	p, err := a.Store.GetPlan(id)
+	if err != nil {
+		return userErr("找不到这个清单（编号 %d）", id)
+	}
+	if p.Status == "running" {
+		return userErr("这份清单正在执行，先等它结束再删除")
+	}
+	return a.Store.DeletePlan(id)
+}
+
+// ClearPlans deletes every checklist in the given status and says how many
+// went, for tidying up lists that can no longer run.
+func (a *App) ClearPlans(status string) (int, error) {
+	if status == "" {
+		status = "proposed"
+	}
+	list, err := a.Store.ListPlans(1000)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, p := range list {
+		if p.Status != status {
+			continue
+		}
+		if err := a.Store.DeletePlan(p.ID); err == nil {
+			n++
+		}
+	}
+	return n, nil
+}
 func (a *App) savePlan(v *PlanView) error {
 	data, err := json.Marshal(v.StepList)
 	if err != nil {

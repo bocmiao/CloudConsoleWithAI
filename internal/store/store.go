@@ -425,6 +425,12 @@ func scanPlan(row interface{ Scan(...any) error }) (Plan, error) {
 	return p, err
 }
 
+// DeletePlan removes a checklist from the list.
+func (s *Store) DeletePlan(id int64) error {
+	_, err := s.db.Exec(`DELETE FROM plans WHERE id = ?`, id)
+	return err
+}
+
 // ListPlans returns plans, newest first.
 func (s *Store) ListPlans(limit int) ([]Plan, error) {
 	rows, err := s.db.Query(`SELECT `+planCols+` FROM plans ORDER BY id DESC LIMIT ?`, limit)

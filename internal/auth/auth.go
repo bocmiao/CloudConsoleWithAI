@@ -53,7 +53,7 @@ const (
 	lockFor   = 15 * time.Minute
 
 	// MinPassword is the shortest password accepted, in characters.
-	MinPassword = 10
+	MinPassword = 8
 
 	setupFile = "setup-code"
 	issuer    = "Miao Panel"

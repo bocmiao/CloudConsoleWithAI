@@ -469,6 +469,63 @@ func (a *App) ReadFileText(ctx context.Context, id int64, p string) (FileText, e
 	return out, err
 }
 
+// FileTail is the last lines of a growing file, for following logs.
+type FileTail struct {
+	Path    string `json:"path"`
+	Size    int64  `json:"size"`
+	ModTime string `json:"modTime"`
+	Content string `json:"content"`
+	Lines   int    `json:"lines"`
+}
+
+// TailFile reads the last lines of a file without downloading the whole
+// thing, which is what following a log needs.
+func (a *App) TailFile(ctx context.Context, id int64, p string, lines int) (FileTail, error) {
+	var out FileTail
+	p, err := cleanPath(p)
+	if err != nil {
+		return out, err
+	}
+	if lines <= 0 || lines > 2000 {
+		lines = 200
+	}
+	err = a.withFiles(ctx, id, func(fc *fileConn, _ store.Server) error {
+		st, err := fc.sftp.Stat(p)
+		if err != nil {
+			return friendlyFileErr(err, p)
+		}
+		if st.IsDir() {
+			return userErr("%s 是文件夹", p)
+		}
+		// Read a window at the end that is almost always enough.
+		window := int64(lines*240) + 8192
+		if window > st.Size() {
+			window = st.Size()
+		}
+		f, err := fc.sftp.Open(p)
+		if err != nil {
+			return friendlyFileErr(err, p)
+		}
+		defer f.Close()
+		if st.Size() > window {
+			if _, err := f.Seek(st.Size()-window, io.SeekStart); err != nil {
+				return err
+			}
+		}
+		data, err := io.ReadAll(io.LimitReader(f, window))
+		if err != nil {
+			return err
+		}
+		text := strings.ReplaceAll(string(data), "\r\n", "\n")
+		parts := strings.Split(strings.TrimRight(text, "\n"), "\n")
+		if len(parts) > lines {
+			parts = parts[len(parts)-lines:]
+		}
+		out = FileTail{Path: p, Size: st.Size(), ModTime: st.ModTime().UTC().Format(time.RFC3339), Content: strings.Join(parts, "\n"), Lines: len(parts)}
+		return nil
+	})
+	return out, err
+}
 // WriteFileText saves a text file. expect is the modification time the
 // page read; when the file changed since, it refuses unless force.
 func (a *App) WriteFileText(ctx context.Context, id int64, p, content, expect string, force bool) (FileText, error) {

@@ -5,7 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Miao Panel</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='115' fill='%23ffffff'/%3E%3Crect x='4' y='4' width='504' height='504' rx='111' fill='none' stroke='rgba(0,0,0,0.12)' stroke-width='8'/%3E%3Cpath transform='translate(96 99) scale(0.625)' fill='%23242428' d='M 103 438 C 79 438 64 422 66 398 L 79 174 C 81 136 88 99 103 73 C 107 66 114 65 120 72 L 246 221 Q 256 234 266 221 L 392 72 C 398 65 405 66 409 73 C 424 99 431 136 433 174 L 446 398 C 448 422 433 438 409 438 H 365 C 343 438 332 426 332 406 V 280 L 282 338 Q 256 365 230 338 L 180 280 V 406 C 180 426 169 438 147 438 Z'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="style.css">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#f5f5f7">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Miao Panel">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<script src="boot.js"></script><link rel="stylesheet" href="style.css">
 <script src="vue.global.prod.js"></script>
 <script src="app.js" defer></script>
 </head>
@@ -48,7 +53,6 @@
       <div class="side-label">网站</div>
       <div class="side-item" :class="{active: tab === 'sites'}" @click="go('sites')"><ui-icon name="window"></ui-icon><span class="grow">网站管理</span></div>
       <div class="side-item" :class="{active: tab === 'stats' && statsView === 'logs' && visitSection !== 'security'}" @click="openStats('logs', 'overview')"><ui-icon name="chart"></ui-icon><span class="grow">访问统计</span></div>
-      <div class="side-item" :class="{active: tab === 'stats' && statsView === 'baize'}" @click="openStats('baize')"><ui-icon name="chart"></ui-icon><span class="grow">Baize 分析</span></div>
       <div class="side-item" :class="{active: tab === 'stats' && statsView === 'logs' && visitSection === 'security'}" @click="openStats('logs', 'security')"><ui-icon name="shield"></ui-icon><span class="grow">安全</span>
         <span class="side-count crit" v-if="overview && overview.security && overview.security.known && overview.security.unblocked">{{ overview.security.unblocked }}</span></div>
       <div class="side-item" :class="{active: tab === 'certs'}" @click="go('certs')"><ui-icon name="lock"></ui-icon><span class="grow">证书</span>
@@ -58,7 +62,6 @@
     <div class="side-section">
       <div class="side-label">云服务</div>
       <div class="side-item" :class="{active: tab === 'cloud'}" @click="go('cloud')"><ui-icon name="cloud"></ui-icon><span class="grow">云服务器</span></div>
-      <div class="side-item" :class="{active: tab === 'stats' && statsView === 'eo'}" @click="openStats('eo')"><ui-icon name="bolt"></ui-icon><span class="grow">EdgeOne</span></div>
       <div class="side-item" :class="{active: tab === 'cdn'}" @click="go('cdn')"><ui-icon name="layers"></ui-icon><span class="grow">CDN</span></div>
       <div class="side-item" :class="{active: tab === 'dns'}" @click="go('dns')"><ui-icon name="globe"></ui-icon><span class="grow">解析</span></div>
       <div class="side-item" :class="{active: tab === 'storage'}" @click="go('storage')"><ui-icon name="bucket"></ui-icon><span class="grow">存储</span></div>
@@ -69,7 +72,8 @@
       <div class="side-item" :class="{active: tab === 'settings'}" @click="go('settings')"><ui-icon name="gear"></ui-icon><span class="grow">设置</span></div>
       <div class="side-user" v-if="me"><ui-icon name="lock"></ui-icon><span class="grow">{{ me.name }}</span>
         <button class="plain small" @click="logout" title="退出登录">退出</button></div>
-      <div class="spend" title="本月 AI 花费（估算）">本月 AI 花费 {{ spendText }}</div>
+                  <div class="side-item" @click="toggleGlass" :title="glass ? '切换为经典界面' : '切换为玻璃拟态界面'"><ui-icon name="sparkles"></ui-icon><span class="grow">{{ glass ? '经典界面' : '玻璃界面' }}</span></div>
+<div class="side-item" @click="toggleCompact" :title="compact ? '切换为标准显示' : '切换为紧凑显示，一屏看更多'"><ui-icon name="menu"></ui-icon><span class="grow">{{ compact ? '标准显示' : '紧凑显示' }}</span></div><div class="spend" title="本月 AI 花费（估算）">本月 AI 花费 {{ spendText }}</div>
     </div>
   </aside>
 

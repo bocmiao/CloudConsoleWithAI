@@ -208,7 +208,7 @@ function serviceList(free) {
 
 const PlanCard = {
   props: { plan: { type: Object, required: true }, serverName: { type: String, default: '' } },
-  emits: ['done'],
+  emits: ['done', 'deleted'],
   setup(props, { emit }) {
     const openLog = inject('openLog', () => {});
     const p = ref(props.plan);
@@ -272,6 +272,15 @@ const PlanCard = {
       } catch (e) { notify(e.message, 'error'); await refresh(); } finally { busy.value = false; }
     }
 
+    async function remove() {
+      if (!confirm('删除这份清单？已执行的步骤不受影响。')) return;
+      busy.value = true;
+      try {
+        await api('DELETE', `/api/plans/${p.value.id}`);
+        notify('已删除清单');
+        emit('deleted', p.value);
+      } catch (e) { notify(e.message, 'error'); } finally { busy.value = false; }
+    }
     resetPicks();
     if (running.value) poll();
     onUnmounted(stop);
@@ -296,7 +305,7 @@ const PlanCard = {
       ];
       return rows;
     });
-    return { p, steps, running, canPick, picked, toggle, chosen, chosenSteps, confirming, busy, run, undo, undoable, undoAll, openLog, status, deltas,
+    return { p, steps, running, canPick, picked, toggle, chosen, chosenSteps, confirming, busy, run, undo, undoable, undoAll, remove, openLog, status, deltas,
       hasFree, diffLines, fileVerb, serviceList, scriptLines, riskName: r => RISK_NAME[r] || '' };
   },
   template: `
@@ -364,6 +373,7 @@ const PlanCard = {
         <span class="grow small secondary" v-if="running"><span class="spinner inline"></span>正在执行，请不要关闭 Miao Panel……</span>
         <span class="grow small secondary" v-else-if="!steps.some(s => s.executable)">这份清单里没有能自动执行的项目</span>
  <span class="grow small secondary" v-else>执行前会先检查和备份；失败会自动恢复原状</span>
+        <button v-if="!running" class="plain" @click="remove" :disabled="busy"><ui-icon name="trash"></ui-icon>删除</button>
         <button v-if="undoable && !running" @click="undoAll" :disabled="busy"><ui-icon name="undo"></ui-icon>撤销全部</button>
         <button class="primary" :disabled="!chosen.length || running || busy" @click="confirming = true">执行选中的 {{ chosen.length }} 项</button>
       </div>
@@ -2685,6 +2695,7 @@ const HomePage = {
               <path :d="spark.area" class="spark-area"></path><path :d="spark.line" class="spark-line"></path>
               <circle :cx="spark.x" :cy="spark.y" r="3.5" class="spark-dot"></circle></svg>
             <div class="small tertiary" v-if="spark">{{ ov.visits.title }} · {{ spark.now }}</div>
+            <div class="home-empty" v-else>今天还没有按小时的数据，打开「访问统计」可以看明细。</div>
           </template>
           <div class="home-empty" v-else>还没有访问数据，打开「访问统计」选择数据来源。</div>
         </section>
@@ -2698,7 +2709,11 @@ const HomePage = {
         </section>
       </div>
     </template>
-    <div class="notice" v-else-if="servers.length"><span class="spinner"></span>正在汇总……</div>
+    <div class="home-skeleton" v-else-if="servers.length" aria-hidden="true">
+      <div class="sk-cards"><div class="sk-card" v-for="i in 4" :key="i"></div></div>
+      <div class="sk-block"></div>
+      <div class="sk-row"><div class="sk-block"></div><div class="sk-block"></div></div>
+    </div>
   </div>`,
 };
 
@@ -3728,6 +3743,7 @@ const MonitorPage = {
       emit('ask', `网站 ${s.name}（${s.url}）现在打不开：${s.error || '没有响应'}。帮我排查是什么原因：DNS、EdgeOne、服务器、Nginx 还是应用，能修的话给我一份清单。`);
     }
     function openSettings() {
+      loadStatusPage();
       const st = v.value.settings;
       Object.assign(form, { open: true, saving: false, error: '', enabled: st.enabled, auto: st.auto, servers: st.servers,
         extra: st.extra.join('\n'), skip: st.skip.join('\n'), diskPct: st.diskPct, memPct: st.memPct, cpuPct: st.cpuPct, email: st.email || '' });
@@ -3742,14 +3758,35 @@ const MonitorPage = {
         await checkNow();
       } catch (e) { form.error = e.message; } finally { form.saving = false; }
     }
+    // 公开状态页：给一个链接，别人不登录也能看站点在线情况（服务器名会脱敏）
+    const sp = ref({ enabled: false, token: '' });
+    const spBusy = ref(false);
+    async function loadStatusPage() {
+      try { sp.value = await api('GET', '/api/statuspage'); } catch (e) { /* keep defaults */ }
+    }
+    async function saveStatusPage(enabled, regenerate) {
+      spBusy.value = true;
+      try {
+        sp.value = await api('PUT', '/api/statuspage', { enabled: !!enabled, regenerate: !!regenerate });
+        notify(regenerate ? '已重新生成链接，旧链接失效' : (enabled ? '状态页已开启' : '状态页已关闭'));
+      } catch (e) { notify(e.message, 'error'); } finally { spBusy.value = false; }
+    }
+    const statusURL = () => sp.value.token ? location.origin + '/status/' + sp.value.token : '';
+    async function copyStatusURL() {
+      const u = statusURL();
+      if (!u) return;
+      try { await navigator.clipboard.writeText(u); notify('链接已复制'); } catch (e) { notify(u); }
+    }
     function skipSite(s) {
       const st = v.value.settings;
       api('PUT', '/api/monitor/settings', { ...st, skip: [...st.skip, s.url], extra: st.extra.filter(x => x !== s.url) })
-        .then(() => { notify('不再监控 ' + s.name); return api('POST', '/api/monitor/check'); }).then(r => { v.value = r; }).catch(e => notify(e.message, 'error'));
+        .then(() => { notify('不再监控 ' + s.name); return api('POST', '/api/monitor/check'); })
+        .then(() => api('GET', '/api/monitor')).then(r => { v.value = r; }).catch(e => notify(e.message, 'error'));
     }
     return { v, loading, error, checking, hist, form, sites, down, servers, incidents, bars, uptimeText, uptimeLevel, lastedText, when, rate,
       checkNow, load, openHistory, histMain, histMore, histFails, histChecks, ask, openSettings, saveSettings, skipSite, INCIDENT_KIND, fmtBytes,
-      alarms, aLoading, aError, allAlarms, loadAlarms, alarmList, alarmActive, askAlarm, CLOUD_NAMES };
+      alarms, aLoading, aError, allAlarms, loadAlarms, alarmList, alarmActive, askAlarm, CLOUD_NAMES,
+      sp, spBusy, loadStatusPage, saveStatusPage, statusURL, copyStatusURL };
   },
   template: `
   <div class="monitor-page">
@@ -3890,6 +3927,16 @@ const MonitorPage = {
           <div class="row small secondary" v-if="!v.mail">发邮件要先设置发信邮箱（SMTP），在 Web 版的「设置 → 账号」里。</div>
           <div class="row small secondary">网站连续两次打不开、服务器连续三次连不上也会提醒，恢复后再说一声。推送地址（企业微信、钉钉、飞书、Server酱）在「待处理 → 提醒和日报」里设置。</div>
         </div>
+        <div class="group-title group-title-row">公开状态页<span class="tertiary small">不登录也能看的只读页面</span></div>
+        <div class="group">
+          <label class="row"><span class="grow">开启公开状态页<span class="small secondary block">任何人拿到链接都能看网站和服务器是否正常；服务器名会脱敏成「服务器 A/B」</span></span>
+            <input type="checkbox" :checked="sp.enabled" :disabled="spBusy" @change="saveStatusPage($event.target.checked)"></label>
+          <div class="row" v-if="sp.enabled && sp.token">
+            <span class="grow small mono" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ statusURL() }}</span>
+            <button class="plain small" @click="copyStatusURL">复制链接</button>
+            <button class="plain small" :disabled="spBusy" @click="saveStatusPage(true, true)">重新生成</button>
+          </div>
+        </div>
         <div class="notice" v-if="form.error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ form.error }}</div>
         <div class="sheet-actions"><button @click="form.open = false">取消</button>
           <button class="primary" @click="saveSettings" :disabled="form.saving">{{ form.saving ? '正在保存……' : '保存' }}</button></div>
@@ -3918,9 +3965,17 @@ const InboxPage = {
     const serverName = pl => planPlace(pl, props.servers);
     const fmt = t => t ? new Date(t).toLocaleString('zh-CN', { hour12: false, month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
     const done = () => { load(); emit('changed'); };
+    async function clearAll() {
+      if (!confirm('删除所有还没执行的清单？已执行的记录不受影响。')) return;
+      try {
+        const r = await api('POST', '/api/plans/clear', { status: 'proposed' });
+        notify('已删除 ' + (r.deleted || 0) + ' 份清单');
+        load(); emit('changed');
+      } catch (e) { notify(e.message, 'error'); }
+    }
     const tick = ref(0); // the refresh button reads the reminders again too
     const refresh = () => { load(); tick.value++; emit('changed'); };
-    return { INBOX_VIEWS, view, plans, error, waiting, serverName, fmt, done, load, tick, refresh };
+    return { INBOX_VIEWS, view, plans, error, waiting, serverName, fmt, done, clearAll, load, tick, refresh };
   },
   template: `
   <div class="inbox">
@@ -3929,18 +3984,19 @@ const InboxPage = {
         <button v-for="v in INBOX_VIEWS" :key="v.id" role="tab" :aria-selected="view === v.id" :class="{ on: view === v.id }" @click="view = v.id">{{ v.text }}<span class="side-count" v-if="v.id === 'todo' && waiting.length"> {{ waiting.length }}</span></button>
       </span>
       <span class="grow"></span>
+      <button class="plain" v-if="waiting.length" @click="clearAll" title="删除所有还没执行的清单"><ui-icon name="trash"></ui-icon>清理未执行</button>
       <button class="plain" @click="refresh"><ui-icon name="refresh"></ui-icon>刷新</button>
     </div>
     <div class="notice" v-if="error"><ui-icon name="alert" class="st-crit"></ui-icon>{{ error }}</div>
     <template v-if="view === 'todo'">
       <p class="small secondary inbox-lead">AI 和各个页面生成、还没有执行的清单。勾选后执行，执行后可以撤销；不需要的可以不管它。</p>
-      <plan-card v-for="pl in waiting" :key="pl.id" :plan="pl" :server-name="serverName(pl) + ' · ' + fmt(pl.createdAt)" @done="done"></plan-card>
+      <plan-card v-for="pl in waiting" :key="pl.id" :plan="pl" :server-name="serverName(pl) + ' · ' + fmt(pl.createdAt)" @done="done" @deleted="load"></plan-card>
       <div class="group" v-if="plans && !waiting.length"><div class="row secondary"><span class="sdot good"></span>没有等你确认的清单。</div></div>
     </template>
     <notice-page v-if="view === 'notices'" :key="tick" :active="active && view === 'notices'" @unread="n => $emit('unread', n)"></notice-page>
     <template v-if="view === 'plans'">
       <p class="small secondary inbox-lead">所有清单都在这里，可以随时回来执行或撤销。</p>
-      <plan-card v-for="pl in plans || []" :key="pl.id" :plan="pl" :server-name="serverName(pl) + ' · ' + fmt(pl.createdAt)" @done="done"></plan-card>
+      <plan-card v-for="pl in plans || []" :key="pl.id" :plan="pl" :server-name="serverName(pl) + ' · ' + fmt(pl.createdAt)" @done="done" @deleted="load"></plan-card>
       <div class="group" v-if="plans && !plans.length"><div class="row secondary">还没有清单。在「AI 助手」里说出你想做什么，AI 会把修改方案整理成清单。</div></div>
     </template>
   </div>`,
@@ -6547,7 +6603,7 @@ const FilePage = {
 
     // ---- Editor ----
     const ed = reactive({ open: false, serverId: 0, path: '', name: '', content: '', orig: '', modTime: '', size: 0, crlf: false, binary: false,
-      loading: false, saving: false, error: '', wrap: false, line: 1, col: 1 });
+      loading: false, saving: false, error: '', wrap: false, line: 1, col: 1, follow: false, followTimer: null });
     const edEl = ref(null);
     let indent = '    ';
     async function openEditor(p) {
@@ -6584,7 +6640,26 @@ const FilePage = {
         notify(e.message, 'error');
       } finally { ed.saving = false; }
     }
+    function stopFollow() {
+      if (ed.followTimer) { clearInterval(ed.followTimer); ed.followTimer = null; }
+      ed.follow = false;
+    }
+    async function pullTail() {
+      try {
+        const t = await api('GET', url(`/tail?path=${encodeURIComponent(ed.path)}&lines=300`));
+        ed.content = t.content;
+        ed.orig = t.content;
+        ed.size = t.size;
+        ed.modTime = t.modTime;
+        nextTick(() => { if (edEl.value) edEl.value.scrollTop = edEl.value.scrollHeight; });
+      } catch (e) { notify(e.message, 'error'); stopFollow(); }
+    }
+    function toggleFollow(on) {
+      if (on) { ed.follow = true; pullTail(); ed.followTimer = setInterval(pullTail, 2000); }
+      else stopFollow();
+    }
     function closeEditor() {
+      stopFollow();
       if (dirty.value && !confirm(`${ed.name} 的修改还没保存，确定关闭？`)) return;
       ed.open = false;
     }
@@ -6886,6 +6961,7 @@ const FilePage = {
           <ui-icon name="file" class="lg"></ui-icon>
           <div class="grow"><div class="fm-ed-title"><b>{{ ed.name }}</b><span class="tag dirty" v-if="dirty">未保存</span></div><div class="small tertiary ellipsis" :title="ed.path">{{ ed.path }}</div></div>
           <label class="fm-check small" v-if="!ed.binary && !ed.error"><input type="checkbox" v-model="ed.wrap">自动换行</label>
+          <label class="fm-check small" v-if="!ed.binary && !ed.error" title="每 2 秒拉取文件最后 300 行，适合看日志"><input type="checkbox" :checked="ed.follow" @change="toggleFollow($event.target.checked)">跟随最新</label>
           <button class="plain" @click="download({ path: ed.path, name: ed.name, dir: false })" :disabled="ed.loading"><ui-icon name="download"></ui-icon>下载</button>
           <button class="primary" @click="save()" :disabled="!dirty || ed.saving" title="保存（Ctrl+S）">{{ ed.saving ? '正在保存……' : '保存' }}</button>
           <button class="plain icon-only" @click="closeEditor" title="关闭（Esc）" aria-label="关闭"><ui-icon name="close"></ui-icon></button>
@@ -6895,7 +6971,7 @@ const FilePage = {
           <div class="fm-msg" v-else-if="ed.error"><ui-icon name="alert" class="lg st-crit"></ui-icon><p>{{ ed.error }}</p></div>
           <div class="fm-msg" v-else-if="ed.binary"><ui-icon name="info" class="lg"></ui-icon><p>这不是文本文件（可能是图片、压缩包或程序），不能在这里编辑，可以下载到电脑上打开。</p>
             <button @click="download({ path: ed.path, name: ed.name, dir: false })"><ui-icon name="download"></ui-icon>下载到电脑</button></div>
-          <textarea v-else ref="edEl" v-model="ed.content" :wrap="ed.wrap ? 'soft' : 'off'" spellcheck="false" autocomplete="off" autocapitalize="off"
+          <textarea v-else ref="edEl" v-model="ed.content" :readonly="ed.follow" :wrap="ed.wrap ? 'soft' : 'off'" spellcheck="false" autocomplete="off" autocapitalize="off"
             @keydown="onEdKey" @keyup="caret" @click="caret" aria-label="文件内容"></textarea>
         </div>
         <div class="fm-ed-foot small tertiary" v-if="!ed.loading && !ed.error && !ed.binary">
@@ -7002,7 +7078,7 @@ const InstallApp = {
         <label class="field"><span>用户名</span><input v-model="f.name" autocomplete="username" autocapitalize="off" spellcheck="false" required></label>
         <label class="field"><span>密码</span><input type="password" v-model="f.pw" autocomplete="new-password" required autofocus></label>
         <label class="field"><span>再输一次密码</span><input type="password" v-model="f.pw2" autocomplete="new-password" required></label>
-        <p class="small tertiary">至少 10 个字符。这个账号能管理你所有的服务器，请用一个别处没用过的密码，登录后建议开启两步验证。</p>
+        <p class="small tertiary">至少 8 个字符。这个账号能管理你所有的服务器，请用一个别处没用过的密码，登录后建议开启两步验证。</p>
       </template>
 
       <div class="login-error" v-if="error" role="alert"><ui-icon name="alert"></ui-icon><span>{{ error }}</span></div>
@@ -7092,7 +7168,7 @@ const LoginApp = {
           :placeholder="setup ? '' : '用户名，或者绑定的邮箱、手机号'"></label>
         <label class="field"><span>密码</span><input type="password" v-model="f.password" :autocomplete="setup ? 'new-password' : 'current-password'" required></label>
         <label class="field" v-if="setup"><span>再输一次密码</span><input type="password" v-model="f.password2" autocomplete="new-password" required></label>
-        <p class="small tertiary" v-if="setup">至少 10 个字符。这个账号能管理你所有的服务器，请用一个别处没用过的密码，登录后建议开启两步验证。</p>
+        <p class="small tertiary" v-if="setup">至少 8 个字符。这个账号能管理你所有的服务器，请用一个别处没用过的密码，登录后建议开启两步验证。</p>
       </template>
       <template v-else>
         <label class="field"><span>{{ way === 'email' ? '邮箱' : '手机号' }}</span>
@@ -7323,7 +7399,7 @@ const AccountPanel = {
       <button class="small" @click="pw.open = !pw.open">{{ pw.open ? '取消' : '修改密码' }}</button></div>
     <template v-if="pw.open">
       <div class="row form"><span class="k">原密码</span><span class="v"><input type="password" v-model="pw.old" autocomplete="current-password" aria-label="原密码"></span></div>
-      <div class="row form"><span class="k">新密码</span><span class="v"><input type="password" v-model="pw.new1" autocomplete="new-password" placeholder="至少 10 个字符" aria-label="新密码"></span></div>
+      <div class="row form"><span class="k">新密码</span><span class="v"><input type="password" v-model="pw.new1" autocomplete="new-password" placeholder="至少 8 个字符" aria-label="新密码"></span></div>
       <div class="row form"><span class="k">再输一次</span><span class="v"><input type="password" v-model="pw.new2" autocomplete="new-password" aria-label="再输一次新密码"></span></div>
       <div class="row"><span class="grow small st-crit">{{ pw.error }}</span><button class="primary small" @click="savePassword" :disabled="pw.busy || !pw.old || !pw.new1">保存新密码</button></div>
     </template>
@@ -7760,6 +7836,20 @@ const app = createApp({
       try { await api('POST', '/api/auth/logout'); } catch { /* logged out anyway */ }
       location.reload();
     }
+    // 玻璃拟态外观：半透明 + 背景模糊，接近 SwiftUI / visionOS 的材质感
+    const glass = ref(document.documentElement.classList.contains('glass'));
+    function toggleGlass() {
+      glass.value = !glass.value;
+      document.documentElement.classList.toggle('glass', glass.value);
+      try { localStorage.setItem('miao.skin', glass.value ? 'glass' : 'classic'); } catch (e) { /* not kept */ }
+    }
+    // 紧凑显示：减少行高与内边距，一屏看更多；偏好存在 localStorage
+    const compact = ref(document.documentElement.classList.contains('compact'));
+    function toggleCompact() {
+      compact.value = !compact.value;
+      document.documentElement.classList.toggle('compact', compact.value);
+      try { localStorage.setItem('miao.density', compact.value ? 'compact' : 'cozy'); } catch (e) { /* not kept */ }
+    }
     function openTerminal(serverId) { termRequest.value = { serverId, at: Date.now() }; go('terminal'); }
     const filesRequest = ref(null);
     function openFiles(serverId, path) { filesRequest.value = { serverId, path, at: Date.now() }; go('files'); }
@@ -7805,13 +7895,21 @@ const app = createApp({
     const inboxFocus = ref(null);
     function openInbox(view) { inboxFocus.value = { view, at: Date.now() }; go('inbox'); }
     function go(id) {
-      if (id === 'plans' || id === 'notices') { inboxFocus.value = { view: id, at: Date.now() }; id = 'inbox'; }
-      navOpen.value = false;
-      tab.value = id;
-      seen[id] = true;
-      if (id === 'home') loadOverview();
-      if (id === 'plans') api('GET', '/api/plans').then(v => { plans.value = v; }).catch(e => notify(e.message, 'error'));
-      if (id === 'logs') loadAudit();
+      const apply = () => {
+        if (id === 'plans' || id === 'notices') { inboxFocus.value = { view: id, at: Date.now() }; id = 'inbox'; }
+        navOpen.value = false;
+        tab.value = id;
+        seen[id] = true;
+        if (id === 'home') loadOverview();
+        if (id === 'plans') api('GET', '/api/plans').then(v => { plans.value = v; }).catch(e => notify(e.message, 'error'));
+        if (id === 'logs') loadAudit();
+      };
+      // 原生 View Transitions：支持的浏览器切页会有一段平滑过渡，不支持的直接切换
+      if (document.startViewTransition && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        document.startViewTransition(apply);
+      } else {
+        apply();
+      }
     }
     function loadAudit() { api('GET', '/api/audit').then(v => { audit.value = v; }).catch(e => notify(e.message, 'error')); }
     function openLog(id) { logView.value = 'exec'; logFocus.value = id; tab.value = 'logs'; }
@@ -8240,7 +8338,7 @@ const app = createApp({
       spendText, plans, audit, logView, logFocus, loadAudit, openLog, showAdd, addForm, messages, draft, chatBusy, msgBox, suggestions,
       select, openAdd, addServer, testConn, discover, removeServer, askAbout, send, onEnter, onChatScroll, newChat, applyPreset, saveAI, testAI,
       convs, showConvs, conversationId, openConv, deleteConv, relTime,
-      op, saveOnePanel, testOnePanel, bt, saveBT, testBT, upd, updApplying, updNotes, checkUpdate, setUpdateCheck, applyUpdate, preload, setPreload, runPreload, downloadDiagnostics, tc, saveTencent, testTencent, clearTencent, ali, saveAliyun, testAliyun, clearAliyun, freeCmd, setFree, seen, statsView, statsSeen, termRequest, openTerminal, filesRequest, openFiles, sitesRequest, openSite, newSite, unread, me, logout,
+      op, saveOnePanel, testOnePanel, bt, saveBT, testBT, upd, updApplying, updNotes, checkUpdate, setUpdateCheck, applyUpdate, preload, setPreload, runPreload, downloadDiagnostics, tc, saveTencent, testTencent, clearTencent, ali, saveAliyun, testAliyun, clearAliyun, freeCmd, setFree, seen, statsView, statsSeen, termRequest, openTerminal, filesRequest, openFiles, sitesRequest, openSite, newSite, unread, me, logout, compact, toggleCompact, glass, toggleGlass,
       overview, loadOverview, inboxCount, inboxFocus, openInbox, aiPanel, toggleAI, pageContext, siteContext, serverSiteContext, palette, modKey, serverDot, serverMeta, visitSection, statsRequest, openStats,
       cloud, cloudList, cloudPick, pickCloud, askAI, securityForm, securityPlan, proposeSecurity, securityDone,
       monitorDown, SERVER_TABS, serverTab, seenServerSites, serverSitesRequest, openServerSite, serverStateText, serverFacts, cloudRequest, openCloud, addFromCloud,
