@@ -1,6 +1,6 @@
 module github.com/bocmiao/CloudConsoleWithAI
 
-go 1.26.9
+go 1.26.10
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.75.0
