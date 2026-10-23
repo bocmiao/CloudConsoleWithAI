@@ -526,6 +526,7 @@ func (a *App) TailFile(ctx context.Context, id int64, p string, lines int) (File
 	})
 	return out, err
 }
+
 // WriteFileText saves a text file. expect is the modification time the
 // page read; when the file changed since, it refuses unless force.
 func (a *App) WriteFileText(ctx context.Context, id int64, p, content, expect string, force bool) (FileText, error) {

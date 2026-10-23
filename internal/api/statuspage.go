@@ -116,7 +116,7 @@ func (s *Server) getStatusPage(_ http.ResponseWriter, r *http.Request) (any, err
 // link so an old one stops working.
 func (s *Server) saveStatusPage(_ http.ResponseWriter, r *http.Request) (any, error) {
 	var req struct {
-		Enabled   bool `json:"enabled"`
+		Enabled    bool `json:"enabled"`
 		Regenerate bool `json:"regenerate"`
 	}
 	if err := decode(r, &req); err != nil {
@@ -136,11 +136,20 @@ func (s *Server) publicStatusPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := struct {
-		Updated   string
-		AllUp     bool
-		Down      int
-		Sites     []struct{ Name string; Up bool; UptimeStr string; AvgMS int }
-		Servers   []struct{ Name string; Up bool; CPU, Mem, Disk int }
+		Updated string
+		AllUp   bool
+		Down    int
+		Sites   []struct {
+			Name      string
+			Up        bool
+			UptimeStr string
+			AvgMS     int
+		}
+		Servers []struct {
+			Name           string
+			Up             bool
+			CPU, Mem, Disk int
+		}
 		Incidents []struct{ Name, Target, Reason, Started, Ended string }
 	}{Updated: shortTime(v.UpdatedAt), AllUp: v.AllUp, Down: v.Down}
 	for _, x := range v.Sites {
@@ -148,10 +157,19 @@ func (s *Server) publicStatusPage(w http.ResponseWriter, r *http.Request) {
 		if x.Uptime != nil {
 			up = fmt.Sprintf("%.2f%%", *x.Uptime)
 		}
-		data.Sites = append(data.Sites, struct{ Name string; Up bool; UptimeStr string; AvgMS int }{x.Name, x.Up, up, x.AvgMS})
+		data.Sites = append(data.Sites, struct {
+			Name      string
+			Up        bool
+			UptimeStr string
+			AvgMS     int
+		}{x.Name, x.Up, up, x.AvgMS})
 	}
 	for _, x := range v.Servers {
-		data.Servers = append(data.Servers, struct{ Name string; Up bool; CPU, Mem, Disk int }{x.Name, x.Up, x.CPU, x.Mem, x.Disk})
+		data.Servers = append(data.Servers, struct {
+			Name           string
+			Up             bool
+			CPU, Mem, Disk int
+		}{x.Name, x.Up, x.CPU, x.Mem, x.Disk})
 	}
 	for _, x := range v.Incidents {
 		data.Incidents = append(data.Incidents, struct{ Name, Target, Reason, Started, Ended string }{x.Name, x.Target, x.Reason, shortTime(x.Started), shortTime(x.Ended)})
