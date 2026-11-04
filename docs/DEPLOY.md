@@ -132,7 +132,7 @@ sudo sh -c 'cd /root && sha256sum miaopanel-backup.tar.gz > miaopanel-backup.tar
 sudo systemctl start miaopanel
 ```
 
-在新机器的空数据目录恢复时，先安装好服务但不要启动，先用 `sha256sum -c` 检查备份，再解包，运行 `sudo chown -R miaopanel:miaopanel /var/lib/miaopanel`，然后启动服务。恢复演练要检查原账号和两步验证能登录、服务器列表和密钥可用、执行日志及回滚信息仍在。至少保留一份不在原服务器磁盘上的备份。不要把含密钥的备份提交到 GitHub。
+在新机器恢复时，安装包会自动启动服务，安装后先运行 `sudo systemctl stop miaopanel`。核对服务的数据目录，把自动生成的初始目录保留到其他位置，再准备同一路径的空目录。先用 `sha256sum -c` 检查备份，再解包到这个空目录；安装包默认路径需运行 `sudo chown -R miaopanel:miaopanel /opt/miaopanel/data`，然后启动服务。手动安装请替换为服务实际使用的数据目录。恢复演练要检查原账号和两步验证能登录、服务器列表和密钥可用、执行日志及回滚信息仍在。至少保留一份不在原服务器磁盘上的备份。不要把含密钥的备份提交到 GitHub。
 
 ## 方式三：手动配置 systemd
 
