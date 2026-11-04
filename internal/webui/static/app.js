@@ -2324,7 +2324,7 @@ const DnsPage = {
         </div>
         <div class="table-wrap">
           <table class="table dns-table">
-            <thead><tr><th>主机记录</th><th>类型</th><th>线路</th><th>记录值</th><th>TTL</th><th>状态</th><th><span class="sr-only">操作</span></th></tr></thead>
+            <thead><tr><th>主机记录</th><th>类型</th><th>线路</th><th>记录值</th><th>TTL</th><th>状态</th><th class="ops"><span class="sr-only">操作</span></th></tr></thead>
             <tbody>
               <tr v-for="r in shown" :key="r.rid || r.id" :class="{ off: !r.enabled }">
                 <td class="c-name"><div class="dns-name">{{ r.name }}</div><div class="small tertiary">{{ r.full }}</div></td>
@@ -2679,7 +2679,7 @@ const HomePage = {
           <header class="card-head"><h3>服务器</h3></header>
           <div class="srv-grid srv-head small tertiary"><span>名称</span><span>CPU</span><span>内存</span><span>磁盘</span></div>
           <button class="srv-grid srv-row" v-for="s in ov.servers" :key="s.id" @click="$emit('server', s.id)">
-            <span class="srv-name"><span class="sdot" :class="levelDot(s.level)"></span><span><b>{{ s.name }}</b><span class="small tertiary block">{{ s.level === 'unknown' ? s.note : ({ '1panel': '1Panel', bt: '宝塔', linux: 'Linux' }[s.adapter] || '') }}</span></span></span>
+            <span class="srv-name"><span class="sdot" :class="levelDot(s.level)"></span><span><b :title="s.name">{{ s.name }}</b><span class="small tertiary block">{{ s.level === 'unknown' ? s.note : ({ '1panel': '1Panel', bt: '宝塔', linux: 'Linux' }[s.adapter] || '') }}</span></span></span>
             <span v-for="(m, k) in [s.cpuPct, s.memPct, s.diskPct]" :key="k" class="srv-metric">
               <template v-if="m != null"><span class="mini-bar"><span :class="bar(m).cls" :style="{ width: bar(m).w }"></span></span><span :class="{ 'warn-text': m >= 85 }">{{ m }}%</span></template>
               <span class="tertiary" v-else>—</span>
@@ -2999,7 +2999,7 @@ const ServerApps = {
         <div class="row secondary" v-else-if="!containers.length">没有容器</div>
         <div class="table-wrap" v-else>
           <table class="table">
-            <thead><tr><th>容器</th><th>镜像</th><th>状态</th><th class="num">内存</th><th class="num">CPU</th><th><span class="sr-only">操作</span></th></tr></thead>
+            <thead><tr><th>容器</th><th>镜像</th><th>状态</th><th class="num">内存</th><th class="num">CPU</th><th class="ops"><span class="sr-only">操作</span></th></tr></thead>
             <tbody><tr v-for="c in containers" :key="c.name"><td>{{ c.name }}<div class="small tertiary" v-if="c.ports">{{ c.ports }}</div></td><td class="secondary">{{ c.image }}</td>
               <td class="nowrap"><span class="sdot" :class="c.running ? 'good' : 'off'"></span>{{ c.status }}</td>
               <td class="num nowrap">{{ c.mem ? c.mem.split(' / ')[0] : '—' }}</td><td class="num">{{ c.cpu || '—' }}</td>
@@ -3408,7 +3408,7 @@ const CloudPage = {
           <div class="row secondary" v-else-if="!detail.firewall.length">没有入站规则</div>
           <div class="table-wrap" v-else>
             <table class="table">
-              <thead><tr><th>端口</th><th>协议</th><th>来源</th><th>策略</th><th>备注</th><th><span class="sr-only">操作</span></th></tr></thead>
+              <thead><tr><th>端口</th><th>协议</th><th>来源</th><th>策略</th><th>备注</th><th class="ops"><span class="sr-only">操作</span></th></tr></thead>
               <tbody><tr v-for="(r, i) in detail.firewall" :key="i">
                 <td class="mono">{{ r.port }}</td><td>{{ r.protocol }}</td>
                 <td>{{ r.everyone ? '所有人' : r.source }}<span class="tertiary small cloud-cidr" v-if="r.everyone">{{ r.source }}</span></td>
@@ -3579,7 +3579,7 @@ const CdnPage = {
       <div class="group" v-if="domains.length">
         <div class="table-wrap">
           <table class="table cdn-table">
-            <thead><tr><th>加速域名</th><th>状态</th><th>CNAME</th><th>源站</th><th>HTTPS</th><th><span class="sr-only">操作</span></th></tr></thead>
+            <thead><tr><th>加速域名</th><th>状态</th><th>CNAME</th><th>源站</th><th>HTTPS</th><th class="ops"><span class="sr-only">操作</span></th></tr></thead>
             <tbody>
               <tr v-for="d in domains" :key="d.provider + d.domain">
                 <td><div class="site-name">{{ d.domain }}</div><div class="small tertiary"><template v-if="both">{{ CLOUD_NAMES[d.provider] }} · </template>{{ CDN_TYPE[d.type] || d.type }}<template v-if="CDN_AREA[d.area]"> · {{ CDN_AREA[d.area] }}</template></div></td>
@@ -3812,7 +3812,7 @@ const MonitorPage = {
         <div class="row secondary" v-if="!sites.length">{{ v.listed ? '没有找到网站。在「设置」里手动添加要监控的地址，或者在服务器上用 1Panel 建站。' : '正在整理要监控的网站，一分钟内出结果……' }}</div>
         <div class="table-wrap" v-else>
           <table class="table mon-table">
-            <thead><tr><th>网站</th><th>现在</th><th class="num">响应</th><th class="num">24 小时可用率</th><th>最近一小时</th><th><span class="sr-only">操作</span></th></tr></thead>
+            <thead><tr><th>网站</th><th>现在</th><th class="num">响应</th><th class="num">24 小时可用率</th><th>最近一小时</th><th class="ops"><span class="sr-only">操作</span></th></tr></thead>
             <tbody>
               <tr v-for="s in sites" :key="s.url">
                 <td><div class="site-name">{{ s.name }}</div><div class="small tertiary ellipsis">{{ s.source }}</div></td>
@@ -4460,7 +4460,7 @@ const SitePage = {
         <div class="group site-group" v-else>
           <div class="table-wrap">
             <table class="table site-table">
-              <thead><tr><th>网站</th><th>类型</th><th>状态</th><th>HTTPS</th><th><span class="sr-only">操作</span></th></tr></thead>
+              <thead><tr><th>网站</th><th>类型</th><th>状态</th><th>HTTPS</th><th class="ops"><span class="sr-only">操作</span></th></tr></thead>
               <tbody>
                 <tr v-for="x in s.shown" :key="x.id" class="site-row" @click="openSite(s.id, x.id)">
                   <td><div class="site-name">{{ x.domain }}</div><div class="small tertiary" v-if="x.remark || x.app || x.runtime">{{ [x.remark, x.app, x.runtime].filter(Boolean).join(' · ') }}</div></td>
@@ -5357,7 +5357,7 @@ const StoragePage = {
                 <table class="table cos-table">
                   <thead><tr>
                     <th class="ck"><input type="checkbox" :checked="allOn" :indeterminate="picked.length > 0 && !allOn" @change="toggleAll" aria-label="全选"></th>
-                    <th>名称</th><th class="num">大小</th><th class="hide-sm">修改时间</th><th class="hide-sm">存储类型</th><th><span class="sr-only">操作</span></th></tr></thead>
+                    <th>名称</th><th class="num">大小</th><th class="hide-sm">修改时间</th><th class="hide-sm">存储类型</th><th class="ops"><span class="sr-only">操作</span></th></tr></thead>
                   <tbody>
                     <tr v-for="e in shown" :key="e.key" :class="{ on: pickSet.has(e.key) }" @click="clickRow(e, $event)">
                       <td class="ck" @click.stop><input type="checkbox" :checked="pickSet.has(e.key)" @change="togglePick(e)" :aria-label="'选择 ' + e.name"></td>
