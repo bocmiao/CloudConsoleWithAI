@@ -33,6 +33,10 @@
   --shadow: 0 0 0 .5px rgba(0, 0, 0, .06), 0 1px 3px rgba(0, 0, 0, .05), 0 8px 24px rgba(0, 0, 0, .04);
   --shadow-lg: 0 20px 60px rgba(0, 0, 0, .18), 0 0 0 .5px rgba(0, 0, 0, .08);
   --radius: 14px;
+  --page-gutter: 28px;
+  --layout-gap: 16px;
+  --control-height: 32px;
+  --ai-panel-width: 380px;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -109,7 +113,7 @@ a { color: var(--accent); text-decoration: none; cursor: pointer; }
 /* Controls */
 button {
   font: inherit; font-size: 13px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
-  height: 30px; padding: 0 12px; border-radius: 7px; border: none; cursor: pointer;
+  height: var(--control-height); padding: 0 12px; border-radius: 7px; border: none; cursor: pointer;
   background: var(--surface); color: var(--text); box-shadow: var(--shadow);
 }
 button:hover:not(:disabled) { background: var(--surface-2); }
@@ -126,6 +130,7 @@ input, select, textarea {
   border: none; border-radius: 7px; padding: 6px 10px; outline: none; width: 100%;
   box-shadow: inset 0 0 0 1px var(--sep);
 }
+:where(input:not([type=checkbox]):not([type=radio])), select { height: var(--control-height); min-width: 0; }
 input:focus, select:focus, textarea:focus { box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 3px var(--accent-track); }
 /* Drop-downs look like the fields around them, with a thin chevron, not
    the system's own box. */
@@ -149,7 +154,7 @@ input[type=checkbox]:focus-visible, input[type=radio]:focus-visible { outline: 2
 /* App layout */
 .app { display: grid; grid-template-columns: 248px 1fr; height: 100vh; }
 .sidebar {
-  background: var(--sidebar); border-right: 1px solid var(--sep);
+  position: relative; background: var(--sidebar); border-right: 1px solid var(--sep);
   display: flex; flex-direction: column; padding: 16px 10px 12px; overflow-y: auto;
 }
 .app-title { display: flex; align-items: center; gap: 10px; padding: 2px 10px 18px; font-weight: 600; font-size: 15px; letter-spacing: -.01em; }
@@ -182,17 +187,18 @@ input[type=checkbox]:focus-visible, input[type=radio]:focus-visible { outline: 2
 .sidebar-foot { margin-top: auto; }
 .spend { padding: 8px 10px 0; font-size: 12px; color: var(--text-3); }
 
-.main { overflow-y: auto; display: flex; flex-direction: column; min-width: 0; }
+.main { --page-max: 1040px; overflow-y: auto; scrollbar-gutter: stable; display: flex; flex-direction: column; min-width: 0; }
+.main:has(> .page.wide), .tab-pane:has(> .page.wide) { --page-max: 1400px; }
 .toolbar {
   position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px;
-  min-height: 52px; padding: 10px 28px; background: color-mix(in srgb, var(--bg) 82%, transparent);
+  min-height: 52px; flex-shrink: 0; padding: 10px max(var(--page-gutter), calc((100% - var(--page-max)) / 2 + var(--page-gutter))); background: color-mix(in srgb, var(--bg) 82%, transparent);
   backdrop-filter: saturate(180%) blur(20px); -webkit-backdrop-filter: saturate(180%) blur(20px);
   border-bottom: 1px solid var(--sep);
 }
-.toolbar h1 { font-size: 15px; }
+.toolbar h1 { font-size: 15px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .toolbar .spacer { flex: 1; }
-.toolbar .actions { display: flex; gap: 8px; }
-.page { width: 100%; max-width: 1040px; margin: 0 auto; padding: 28px 28px 48px; }
+.toolbar .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.page { width: 100%; max-width: var(--page-max); flex-shrink: 0; margin: 0 auto; padding: 24px var(--page-gutter) 48px; container: page / inline-size; }
 
 .page-head { margin-bottom: 22px; }
 .page-head h2 { font-size: 26px; letter-spacing: -.02em; }
@@ -226,7 +232,7 @@ input[type=checkbox]:focus-visible, input[type=radio]:focus-visible { outline: 2
 .row .grow { flex: 1; min-width: 0; }
 .row .v.ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
 .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
-.row.form .k { min-width: 150px; }
+.row.form .k { flex: 0 0 150px; min-width: 0; overflow-wrap: anywhere; }
 .row.form .v { flex: 1; max-width: 460px; text-align: left; }
 .row.stack { display: block; }
 .security-block > b, .security-block > .secondary { display: block; }
@@ -439,12 +445,16 @@ details.guide code { font: 12px ui-monospace, "SF Mono", Menlo, Consolas, monosp
 .phone-menu, .nav-scrim { display: none; }
 .sidebar:focus { outline: none; }
 @media (max-width: 720px) {
+  :root { --page-gutter: 16px; }
+  .main { scrollbar-gutter: auto; }
   .tiles.two { grid-template-columns: minmax(0, 1fr); }
   .app { grid-template-columns: 1fr; height: auto; }
   .main { overflow: visible; overflow-x: clip; }
   .toolbar { padding: 9px 16px 9px 58px; flex-wrap: wrap; row-gap: 8px; }
   .toolbar h1 { white-space: nowrap; line-height: 34px; min-width: 0; overflow: hidden; text-overflow: ellipsis; } /* level with the menu button */
   /* A row of page buttons goes under the title and scrolls sideways. */
+  .toolbar > .segmented { flex: 1 0 100%; margin-left: -42px; min-width: 0; max-width: calc(100% + 42px); overflow-x: auto; }
+  .toolbar > .segmented button { flex: none; }
   .toolbar .actions { flex: 1 0 100%; margin-left: -42px; padding: 2px 0; overflow-x: auto; scrollbar-width: none; }
   .toolbar .actions::-webkit-scrollbar { display: none; }
   .toolbar .actions > * { flex: none; }
@@ -468,7 +478,9 @@ details.guide code { font: 12px ui-monospace, "SF Mono", Menlo, Consolas, monosp
   }
   .chat-layout { height: auto; }
   .chat { height: auto; min-height: 70vh; }
-  .row.form { flex-wrap: wrap; }
+  .row.form { flex-direction: column; align-items: stretch; gap: 6px; }
+  .row.form .k { flex: none; }
+  .row.form .v { flex: none; width: 100%; max-width: none; margin-left: 0; }
   .log-bar { flex-wrap: wrap; }
   .log-bar .grow { order: 3; flex-basis: 100%; }
   .exec-detail { padding-left: 16px; }
@@ -585,10 +597,10 @@ button.th-sort:focus-visible { outline: 2px solid var(--accent); outline-offset:
 @media (max-width: 720px) { .term-page { height: 80vh; } }
 
 /* 网站统计 → 访问分析: filter bar, sections, cards */
-.page.wide { max-width: 1400px; }
+.page.wide { --page-max: 1400px; }
 .stat-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); padding: 10px 14px; }
 .stat-bar .field { display: inline-flex; flex-direction: row; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); white-space: nowrap; }
-.stat-bar .field input { height: 30px; font-size: 13px; }
+.stat-bar .field input { height: var(--control-height); font-size: 13px; }
 .stat-bar .field > span { flex: none; }
 .stat-bar select { min-width: 150px; max-width: 260px; }
 .stat-bar .grow { flex: 1; }
@@ -620,7 +632,7 @@ button.th-sort:focus-visible { outline: 2px solid var(--accent); outline-offset:
 
 .card { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); margin-bottom: 18px; overflow: hidden; min-width: 0; }
 .card-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid var(--sep); }
-.card-head h3 { font-size: 14px; font-weight: 600; margin: 0; flex: 1; white-space: nowrap; }
+.card-head h3 { font-size: 14px; font-weight: 600; margin: 0; flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .card-head .grow { flex: 1; }
 .card-head h3 + .small { flex: none; }
 .card .lchart { padding: 8px 8px 0; }
@@ -727,7 +739,7 @@ button.th-sort:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .fm-bar > select { width: auto; max-width: 200px; }
 .fm-server { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 13px; padding-right: 2px; white-space: nowrap; }
 .fm-server .icon { color: var(--accent); }
-.fm-path { flex: 1; min-width: 220px; display: flex; align-items: center; gap: 0; height: 30px; padding: 0 4px; border-radius: 7px;
+.fm-path { flex: 1; min-width: 220px; display: flex; align-items: center; gap: 0; height: var(--control-height); padding: 0 4px; border-radius: 7px;
   background: var(--surface); box-shadow: inset 0 0 0 1px var(--sep); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; cursor: text; }
 .fm-path::-webkit-scrollbar { display: none; }
 .fm-path.editing { box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 3px var(--accent-track); }
@@ -1096,11 +1108,11 @@ a.btn:hover { background: var(--hover); }
 }
 
 /* 总览 */
-.home-head { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+.home-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: var(--layout-gap); }
 .home-head h2 { font-size: 26px; letter-spacing: -.02em; }
 .home-head .grow { flex: 1; min-width: 0; }
 .home-start { max-width: 640px; }
-.home-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px; }
+.home-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--layout-gap); margin-bottom: var(--layout-gap); }
 button.home-card { height: auto; display: flex; flex-direction: column; align-items: stretch; gap: 6px; padding: 14px 16px; border-radius: var(--radius);
   background: var(--surface); box-shadow: var(--shadow); text-align: left; white-space: normal; min-width: 0; }
 button.home-card:hover:not(:disabled) { background: var(--surface); box-shadow: var(--shadow), 0 0 0 2px var(--accent-track); }
@@ -1112,15 +1124,18 @@ button.home-card:hover:not(:disabled) { background: var(--surface); box-shadow: 
 .home-card-value { font-size: 30px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.2; }
 .home-card-value small { font-size: 14px; font-weight: 500; color: var(--text-2); margin-left: 4px; letter-spacing: 0; }
 .home-card-sub { font-size: 12.5px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.home-row { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 14px; align-items: start; }
-.home-row.three { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr); }
-.home-row .card { margin-bottom: 14px; }
+.home-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--layout-gap); align-items: stretch; margin-bottom: var(--layout-gap); }
+/* Half + quarter + quarter share the same column lines as the four tiles. */
+.home-row.three { grid-template-columns: minmax(0, calc((100% - var(--layout-gap)) / 2)) repeat(2, minmax(0, 1fr)); }
+.home-row > .card { display: flex; flex-direction: column; margin-bottom: 0; }
+.home-row > .card > * { flex-shrink: 0; }
 .home-row .card-head h3 { flex: none; }
 .home-empty { padding: 16px; color: var(--text-2); font-size: 13px; display: flex; align-items: center; gap: 4px; }
-.todo-row { display: flex; align-items: center; gap: 12px; padding: 10px 16px; }
+.todo-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 12px 16px; }
+.todo-row > button { min-width: 84px; justify-content: center; }
 .todo-row + .todo-row { border-top: 1px solid var(--sep); }
 .todo-row .grow { flex: 1; min-width: 0; }
-.todo-title { font-weight: 500; }
+.todo-title { font-weight: 500; overflow-wrap: anywhere; }
 .todo-icon { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; background: var(--fill); flex: none; }
 .todo-icon .icon { width: 16px; height: 16px; stroke-width: 2; }
 .todo-icon.lv-crit .icon { color: var(--crit); }
@@ -1131,11 +1146,11 @@ button.home-card:hover:not(:disabled) { background: var(--surface); box-shadow: 
 .home-ask .card-head { border-bottom: 0; padding-bottom: 0; }
 .home-ask-icon { color: var(--accent); width: 18px; height: 18px; }
 .home-ask > p, .home-ask > textarea, .home-asks, .home-ask-foot { margin-left: 16px; margin-right: 16px; width: auto; }
-.home-ask > textarea { display: block; resize: none; width: calc(100% - 32px); }
+.home-ask > textarea { display: block; resize: vertical; min-height: 88px; flex: 1; width: calc(100% - 32px); }
 .home-asks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 button.chip { height: 28px; padding: 0 12px; border-radius: 14px; background: var(--fill); box-shadow: none; color: var(--text); font-size: 12.5px; }
 button.chip:hover:not(:disabled) { background: var(--selected); }
-.home-ask-foot { display: flex; align-items: center; margin-top: 10px; }
+.home-ask-foot { display: flex; align-items: center; padding-top: 12px; margin-top: auto; }
 .home-ask-foot .grow { flex: 1; }
 button.round { border-radius: 50%; width: 32px; height: 32px; }
 .srv-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) repeat(3, minmax(0, 1fr)); gap: 10px; align-items: center; padding: 0 16px; }
@@ -1143,7 +1158,9 @@ button.round { border-radius: 50%; width: 32px; height: 32px; }
 button.srv-row { width: 100%; height: auto; min-height: 50px; border-radius: 0; background: none; box-shadow: none; text-align: left; border-top: 1px solid var(--sep); white-space: normal; }
 button.srv-row:hover:not(:disabled) { background: var(--hover); }
 .srv-name { display: flex; align-items: flex-start; gap: 6px; min-width: 0; }
-.srv-name .sdot { margin-top: 7px; }
+.srv-name .sdot { margin-top: 7px; flex: none; }
+.srv-name > span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.srv-name b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .srv-metric { display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .mini-bar { height: 4px; border-radius: 2px; background: var(--fill); overflow: hidden; }
 .mini-bar > span { display: block; height: 100%; border-radius: 2px; background: var(--accent); }
@@ -1163,9 +1180,22 @@ button.change-row:hover:not(:disabled) { background: var(--hover); }
 .change-when { width: 70px; flex: none; padding-top: 1px; }
 .change-row .grow { flex: 1; min-width: 0; }
 /* By the page's own width, which the AI side panel also takes from. */
-.home { container-type: inline-size; }
-@container (max-width: 860px) { .home-cards, .home-row.three { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@container (max-width: 640px) { .home-row, .home-row.three { grid-template-columns: minmax(0, 1fr); } }
+.home { container: home / inline-size; }
+@container home (max-width: 1000px) {
+  .home-cards, .home-row.three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .home-row.three > .card:first-child { grid-column: 1 / -1; }
+}
+@container home (max-width: 680px) {
+  .home-row, .home-row.three { grid-template-columns: minmax(0, 1fr); }
+}
+@container home (max-width: 420px) {
+  .home-head > .grow { flex-basis: 100%; }
+  .home-card-top .pill { display: none; }
+  .home-card-value { font-size: 26px; }
+  .home-card-value small { font-size: 12px; }
+  .todo-row { grid-template-columns: 32px minmax(0, 1fr); }
+  .todo-row > button { grid-column: 2; justify-self: end; }
+}
 .home-card-sub .phone-only { display: none; }
 @media (max-width: 560px) {
   .home-card-top .pill { display: none; }
@@ -1177,17 +1207,17 @@ button.change-row:hover:not(:disabled) { background: var(--hover); }
 }
 
 /* 待处理 */
-.inbox-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+.inbox-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 14px; }
 .inbox-bar .side-count { margin-left: 2px; }
 .inbox-lead { margin: 0 4px 14px; }
 
 /* AI side panel */
 .ai-host { display: contents; }
-.ai-host.panel { display: flex; flex-direction: column; position: fixed; top: 0; right: 0; bottom: 0; width: min(440px, 100vw); z-index: 40;
+.ai-host.panel { display: flex; flex-direction: column; position: fixed; top: 0; right: 0; bottom: 0; width: min(var(--ai-panel-width), 100vw); z-index: 40;
   background: var(--bg); box-shadow: -1px 0 0 var(--sep), -12px 0 40px rgba(0, 0, 0, .12); }
 /* On a wide window the page makes room for the side panel instead of
    hiding under it. */
-@media (min-width: 1100px) { .main.beside-ai { padding-right: 440px; } }
+@media (min-width: 1400px) { .main.beside-ai { padding-right: var(--ai-panel-width); } }
 .ai-host.panel .chat-layout { flex: 1; min-height: 0; display: flex; height: auto; }
 .ai-host.panel .conv-list { display: none; }
 .ai-host.panel .chat { flex: 1; min-width: 0; }
@@ -1379,18 +1409,8 @@ button.wb-site:hover:not(:disabled) { background: var(--hover); }
 .eo-rl-threshold select { width: auto; }
 .eo-rl-threshold input { width: 90px; }
 
-/* ---- 布局修正（NAS 部署后追加）---- */
-/* 1) 粘性工具栏改为不透明，滚动时卡片不再“穿透”露出半截 */
-.toolbar { background: var(--bg); }
-/* 2) 首页底行卡片等高，避免高低不齐 */
-.home-row { align-items: stretch; }
-.home-row > .card { height: 100%; margin-bottom: 0; }
-/* 3) 首页卡片行底部留白一致 */
-.home-row { margin-bottom: 14px; }
-/* ================= 对标优化（参考 Beszel / 1Panel / Dashy） ================= */
-/* 1) 内容限宽 1500px 居中：宽屏下卡片不再被拉成超宽（Beszel --container: 1500px 同值） */
-.home { max-width: 1500px; margin: 0 auto; padding: 24px 28px 44px; width: 100%; }
-@media (max-width: 700px) { .home { padding: 16px 14px 32px; } }
+/* The page owns the outer gutters; Home must not add a second inset. */
+.home { width: 100%; }
 
 /* 2) 卡片层次：1px 边框 + 极轻阴影（1Panel: 1px solid #f2f2f2 / Beszel: border var(--border)） */
 .card, button.home-card { border: 1px solid var(--sep); box-shadow: 0 1px 2px rgba(0, 0, 0, .03); }
@@ -1407,8 +1427,6 @@ button.home-card:hover:not(:disabled) { border-color: var(--accent-track); box-s
 /* 4) 数字统一等宽，避免跳动 */
 .home-card-value, .home-pv b, .delta, .srv-grid, .metric, .num { font-variant-numeric: tabular-nums; }
 
-/* 5) 首页底行卡片等高后，内部内容顶部对齐 */
-.home-row > .card { display: flex; flex-direction: column; }
 /* ================= 修复 2026-10-24（溢出 / 对齐 / 截断） ================= */
 /* flex 子项默认 min-width:auto 会把容器撑破 */
 .grow { min-width: 0; }
@@ -1423,15 +1441,12 @@ button.home-card:hover:not(:disabled) { border-color: var(--accent-track); box-s
 .conv-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
 /* 服务器页：指标卡少于 4 个时自动铺满一行，不再左右缺一块 */
-.wb-rings { grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+.wb-rings { grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr)); }
 /* 滚动条占位，保证消息区与输入框左右对齐 */
 .messages { scrollbar-gutter: stable; }
 /* ================= 响应式补丁 + 清单按钮排版 ================= */
-@media (max-width: 1280px) {
-  .home-row.three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
 @media (max-width: 980px) {
-  .home-row, .home-row.three, .wb-row { grid-template-columns: minmax(0, 1fr); }
+  .wb-row { grid-template-columns: minmax(0, 1fr); }
 }
 @media (prefers-color-scheme: dark) {
   :root { --sep: rgba(120, 120, 128, .62); }
@@ -1440,7 +1455,7 @@ button.home-card:hover:not(:disabled) { border-color: var(--accent-track); box-s
 .plan-foot button { flex: none; }
 /* ================= PWA / 骨架屏 / 紧凑模式 / 可访问性 ================= */
 /* 骨架屏 */
-.home-skeleton { max-width: 1400px; margin: 0 auto; padding: 8px 28px; }
+.home-skeleton { width: 100%; }
 .home-skeleton .sk-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px; }
 .sk-card, .sk-block { position: relative; overflow: hidden; background: var(--surface); border: 1px solid var(--sep); border-radius: 12px; }
 .sk-card { height: 108px; }
@@ -1457,17 +1472,19 @@ button.home-card:hover:not(:disabled) { border-color: var(--accent-track); box-s
 @keyframes sk-shine { 100% { transform: translateX(100%); } }
 
 /* 紧凑模式：更小的行高与内边距 */
-html.compact .table th, html.compact .table td { padding: 6px 12px; }
+html.compact { --layout-gap: 10px; }
+@media (min-width: 721px) {
+  html.compact .table th, html.compact .table td { padding: 6px 12px; }
+}
 html.compact .card-head { padding: 9px 14px; }
 html.compact .row { padding: 8px 14px; }
 html.compact .todo-row, html.compact .wb-check, html.compact .wb-site { padding: 7px 14px; }
 html.compact .home-cards { gap: 10px; margin-bottom: 12px; }
-html.compact .home-row .card { margin-bottom: 10px; }
+html.compact .home-row { gap: 10px; margin-bottom: 10px; }
 html.compact .plan .row.step { padding: 8px 14px; }
 html.compact .page { padding-top: 18px; }
 
 /* 侧边栏分组标题在滚动时保持可见 */
-.sidebar { position: relative; }
 .side-label { position: sticky; top: 0; z-index: 2; background: var(--sidebar); }
 
 /* 键盘焦点可见（可访问性） */
@@ -1651,16 +1668,6 @@ details[open] > summary .icon { transition: transform var(--dur-2) var(--ease-ou
 }
 .home-empty .spinner.inline { margin-right: 2px; }
 
-/* 右侧 AI 面板在中等宽度下更窄一点，避免挤压主内容 */
-@media (max-width: 1400px) {
-  .main.beside-ai .ai-panel, .main.beside-ai .ai-drawer { width: min(380px, 34vw); }
-}
-@media (max-width: 1180px) {
-  .main.beside-ai .ai-panel, .main.beside-ai .ai-drawer {
-    position: fixed; right: 14px; bottom: 14px; top: auto; height: min(72vh, 640px); width: min(420px, 92vw);
-    box-shadow: var(--shadow-lg); z-index: 30;
-  }
-}
 /* 侧栏底部（账号/退出/花费/外观开关）吸底：侧栏内容比视口高时也始终可见 */
 .sidebar { display: flex; flex-direction: column; }
 .sidebar > .side-section, .sidebar > .side-search, .sidebar > .app-title { flex: none; }
@@ -1675,3 +1682,27 @@ html.glass .sidebar > .sidebar-foot {
   backdrop-filter: blur(18px) saturate(160%);
   -webkit-backdrop-filter: blur(18px) saturate(160%);
 }
+/* Shared alignment and reflow for pages, including an open AI panel. */
+.table th.ops, .table td.site-ops, .table td.dns-ops, .table td.cos-ops { text-align: right; vertical-align: middle; }
+.cdn-table td.site-ops { display: table-cell; }
+.cdn-table .site-ops button + button { margin-left: 12px; }
+@container page (max-width: 600px) {
+  .tiles.two { grid-template-columns: minmax(0, 1fr); }
+  .row.form { flex-direction: column; align-items: stretch; gap: 6px; }
+  .row.form .k { flex: none; }
+  .row.form .v { flex: none; width: 100%; max-width: none; margin-left: 0; }
+  .wb-tabs { display: flex; overflow-x: auto; max-width: 100%; }
+  .wb-tabs button { flex: none; }
+  .inbox-bar > .segmented { max-width: 100%; overflow-x: auto; }
+  .inbox-bar > .segmented button { flex: none; }
+  .stat-bar .field { min-width: 0; max-width: 100%; }
+  .stat-bar select { min-width: 0; }
+}
+@container home (max-width: 1000px) { .home-skeleton .sk-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container home (max-width: 680px) { .home-skeleton .sk-row { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 720px) {
+  .table td.site-ops, .table td.dns-ops, .table td.cos-ops { text-align: left; }
+  .cdn-table td.site-ops { display: flex; }
+}
+/* Data rows keep their column positions on hover. */
+button.srv-row:hover, button.change-row:hover, button.wb-site:hover { transform: none; }
