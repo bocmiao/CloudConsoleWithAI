@@ -280,6 +280,13 @@ func (s *Server) beginTOTP(_ http.ResponseWriter, r *http.Request) (any, error) 
 	if err != nil {
 		return nil, err
 	}
+	var req struct{ Password string }
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	if err := s.auth.Confirm(u.ID, s.clientIP(r), req.Password); err != nil {
+		return nil, err
+	}
 	return s.auth.BeginTOTP(u.ID)
 }
 
@@ -288,8 +295,11 @@ func (s *Server) enableTOTP(_ http.ResponseWriter, r *http.Request) (any, error)
 	if err != nil {
 		return nil, err
 	}
-	var req struct{ Code string }
+	var req struct{ Code, Password string }
 	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	if err := s.auth.Confirm(u.ID, s.clientIP(r), req.Password); err != nil {
 		return nil, err
 	}
 	return map[string]bool{"ok": true}, s.auth.EnableTOTP(u.ID, tok, req.Code)

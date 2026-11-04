@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bocmiao/CloudConsoleWithAI/internal/actions"
 	"github.com/bocmiao/CloudConsoleWithAI/internal/store"
 )
 
@@ -100,7 +101,9 @@ func TestPreloadPages(t *testing.T) {
 	}
 	// A change (a checklist step finishing) shows the new state.
 	e := a.startExec(store.ExecLog{ServerID: sv.ID, ServerName: sv.Name, Kind: store.ExecChange, Title: "test"})
-	a.finishExec(&e, "ok", "")
+	if err := a.finishAction(&e, actions.Outcome{Status: actions.StatusDone}); err != nil {
+		t.Fatal(err)
+	}
 	v, _, _ = a.WebsitesPage(ctx, sv.ID, PageLatest)
 	if len(v.Servers[0].Sites) != 3 {
 		t.Fatalf("after a change: %+v", v.Servers[0].Sites)

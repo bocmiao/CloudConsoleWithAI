@@ -60,9 +60,9 @@ docker compose up -d --build
 docker logs miaopanel          # 找到「初始化码」
 ```
 
-默认只在本机的 `127.0.0.1:18765` 上监听，需要再配一个带 HTTPS 的反向代理（见下文）才能从外面访问。
+Docker Compose 在 Linux 服务器上使用主机网络，程序只监听本机的 `127.0.0.1:18765`，需要再配一个带 HTTPS 的反向代理（见下文）才能从外面访问。
 数据（数据库和密钥）在 Docker 卷 `miaopanel-data` 里，删除容器不会丢；**删除这个卷就全没了**。
-在安装向导里选 MySQL 时，地址不能填 `127.0.0.1`（那是容器自己），要填 MySQL 所在机器的内网 IP，或者同一个 Docker 网络里 MySQL 容器的名字。
+默认主机网络下，安装向导中的 `127.0.0.1` 指宿主机；MySQL 在宿主机监听或已向宿主机发布端口时可使用这个地址。远程数据库填其内网 IP；主机网络不使用 Docker 网桥网络内的容器名称解析。
 
 升级：在「设置 → 版本和诊断」点「更新到最新版本」，会从 GitHub 下载新程序、核对校验值后自动重启。新程序放在数据卷的 `/data/bin` 里，重建容器也还在；以后换用更新的镜像（`git pull && docker compose up -d --build`）时自动用较新的那个。有新版本时总览也会提醒（每天问一次 GitHub，可以关掉）。
 
@@ -107,12 +107,14 @@ docker compose stop miaopanel
 docker compose run --rm --no-deps --user 0 \
   -v "$PWD/backups:/backup" --entrypoint sh miaopanel \
   -c 'umask 077; tar -C /data -czf /backup/miaopanel-backup.tar.gz .'
+sudo sha256sum backups/miaopanel-backup.tar.gz > backups/miaopanel-backup.tar.gz.sha256
 docker compose start miaopanel
 ```
 
 在新机器或**新的、空的数据卷**里恢复。把备份放在新项目目录的 `backups/` 下，先不要运行 `docker compose up`：
 
 ```bash
+sudo sha256sum -c backups/miaopanel-backup.tar.gz.sha256
 docker compose run --rm --no-deps --user 0 \
   -v "$PWD/backups:/backup:ro" --entrypoint sh miaopanel \
   -c 'test -z "$(ls -A /data)" || { echo "数据卷必须为空"; exit 1; }; tar -C /data -xzf /backup/miaopanel-backup.tar.gz'
@@ -120,6 +122,17 @@ docker compose up -d
 ```
 
 恢复演练要检查原账号能登录、服务器列表和密钥可用、执行日志仍在。
+
+systemd 安装包的数据目录是 `/opt/miaopanel/data`；手动配置的旧服务可能是 `/var/lib/miaopanel`，备份前先核对服务配置。
+
+```bash
+sudo systemctl stop miaopanel
+sudo sh -c 'umask 077; tar -C /opt/miaopanel/data -czf /root/miaopanel-backup.tar.gz .'
+sudo sh -c 'cd /root && sha256sum miaopanel-backup.tar.gz > miaopanel-backup.tar.gz.sha256'
+sudo systemctl start miaopanel
+```
+
+在新机器恢复时，安装包会自动启动服务，安装后先运行 `sudo systemctl stop miaopanel`。核对服务的数据目录，把自动生成的初始目录保留到其他位置，再准备同一路径的空目录。先用 `sha256sum -c` 检查备份，再解包到这个空目录；安装包默认路径需运行 `sudo chown -R miaopanel:miaopanel /opt/miaopanel/data`，然后启动服务。手动安装请替换为服务实际使用的数据目录。恢复演练要检查原账号和两步验证能登录、服务器列表和密钥可用、执行日志及回滚信息仍在。至少保留一份不在原服务器磁盘上的备份。不要把含密钥的备份提交到 GitHub。
 
 ## 方式三：手动配置 systemd
 
@@ -147,6 +160,7 @@ Miao Panel 本身只说 HTTP，由前面的网站服务提供 HTTPS 证书。登
 
 ```nginx
 proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 proxy_set_header X-Forwarded-Proto $scheme;
 proxy_buffering off;
 proxy_request_buffering off;
@@ -161,9 +175,26 @@ client_max_body_size 0;
 这几行的作用：`X-Real-IP` 让登录失败按访客 IP 限制；`X-Forwarded-Proto` 让 Miao Panel 知道是 HTTPS；
 关闭缓冲让 AI 的回答和终端输出实时显示；超时时间让终端能长时间开着；`client_max_body_size 0` 让「文件」和「存储」页能上传大文件。
 
-直接运行程序时，默认只信任来自本机回环地址的反向代理。Docker Compose 的端口只绑定主机回环地址，但容器里看到的主机代理连接来自 Docker 网桥，因此 `docker-compose.yml` 已信任常见的 Docker 网桥网段。如果你的网桥不在该网段，或反向代理从另一台机器连接，设置 `MIAO_TRUSTED_PROXIES` 为代理的 IP（或尽量小的 CIDR），多个地址用逗号分隔；例如 `MIAO_TRUSTED_PROXIES=172.20.0.5`。如果把 Docker 端口改成对公网开放，必须移除 Compose 里的网桥信任配置，并用程序自带的 HTTPS。不要让代理原样转发客户端提供的 `X-Real-IP` 和 `X-Forwarded-Proto`。
+默认只信任来自本机回环地址的反向代理，Docker Compose 也通过主机网络保持这个边界。如果反向代理在另一台机器，设置 `MIAO_TRUSTED_PROXIES` 为代理的准确 IP（或尽量小的 CIDR），多个地址用逗号分隔；例如 `MIAO_TRUSTED_PROXIES=172.20.0.5`。代理必须覆盖客户端传来的 `X-Real-IP` 和 `X-Forwarded-Proto`，并覆盖或追加 `X-Forwarded-For`；不要把这些请求头原样转发。
 
-不想用反向代理，也可以让 Miao Panel 自己提供 HTTPS：`miaopanel serve --listen 0.0.0.0:443 --tls-cert 证书.pem --tls-key 私钥.pem`。
+直接运行程序且不想用反向代理时，也可以让 Miao Panel 自己提供 HTTPS：`miaopanel serve --listen 0.0.0.0:443 --tls-cert 证书.pem --tls-key 私钥.pem`。Docker 部署请保持默认的本机监听和 HTTPS 反向代理，不要直接发布应用端口。
+
+## 上线验收
+
+仓库 CI 会在 Docker 中自动检查：精确到单个 IP 的可信反向代理、HTTPS 登录和安全 Cookie、开启并再次使用两步验证登录，以及停机备份到空卷后恢复账号、两步验证、服务器记录和密钥文件。单元测试还会用本地模拟 SSH 检查执行日志、服务器端 `rollback.sh` 和一键回滚。它们不能代替下面的真实环境验收。
+
+首次上线或更换代理、数据目录、运行用户后，在一台可丢弃的测试服务器上完成以下检查：
+
+| 项目 | 真实环境通过标准 |
+|---|---|
+| 反向代理与 HTTPS | 公网 HTTP 会跳转到 HTTPS，浏览器证书链有效；`/api/auth/state` 返回 `"https":true`。从外网伪造 `X-Real-IP`、`X-Forwarded-For`、`X-Forwarded-Proto` 后故意登录失败，操作记录仍显示测试机的真实公网 IP，且 Cookie 带 `Secure`、`HttpOnly`、`SameSite=Strict`。 |
+| 登录与两步验证 | 开启两步验证前必须再次输入当前密码；退出后用密码加 TOTP 能登录，错误 TOTP 不能登录；服务器上的 `reset-password` 能恢复账号并退出已有会话。 |
+| SSH 与权限 | 用计划中的实际账号（包括非 root 加 `sudo -n`）测试连接、识别环境；确认主机密钥后重连成功。需要 AI 自由命令时，另测 `systemd-run` 和五分钟保险。 |
+| 执行日志与回滚 | 在可丢弃服务器上执行一个标明可回滚的脚本操作。执行日志应先出现“运行中”再给出完整命令和结果；服务器备份目录应有 `rollback.sh`。点回滚后确认状态确实恢复、日志互相引用，文件改名为 `rollback.sh.done`，再次回滚被拒绝。 |
+| 备份与恢复 | 先产生一条可回滚执行日志并保存一个可用的 SSH 密钥，再按上文停机备份。恢复到另一台机器或新空卷后，用原账号和 TOTP 登录，测试 SSH 密钥、服务器列表、执行日志和回滚信息；校验和与 `secrets.json` 的 `0600` 权限必须保持。 |
+| 面板与云资源 | 如实际使用 1Panel、宝塔或腾讯云，在专用测试站点/实例上各执行一次可逆变更并回滚；核对面板/云控制台的最终状态、Miao Panel 执行日志和审计记录一致。不要用生产资源做首次演练。 |
+
+把日期、版本或提交号、代理地址、测试资源、日志 ID、备份校验和和结果记入上线记录。任何一项未通过，都不要把该版本当作已完成生产验收。
 
 ## 第一次打开：安装向导
 

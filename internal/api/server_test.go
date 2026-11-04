@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/base32"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -143,6 +144,39 @@ func TestWebEditionLogin(t *testing.T) {
 	}
 	if w := (call{method: "GET", path: "/api/servers", cookie: c.Value}).do(s); w.Code != 200 {
 		t.Fatalf("the other session ended too: %d", w.Code)
+	}
+}
+
+func TestEnablingTOTPRequiresPassword(t *testing.T) {
+	s, au := newWebServer(t)
+	code, _ := au.SetupCode()
+	w := call{method: "POST", path: "/api/auth/setup", body: `{"code":"` + code + `","name":"admin","password":"correct horse"}`}.do(s)
+	cookie := sessionCookie(w).Value
+	post := func(method, path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		return call{method: method, path: path, body: body, cookie: cookie, remote: "203.0.113.5:1"}.do(s)
+	}
+	if w := post("POST", "/api/account/totp", `{"password":"wrong password"}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("begin with wrong password: %d %s", w.Code, w.Body)
+	}
+	w = post("POST", "/api/account/totp", `{"password":"correct horse"}`)
+	var setup struct{ Secret string }
+	if err := json.Unmarshal(w.Body.Bytes(), &setup); err != nil || setup.Secret == "" {
+		t.Fatalf("begin: %d %s (%v)", w.Code, w.Body, err)
+	}
+	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(setup.Secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	totp := auth.Code(key, time.Now().Unix()/30)
+	if w := post("PUT", "/api/account/totp", `{"password":"wrong password","code":"`+totp+`"}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("enable with wrong password: %d %s", w.Code, w.Body)
+	}
+	if w := post("GET", "/api/account", ""); w.Code != http.StatusOK || strings.Contains(w.Body.String(), `"totp":true`) {
+		t.Fatalf("enabled without password: %d %s", w.Code, w.Body)
+	}
+	if w := post("PUT", "/api/account/totp", `{"password":"correct horse","code":"`+totp+`"}`); w.Code != http.StatusOK {
+		t.Fatalf("enable: %d %s", w.Code, w.Body)
 	}
 }
 

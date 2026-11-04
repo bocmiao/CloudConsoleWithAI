@@ -79,6 +79,7 @@ func prepareSteps(steps []core.Step, adapter string) []core.Step {
 		s := &steps[i]
 		s.Risk = core.RiskOf(s.Capability)
 		s.Executable, s.Blocked, s.Status, s.Log, s.Undo, s.LogID = false, "", "", nil, nil, 0
+		s.BackupDir, s.RollbackFile = "", ""
 		r, err := actions.Resolve(s.Capability, s.Params, adapter)
 		var ne *actions.ErrNotExecutable
 		switch {
@@ -476,11 +477,16 @@ func (a *App) runPlan(planID, serverID int64, who string) {
 		if pt := paramText(r.Values); pt != "" {
 			title += "（" + pt + "）"
 		}
-		entry := a.startExec(store.ExecLog{
+		entry, err := a.startChange(store.ExecLog{
 			ServerID: sv.ID, ServerName: serverNameFor(sv, st.Capability), Adapter: sv.Adapter, Origin: OriginPlan, Kind: store.ExecChange,
 			Title: title, Note: st.Summary, Capability: st.Capability, Params: st.Params, Via: r.Impl.Via,
 			Reversible: r.Cap.Reversible, PlanID: v.ID, StepIdx: i,
 		})
+		if err != nil {
+			st.Status, st.Log, ok = actions.StatusFailed, []string{"无法写入执行日志，已停止，这一步没有修改服务器：" + err.Error()}, false
+			_ = a.savePlan(&v)
+			continue
+		}
 		st.Status, st.LogID = "running", entry.ID
 		_ = a.savePlan(&v)
 		out := actions.Apply(ctx, env, r, func(log []string) {
@@ -490,8 +496,17 @@ func (a *App) runPlan(planID, serverID int64, who string) {
 		if who == "user" && out.Status == actions.StatusDone && (st.Capability == "eo.ip.block" || st.Capability == "eo.ip.unblock") {
 			a.forgetAutoBlocked(out.Result["zone"], strings.Split(r.Values["ips"], ","))
 		}
-		a.finishAction(&entry, out)
+		logErr := a.finishAction(&entry, out)
 		st.Status, st.Log, st.Undo, st.FinishedAt = out.Status, out.Log, out.Undo, now()
+		st.BackupDir, st.RollbackFile = out.BackupDir, out.RollbackFile
+		if logErr != nil {
+			// The plan still carries the undo data, so let UndoStep use it
+			// instead of the incomplete execution-log row. Stop the rest of
+			// the plan because its durable audit trail is no longer healthy.
+			st.LogID = 0
+			st.Log = append(st.Log, "执行结果未能写入执行日志，请检查数据库；本清单仍保留回滚数据："+logErr.Error())
+			ok = false
+		}
 		if out.Status != actions.StatusDone {
 			ok = false
 		}
@@ -541,11 +556,12 @@ func (a *App) UndoStep(ctx context.Context, planID int64, idx int) (PlanView, er
 			return v, err
 		}
 	} else {
-		// Run before the execution log existed: the step has what we need.
+		// Older runs or a failed log update: the step keeps the recovery data.
 		e = store.ExecLog{
 			ServerID: sv.ID, ServerName: serverNameFor(sv, st.Capability), Adapter: sv.Adapter, Kind: store.ExecChange, Title: st.Title,
 			Capability: st.Capability, Params: st.Params, Via: st.Via, Status: st.Status, Undo: st.Undo,
 			Reversible: st.Reversible, PlanID: planID, StepIdx: idx,
+			BackupDir: st.BackupDir, RollbackFile: st.RollbackFile,
 		}
 	}
 	if e.UndoneBy > 0 {

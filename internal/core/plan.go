@@ -31,11 +31,13 @@ type Step struct {
 	Reversible bool   `json:"reversible"`
 
 	// Execution state.
-	Status     string            `json:"status,omitempty"` // queued, running, done, refused, rolled_back, failed, skipped, undone
-	Log        []string          `json:"log,omitempty"`
-	Undo       map[string]string `json:"undo,omitempty"`
-	FinishedAt string            `json:"finishedAt,omitempty"`
-	LogID      int64             `json:"logId,omitempty"` // execution log entry of the latest run
+	Status       string            `json:"status,omitempty"` // queued, running, done, refused, rolled_back, failed, skipped, undone
+	Log          []string          `json:"log,omitempty"`
+	Undo         map[string]string `json:"undo,omitempty"`
+	FinishedAt   string            `json:"finishedAt,omitempty"`
+	BackupDir    string            `json:"backupDir,omitempty"`
+	RollbackFile string            `json:"rollbackFile,omitempty"`
+	LogID        int64             `json:"logId,omitempty"` // execution log entry of the latest run
 
 	// Free is how Miao Panel vetted an AI-written command; set by the
 	// system when the plan is saved, never taken from the AI.

@@ -383,6 +383,20 @@ func TestExecLogAndRollback(t *testing.T) {
 	}
 }
 
+func TestChangeDoesNotStartWithoutExecutionLog(t *testing.T) {
+	st, err := store.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := New(st, secrets.OpenFile(t.TempDir()))
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.startChange(store.ExecLog{Kind: store.ExecChange, Title: "must be logged"}); err == nil {
+		t.Fatal("change started after the execution log store was closed")
+	}
+}
+
 func TestUndoPlanRevertsEverything(t *testing.T) {
 	t.Cleanup(actions.UseTestScripts(t.TempDir(), func(string) (string, error) { return fakeSwap, nil }))
 	a := newApp(t)
