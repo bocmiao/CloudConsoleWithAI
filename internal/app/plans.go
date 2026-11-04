@@ -19,11 +19,16 @@ import (
 // runTimeout bounds one plan run.
 const runTimeout = 30 * time.Minute
 
-// serverLocks makes sure only one plan changes a server at a time.
+// serverLocks makes sure only one plan changes a server at a time, and
+// that none starts while Miao Panel is being updated.
 type serverLocks struct {
 	mu   sync.Mutex
 	busy map[int64]bool
+	shut bool // an update is on its way: nothing new starts
 }
+
+// errUpdating is why a checklist cannot start during an update.
+var errUpdating = userErr("Miao Panel 正在更新，重新启动后再执行")
 
 func (l *serverLocks) try(id int64) bool {
 	l.mu.Lock()
@@ -31,7 +36,7 @@ func (l *serverLocks) try(id int64) bool {
 	if l.busy == nil {
 		l.busy = map[int64]bool{}
 	}
-	if l.busy[id] {
+	if l.busy[id] || l.shut {
 		return false
 	}
 	l.busy[id] = true
@@ -44,6 +49,29 @@ func (l *serverLocks) release(id int64) {
 	delete(l.busy, id)
 }
 
+// close stops new checklists from starting, if none is running.
+func (l *serverLocks) close() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.busy) > 0 {
+		return false
+	}
+	l.shut = true
+	return true
+}
+
+func (l *serverLocks) reopen() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.shut = false
+}
+
+func (l *serverLocks) closed() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.shut
+}
+
 // prepareSteps fills in, for each step, whether it can run on the server
 // and how. Risk always comes from policy, never from the AI.
 func prepareSteps(steps []core.Step, adapter string) []core.Step {
@@ -51,6 +79,7 @@ func prepareSteps(steps []core.Step, adapter string) []core.Step {
 		s := &steps[i]
 		s.Risk = core.RiskOf(s.Capability)
 		s.Executable, s.Blocked, s.Status, s.Log, s.Undo, s.LogID = false, "", "", nil, nil, 0
+		s.BackupDir, s.RollbackFile = "", ""
 		r, err := actions.Resolve(s.Capability, s.Params, adapter)
 		var ne *actions.ErrNotExecutable
 		switch {
@@ -180,6 +209,39 @@ func (a *App) Plans(limit int) ([]PlanView, error) {
 	return out, nil
 }
 
+// DeletePlan forgets a checklist. Only lists that are not running can go.
+func (a *App) DeletePlan(id int64) error {
+	p, err := a.Store.GetPlan(id)
+	if err != nil {
+		return userErr("找不到这个清单（编号 %d）", id)
+	}
+	if p.Status == "running" {
+		return userErr("这份清单正在执行，先等它结束再删除")
+	}
+	return a.Store.DeletePlan(id)
+}
+
+// ClearPlans deletes every checklist in the given status and says how many
+// went, for tidying up lists that can no longer run.
+func (a *App) ClearPlans(status string) (int, error) {
+	if status == "" {
+		status = "proposed"
+	}
+	list, err := a.Store.ListPlans(1000)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, p := range list {
+		if p.Status != status {
+			continue
+		}
+		if err := a.Store.DeletePlan(p.ID); err == nil {
+			n++
+		}
+	}
+	return n, nil
+}
 func (a *App) savePlan(v *PlanView) error {
 	data, err := json.Marshal(v.StepList)
 	if err != nil {
@@ -212,7 +274,13 @@ func (a *App) env(ctx context.Context, id int64) (store.Server, *actions.Env, er
 		c.Close()
 		return sv, nil, err
 	}
-	env.Cloud = a.tencentClient()
+	if sv.Adapter == "bt" {
+		if env.BT, err = a.btClient(id, c); err != nil {
+			c.Close()
+			return sv, nil, err
+		}
+	}
+	env.Cloud, env.Aliyun, env.Local = a.tencentClient(), a.aliyunClient(), localSettings{a}
 	return sv, env, nil
 }
 
@@ -299,6 +367,9 @@ func (a *App) executePlan(id int64, selected []int, who string) (PlanView, error
 		}
 	}
 	if !a.locks.try(sv.ID) {
+		if a.locks.closed() {
+			return v, errUpdating
+		}
 		if sv.ID == 0 {
 			return v, userErr("正在执行另一份腾讯云清单，请等它完成")
 		}
@@ -337,8 +408,13 @@ func (a *App) executePlan(id int64, selected []int, who string) (PlanView, error
 func now() string { return time.Now().UTC().Format(time.RFC3339) }
 
 func (a *App) runPlan(planID, serverID int64, who string) {
-	defer a.locks.release(serverID)
-	defer a.forgetCertificates() // a step may have issued or changed one
+	// The server is free again before the checklist says it has finished,
+	// so undoing a step right after it shows as done is not refused.
+	finish := sync.OnceFunc(func() {
+		a.forgetCertificates() // a step may have issued or changed one
+		a.locks.release(serverID)
+	})
+	defer finish()
 	ctx, cancel := context.WithTimeout(withOrigin(context.Background(), OriginPlan), runTimeout)
 	defer cancel()
 	v, err := a.Plan(planID)
@@ -353,6 +429,7 @@ func (a *App) runPlan(planID, serverID int64, who string) {
 			}
 		}
 		v.Status = core.PlanPartial
+		finish()
 		_ = a.savePlan(&v)
 	}
 	sv, err := a.planServer(serverID)
@@ -368,7 +445,7 @@ func (a *App) runPlan(planID, serverID int64, who string) {
 			needServer = true
 		}
 	}
-	env := &actions.Env{Cloud: a.tencentClient(), PollInterval: a.PollInterval}
+	env := a.baseEnv()
 	if needServer {
 		if sv, env, err = a.env(ctx, serverID); err != nil {
 			fail(friendlySSHError(err).Error())
@@ -401,7 +478,7 @@ func (a *App) runPlan(planID, serverID int64, who string) {
 			title += "（" + pt + "）"
 		}
 		entry, err := a.startChange(store.ExecLog{
-			ServerID: sv.ID, ServerName: sv.Name, Adapter: sv.Adapter, Origin: OriginPlan, Kind: store.ExecChange,
+			ServerID: sv.ID, ServerName: serverNameFor(sv, st.Capability), Adapter: sv.Adapter, Origin: OriginPlan, Kind: store.ExecChange,
 			Title: title, Note: st.Summary, Capability: st.Capability, Params: st.Params, Via: r.Impl.Via,
 			Reversible: r.Cap.Reversible, PlanID: v.ID, StepIdx: i,
 		})
@@ -421,6 +498,7 @@ func (a *App) runPlan(planID, serverID int64, who string) {
 		}
 		logErr := a.finishAction(&entry, out)
 		st.Status, st.Log, st.Undo, st.FinishedAt = out.Status, out.Log, out.Undo, now()
+		st.BackupDir, st.RollbackFile = out.BackupDir, out.RollbackFile
 		if logErr != nil {
 			// The plan still carries the undo data, so let UndoStep use it
 			// instead of the incomplete execution-log row. Stop the rest of
@@ -444,6 +522,7 @@ func (a *App) runPlan(planID, serverID int64, who string) {
 	if !ok {
 		v.Status = core.PlanPartial
 	}
+	finish()
 	_ = a.savePlan(&v)
 }
 
@@ -465,6 +544,9 @@ func (a *App) UndoStep(ctx context.Context, planID int64, idx int) (PlanView, er
 		return v, userErr("这个清单对应的服务器已经被删除了")
 	}
 	if !a.locks.try(sv.ID) {
+		if a.locks.closed() {
+			return v, errUpdating
+		}
 		return v, userErr("这台服务器上正在执行其他操作，请稍后再试")
 	}
 	defer a.locks.release(sv.ID)
@@ -474,11 +556,12 @@ func (a *App) UndoStep(ctx context.Context, planID int64, idx int) (PlanView, er
 			return v, err
 		}
 	} else {
-		// Run before the execution log existed: the step has what we need.
+		// Older runs or a failed log update: the step keeps the recovery data.
 		e = store.ExecLog{
-			ServerID: sv.ID, ServerName: sv.Name, Adapter: sv.Adapter, Kind: store.ExecChange, Title: st.Title,
+			ServerID: sv.ID, ServerName: serverNameFor(sv, st.Capability), Adapter: sv.Adapter, Kind: store.ExecChange, Title: st.Title,
 			Capability: st.Capability, Params: st.Params, Via: st.Via, Status: st.Status, Undo: st.Undo,
 			Reversible: st.Reversible, PlanID: planID, StepIdx: idx,
+			BackupDir: st.BackupDir, RollbackFile: st.RollbackFile,
 		}
 	}
 	if e.UndoneBy > 0 {

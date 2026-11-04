@@ -13,14 +13,16 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
-	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
@@ -55,6 +57,7 @@ type Server struct {
 type download struct {
 	server  int64
 	path    string
+	diag    bool // the diagnostics bundle, not a server's file
 	expires time.Time
 }
 
@@ -76,19 +79,20 @@ func NewServer(a *app.App, au *auth.Service, version string) *Server {
 
 func (s *Server) routes() {
 	s.mux = http.NewServeMux()
-	static, _ := fs.Sub(webui.Static, "static")
-	s.mux.Handle("GET /", http.FileServerFS(static))
+	s.mux.Handle("GET /", webui.Handler())
+	s.mux.HandleFunc("GET /status/{token}", s.publicStatusPage)
 	s.authRoutes()
 
 	api := func(pattern string, h func(w http.ResponseWriter, r *http.Request) (any, error)) {
-		s.mux.HandleFunc(pattern, s.guard(h))
+		s.mux.HandleFunc(pattern, s.guard(s.marksChange(pattern, h)))
 	}
 	// Bodies bigger than the usual 1 MB: an edited file, an upload.
 	big := func(pattern string, limit int64, h func(w http.ResponseWriter, r *http.Request) (any, error)) {
-		s.mux.HandleFunc(pattern, s.guardN(limit, h))
+		s.mux.HandleFunc(pattern, s.guardN(limit, s.marksChange(pattern, h)))
 	}
 	api("GET /api/servers/{id}/files", s.listFiles)
 	api("GET /api/servers/{id}/files/text", s.readFileText)
+	api("GET /api/servers/{id}/files/tail", s.tailFile)
 	big("PUT /api/servers/{id}/files/text", 6<<20, s.writeFileText)
 	big("POST /api/servers/{id}/files/upload", 0, s.uploadFiles)
 	api("POST /api/servers/{id}/files/op", s.fileOp)
@@ -116,6 +120,7 @@ func (s *Server) routes() {
 	api("PUT /api/settings/ai", s.putAISettings)
 	api("POST /api/settings/ai/test", s.testAI)
 	api("GET /api/certificates", s.getCertificates)
+	api("GET /api/certificates/tencent", s.tencentSSLCerts)
 	api("GET /api/settings/free-command", s.getFreeCommand)
 	api("PUT /api/settings/free-command", s.putFreeCommand)
 	api("GET /api/settings/tencent", s.getTencent)
@@ -124,12 +129,56 @@ func (s *Server) routes() {
 	api("POST /api/settings/tencent/test", s.testTencent)
 	api("GET /api/tencent/servers", s.tencentServers)
 	api("GET /api/servers/{id}/cloud", s.serverCloud)
+	api("GET /api/tencent/servers/{region}/{instance}", s.cloudDetail)
+	api("POST /api/tencent/servers/plan", s.cloudPlan)
+	api("GET /api/settings/aliyun", s.getAliyun)
+	api("PUT /api/settings/aliyun", s.putAliyun)
+	api("DELETE /api/settings/aliyun", s.deleteAliyun)
+	api("POST /api/settings/aliyun/test", s.testAliyun)
+	api("GET /api/aliyun/servers", s.aliyunServers)
+	api("GET /api/aliyun/servers/{region}/{instance}", s.aliyunDetail)
+	api("POST /api/aliyun/servers/plan", s.aliyunPlan)
+	api("GET /api/cloud/account", s.cloudAccount)
+	api("GET /api/cdn", s.cdnDomains)
+	api("GET /api/cloud/alarms", s.cloudAlarms)
+	api("POST /api/cdn/plan", s.cdnPlan)
+	api("POST /api/certificates/free/plan", s.freeCertPlan)
 	api("POST /api/servers/{id}/security/plan", s.serverSecurityPlan)
+	api("GET /api/servers/{id}/databases", s.serverDatabases)
+	api("GET /api/update", s.updateStatus)
+	api("GET /api/preload", s.preloadStatus)
+	api("PUT /api/preload", s.setPreload)
+	api("POST /api/preload/run", s.runPreload)
+	api("POST /api/update/check", s.updateCheck)
+	api("PUT /api/update/settings", s.updateSettings)
+	api("POST /api/update/apply", s.updateApply)
+	api("POST /api/diagnostics/link", s.diagnosticsLink)
+	api("POST /api/servers/{id}/apps/plan", s.serverAppsPlan)
 	api("GET /api/visits/sources", s.visitSources)
 	api("GET /api/visits", s.getVisits)
+	api("GET /api/baize/settings", s.getBaizeSettings)
+	api("PUT /api/baize/settings", s.putBaizeSettings)
+	api("DELETE /api/baize/settings", s.deleteBaizeSettings)
+	api("GET /api/baize/stats", s.getBaizeStats)
 	api("GET /api/visits/blocked", s.blockedIPs)
 	api("POST /api/visits/block", s.blockIPs)
 	api("POST /api/servers/{id}/realip", s.proposeRealIP)
+	api("GET /api/overview", s.overview)
+	api("GET /api/monitor", s.monitor)
+	api("GET /api/statuspage", s.getStatusPage)
+	api("PUT /api/statuspage", s.saveStatusPage)
+	api("PUT /api/monitor/settings", s.monitorSettings)
+	api("POST /api/monitor/check", s.monitorCheck)
+	api("GET /api/monitor/site", s.monitorSite)
+	api("GET /api/servers/{id}/metrics", s.serverMetrics)
+	api("GET /api/websites", s.websites)
+	api("GET /api/servers/{id}/websites/{sid}", s.website)
+	api("GET /api/servers/{id}/websites/{sid}/log", s.websiteLog)
+	api("GET /api/servers/{id}/websites/{sid}/rewrite", s.websiteRewrite)
+	api("GET /api/servers/{id}/websites/{sid}/backups", s.websiteBackups)
+	api("POST /api/servers/{id}/websites/{sid}/backups/{bid}/fetch", s.websiteBackupFetch)
+	big("POST /api/websites/plan", 1<<20, s.websitePlan)
+	api("POST /api/eo/cache/plan", s.eoCachePlan)
 	api("GET /api/dns/domains", s.dnsDomains)
 	api("GET /api/dns/records", s.dnsRecords)
 	api("GET /api/dns/lines", s.dnsLines)
@@ -153,6 +202,8 @@ func (s *Server) routes() {
 	api("PUT /api/autoblock", s.saveAutoBlock)
 	api("POST /api/autoblock/run", s.runAutoBlock)
 	api("GET /api/eo/sites", s.eoSites)
+	api("GET /api/eo/protection", s.eoProtection)
+	api("POST /api/eo/protection/plan", s.eoProtectionPlan)
 	api("GET /api/eo/analytics", s.eoAnalytics)
 	api("POST /api/chat", s.chat)
 	api("POST /api/chat/stream", s.chatStream)
@@ -165,12 +216,17 @@ func (s *Server) routes() {
 	api("POST /api/plans/{id}/execute", s.executePlan)
 	api("POST /api/plans/{id}/steps/{idx}/undo", s.undoStep)
 	api("POST /api/plans/{id}/undo", s.undoPlan)
+	api("DELETE /api/plans/{id}", s.deletePlan)
+	api("POST /api/plans/clear", s.clearPlans)
 	api("GET /api/exec", s.execLogs)
 	api("GET /api/exec/{id}", s.execEntry)
 	api("POST /api/exec/{id}/rollback", s.rollback)
 	api("GET /api/servers/{id}/onepanel", s.getOnePanel)
 	api("PUT /api/servers/{id}/onepanel", s.putOnePanel)
 	api("POST /api/servers/{id}/onepanel/test", s.testOnePanel)
+	api("GET /api/servers/{id}/btpanel", s.getBT)
+	api("PUT /api/servers/{id}/btpanel", s.putBT)
+	api("POST /api/servers/{id}/btpanel/test", s.testBT)
 	api("GET /api/audit", s.audit)
 	api("GET /api/usage", s.usage)
 }
@@ -286,8 +342,142 @@ func pathID(r *http.Request) (int64, error) {
 	return id, nil
 }
 
+func siteID(r *http.Request) (uint, error) {
+	n, err := strconv.ParseUint(r.PathValue("sid"), 10, 32)
+	if err != nil || n == 0 {
+		return 0, &app.UserError{Msg: "网站编号不对"}
+	}
+	return uint(n), nil
+}
+
+func (s *Server) monitor(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.MonitorPage(r.Context())
+}
+
+func (s *Server) monitorSettings(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req app.MonitorSettings
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.SaveMonitorSettings(req)
+}
+
+func (s *Server) monitorCheck(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.CheckNow(r.Context())
+}
+
+func (s *Server) monitorSite(_ http.ResponseWriter, r *http.Request) (any, error) {
+	hours, _ := strconv.Atoi(r.URL.Query().Get("hours"))
+	return s.app.SiteHistory(r.URL.Query().Get("url"), hours)
+}
+
+func (s *Server) serverMetrics(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	hours, _ := strconv.Atoi(r.URL.Query().Get("hours"))
+	return s.app.ServerHistory(id, hours)
+}
+
+func (s *Server) overview(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.Overview(r.Context())
+}
+
+func (s *Server) websites(w http.ResponseWriter, r *http.Request) (any, error) {
+	server, _ := strconv.ParseInt(r.URL.Query().Get("server"), 10, 64)
+	v, m, err := s.app.WebsitesPage(r.Context(), server, pageRead(r))
+	return pageAnswer(w, v, m, err)
+}
+
+func (s *Server) website(w http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	sid, err := siteID(r)
+	if err != nil {
+		return nil, err
+	}
+	v, m, err := s.app.WebsitePage(r.Context(), id, sid, pageRead(r))
+	return pageAnswer(w, v, m, err)
+}
+
+func (s *Server) websiteBackups(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	sid, err := siteID(r)
+	if err != nil {
+		return nil, err
+	}
+	return s.app.SiteBackups(r.Context(), id, sid)
+}
+
+// websiteBackupFetch gets a backup's file ready on the server and returns
+// its path, which the page then downloads like any file.
+func (s *Server) websiteBackupFetch(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	sid, err := siteID(r)
+	if err != nil {
+		return nil, err
+	}
+	bid, err := strconv.ParseUint(r.PathValue("bid"), 10, 64)
+	if err != nil {
+		return nil, &app.UserError{Msg: "备份编号不对"}
+	}
+	path, err := s.app.BackupPath(r.Context(), id, sid, uint(bid))
+	return map[string]string{"path": path}, err
+}
+
+func (s *Server) websiteLog(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	sid, err := siteID(r)
+	if err != nil {
+		return nil, err
+	}
+	lines, _ := strconv.Atoi(r.URL.Query().Get("lines"))
+	return s.app.WebsiteLog(r.Context(), id, sid, r.URL.Query().Get("type"), lines)
+}
+
+func (s *Server) websiteRewrite(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	sid, err := siteID(r)
+	if err != nil {
+		return nil, err
+	}
+	text, err := s.app.WebsiteRewriteTemplate(r.Context(), id, sid, r.URL.Query().Get("name"))
+	return map[string]string{"content": text}, err
+}
+
+func (s *Server) websitePlan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req app.SiteRequest
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.ProposeWebsite(r.Context(), req)
+}
+
+func (s *Server) eoCachePlan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req app.EOCacheRequest
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.ProposeEOCache(r.Context(), req)
+}
+
 func (s *Server) info(_ http.ResponseWriter, _ *http.Request) (any, error) {
-	return map[string]any{"version": s.version, "secretsKind": s.app.Secrets.Kind(), "mode": s.mode()}, nil
+	return map[string]any{"version": s.version, "secretsKind": s.app.Secrets.Kind(), "mode": s.mode(), "database": s.app.Store.Where()}, nil
 }
 
 func (s *Server) listServers(_ http.ResponseWriter, _ *http.Request) (any, error) {
@@ -367,6 +557,33 @@ func (s *Server) visitSources(_ http.ResponseWriter, _ *http.Request) (any, erro
 	return s.app.VisitSources()
 }
 
+func (s *Server) getBaizeSettings(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return s.app.BaizeSettings()
+}
+
+func (s *Server) putBaizeSettings(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req struct {
+		app.BaizeSettings
+		Token string `json:"token"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.SaveBaizeSettings(req.BaizeSettings, req.Token)
+}
+
+func (s *Server) deleteBaizeSettings(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return map[string]bool{"ok": true}, s.app.DeleteBaizeSettings()
+}
+
+func (s *Server) getBaizeStats(_ http.ResponseWriter, r *http.Request) (any, error) {
+	days, err := strconv.Atoi(r.URL.Query().Get("days"))
+	if err != nil {
+		return nil, &app.UserError{Msg: "时间范围只能是 1、7 或 30 天"}
+	}
+	return s.app.BaizeStats(r.Context(), days)
+}
+
 // getVisits answers at once with the last visits report of a source
 // (refreshing it in the background when old); wait=1 waits for a current
 // one and refresh=1 counts again.
@@ -403,25 +620,52 @@ func (s *Server) listTerminals(_ http.ResponseWriter, _ *http.Request) (any, err
 
 // terminalOutput streams what the terminal prints, as raw bytes: the
 // recent backlog, then new output as it comes, until the shell ends.
+// terminalOutput streams a terminal's output as server-sent events: each
+// piece base64-encoded, with the offset after it as the event id so a page
+// that loses the connection can pick up where it was (?from=offset);
+// "reset" first when the stream does not start where the page asked, so it
+// clears the screen before the replay; a comment line every few seconds
+// so proxies do not close an idle stream; and "end" when the shell ended.
+// X-Accel-Buffering stops Nginx (1Panel, 宝塔) from holding the output
+// back until a buffer fills.
 func (s *Server) terminalOutput(w http.ResponseWriter, r *http.Request) (any, error) {
+	from := int64(-1)
+	if v := r.URL.Query().Get("from"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			from = n
+		}
+	}
 	rc := http.NewResponseController(w)
 	started := false
-	err := s.app.TerminalOutput(r.Context(), r.PathValue("tid"), func(p []byte) error {
+	ended, err := s.app.TerminalOutput(r.Context(), r.PathValue("tid"), from, func(p []byte, next int64) error {
+		var b bytes.Buffer
 		if !started {
 			started = true
-			w.Header().Set("Content-Type", "application/octet-stream")
-			w.Header().Set("Cache-Control", "no-store")
+			h := w.Header()
+			h.Set("Content-Type", "text/event-stream")
+			h.Set("Cache-Control", "no-cache, no-store, no-transform")
+			h.Set("X-Accel-Buffering", "no")
 			w.WriteHeader(http.StatusOK)
+			if next != from {
+				b.WriteString("event: reset\ndata:\n\n")
+			}
 		}
 		if len(p) > 0 {
-			if _, err := w.Write(p); err != nil {
-				return err
-			}
+			fmt.Fprintf(&b, "id: %d\ndata: %s\n\n", next, base64.StdEncoding.EncodeToString(p))
+		} else if b.Len() == 0 {
+			b.WriteString(": ping\n\n")
+		}
+		if _, err := w.Write(b.Bytes()); err != nil {
+			return err
 		}
 		return rc.Flush()
 	})
 	if err != nil && !started {
 		return nil, err
+	}
+	if ended && started {
+		_, _ = io.WriteString(w, "event: end\ndata:\n\n")
+		_ = rc.Flush()
 	}
 	return streamed{}, nil
 }
@@ -448,8 +692,9 @@ func (s *Server) closeTerminal(_ http.ResponseWriter, r *http.Request) (any, err
 	return map[string]bool{"ok": true}, s.app.CloseTerminal(r.PathValue("tid"))
 }
 
-func (s *Server) blockedIPs(_ http.ResponseWriter, r *http.Request) (any, error) {
-	return s.app.Blocked(r.Context())
+func (s *Server) blockedIPs(w http.ResponseWriter, r *http.Request) (any, error) {
+	v, m, err := s.app.BlockedPage(r.Context(), pageRead(r))
+	return pageAnswer(w, v, m, err)
 }
 
 type ipsRequest struct {
@@ -492,13 +737,15 @@ type cosTarget struct {
 	Download bool `json:"download"`
 }
 
-func (s *Server) cosBuckets(_ http.ResponseWriter, r *http.Request) (any, error) {
-	return s.app.COSBuckets(r.Context())
+func (s *Server) cosBuckets(w http.ResponseWriter, r *http.Request) (any, error) {
+	v, m, err := s.app.COSBucketsPage(r.Context(), pageRead(r))
+	return pageAnswer(w, v, m, err)
 }
 
-func (s *Server) cosBucket(_ http.ResponseWriter, r *http.Request) (any, error) {
+func (s *Server) cosBucket(w http.ResponseWriter, r *http.Request) (any, error) {
 	q := r.URL.Query()
-	return s.app.COSBucketDetail(r.Context(), q.Get("bucket"), q.Get("region"))
+	v, m, err := s.app.COSBucketPage(r.Context(), q.Get("bucket"), q.Get("region"), pageRead(r))
+	return pageAnswer(w, v, m, err)
 }
 
 func (s *Server) cosUsage(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -562,16 +809,18 @@ func (s *Server) cosPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
 	return s.app.ProposeCOS(r.Context(), req)
 }
 
-func (s *Server) dnsDomains(_ http.ResponseWriter, r *http.Request) (any, error) {
-	return s.app.DNSDomains(r.Context())
+func (s *Server) dnsDomains(w http.ResponseWriter, r *http.Request) (any, error) {
+	v, m, err := s.app.DNSDomainsPage(r.Context(), pageRead(r))
+	return pageAnswer(w, v, m, err)
 }
 
-func (s *Server) dnsRecords(_ http.ResponseWriter, r *http.Request) (any, error) {
-	return s.app.DNSRecords(r.Context(), r.URL.Query().Get("domain"))
+func (s *Server) dnsRecords(w http.ResponseWriter, r *http.Request) (any, error) {
+	v, m, err := s.app.DNSRecordsPage(r.Context(), r.URL.Query().Get("domain"), r.URL.Query().Get("provider"), pageRead(r))
+	return pageAnswer(w, v, m, err)
 }
 
 func (s *Server) dnsLines(_ http.ResponseWriter, r *http.Request) (any, error) {
-	return s.app.DNSLines(r.Context(), r.URL.Query().Get("domain"))
+	return s.app.DNSLines(r.Context(), r.URL.Query().Get("domain"), r.URL.Query().Get("provider"))
 }
 
 func (s *Server) dnsPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -609,6 +858,10 @@ func (s *Server) getCertificates(_ http.ResponseWriter, r *http.Request) (any, e
 		return s.app.Certificates(r.Context(), q.Get("refresh") == "1")
 	}
 	return s.app.LatestCertificates(r.Context())
+}
+
+func (s *Server) tencentSSLCerts(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.SSLCertOptions(r.Context())
 }
 
 func (s *Server) getFreeCommand(_ http.ResponseWriter, _ *http.Request) (any, error) {
@@ -651,6 +904,93 @@ func (s *Server) tencentServers(_ http.ResponseWriter, r *http.Request) (any, er
 	return s.app.TencentServers(r.Context(), r.URL.Query().Get("refresh") == "1")
 }
 
+func (s *Server) getAliyun(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return s.app.Aliyun(), nil
+}
+
+func (s *Server) putAliyun(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req struct {
+		AccessKeyID     string `json:"accessKeyId"`
+		AccessKeySecret string `json:"accessKeySecret"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.SaveAliyun(req.AccessKeyID, req.AccessKeySecret)
+}
+
+func (s *Server) deleteAliyun(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return s.app.ClearAliyun(), nil
+}
+
+func (s *Server) testAliyun(_ http.ResponseWriter, r *http.Request) (any, error) {
+	info, err := s.app.TestAliyun(r.Context())
+	return map[string]string{"info": info}, err
+}
+
+func (s *Server) aliyunServers(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.AliyunServers(r.Context(), r.URL.Query().Get("refresh") == "1")
+}
+
+func (s *Server) aliyunDetail(w http.ResponseWriter, r *http.Request) (any, error) {
+	v, m, err := s.app.AliyunDetailPage(r.Context(), r.PathValue("region"), r.PathValue("instance"), pageRead(r))
+	return pageAnswer(w, v, m, err)
+}
+
+func (s *Server) cloudAccount(w http.ResponseWriter, r *http.Request) (any, error) {
+	v, m, err := s.app.CloudAccountPage(r.Context(), pageRead(r))
+	return pageAnswer(w, v, m, err)
+}
+
+func (s *Server) eoProtection(w http.ResponseWriter, r *http.Request) (any, error) {
+	v, m, err := s.app.EOProtectionPage(r.Context(), r.URL.Query().Get("domain"), pageRead(r))
+	return pageAnswer(w, v, m, err)
+}
+
+func (s *Server) eoProtectionPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req app.EOProtectRequest
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.ProposeEOProtect(r.Context(), req)
+}
+
+func (s *Server) cloudAlarms(w http.ResponseWriter, r *http.Request) (any, error) {
+	v, m, err := s.app.CloudAlarmsPage(r.Context(), pageRead(r))
+	return pageAnswer(w, v, m, err)
+}
+
+func (s *Server) cdnDomains(w http.ResponseWriter, r *http.Request) (any, error) {
+	v, m, err := s.app.CDNPage(r.Context(), pageRead(r))
+	return pageAnswer(w, v, m, err)
+}
+
+func (s *Server) cdnPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req app.CDNRequest
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.ProposeCDN(r.Context(), req)
+}
+
+func (s *Server) freeCertPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req struct {
+		Domain string `json:"domain"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.ProposeFreeCert(r.Context(), req.Domain)
+}
+
+func (s *Server) aliyunPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req app.CloudRequest
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.ProposeAliyun(r.Context(), req)
+}
+
 func (s *Server) serverCloud(_ http.ResponseWriter, r *http.Request) (any, error) {
 	id, err := pathID(r)
 	if err != nil {
@@ -665,6 +1005,67 @@ func (s *Server) serverCloud(_ http.ResponseWriter, r *http.Request) (any, error
 	return map[string]any{"instance": cs}, nil
 }
 
+func (s *Server) cloudDetail(w http.ResponseWriter, r *http.Request) (any, error) {
+	v, m, err := s.app.CloudDetailPage(r.Context(), r.PathValue("region"), r.PathValue("instance"), pageRead(r))
+	return pageAnswer(w, v, m, err)
+}
+
+func (s *Server) cloudPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req app.CloudRequest
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.ProposeCloud(r.Context(), req)
+}
+
+func (s *Server) updateStatus(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return s.app.UpdateStatus(), nil
+}
+
+func (s *Server) updateCheck(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.CheckUpdate(r.Context())
+}
+
+func (s *Server) updateSettings(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.SetUpdateCheck(req.Enabled)
+}
+
+func (s *Server) updateApply(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.ApplyUpdate(r.Context())
+}
+
+// diagnosticsLink hands out a one-time link to the diagnostics bundle.
+func (s *Server) diagnosticsLink(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return s.newDownload(download{diag: true})
+}
+
+func (s *Server) serverDatabases(w http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	v, m, err := s.app.DatabasesPage(r.Context(), id, pageRead(r))
+	return pageAnswer(w, v, m, err)
+}
+
+func (s *Server) serverAppsPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	var req app.AppRequest
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.ProposeServerApps(r.Context(), id, req)
+}
+
 func (s *Server) serverSecurityPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
 	id, err := pathID(r)
 	if err != nil {
@@ -677,8 +1078,9 @@ func (s *Server) serverSecurityPlan(_ http.ResponseWriter, r *http.Request) (any
 	return s.app.ProposeServerSecurity(r.Context(), id, req)
 }
 
-func (s *Server) eoSites(_ http.ResponseWriter, r *http.Request) (any, error) {
-	return s.app.EOSites(r.Context())
+func (s *Server) eoSites(w http.ResponseWriter, r *http.Request) (any, error) {
+	v, m, err := s.app.EOSitesPage(r.Context(), pageRead(r))
+	return pageAnswer(w, v, m, err)
 }
 
 func (s *Server) notices(_ http.ResponseWriter, _ *http.Request) (any, error) {
@@ -786,6 +1188,7 @@ func (s *Server) chatStream(w http.ResponseWriter, r *http.Request) (any, error)
 	var req struct {
 		ConversationID string `json:"conversationId"`
 		Message        string `json:"message"`
+		Page           string `json:"page"`
 	}
 	if err := decode(r, &req); err != nil {
 		return nil, err
@@ -802,13 +1205,14 @@ func (s *Server) chatStream(w http.ResponseWriter, r *http.Request) (any, error)
 			started = true
 			w.Header().Set("Content-Type", "application/x-ndjson; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("X-Accel-Buffering", "no")
 			w.WriteHeader(http.StatusOK)
 		}
 		data, _ := json.Marshal(v)
 		_, _ = w.Write(append(data, '\n'))
 		_ = rc.Flush()
 	}
-	reply, err := s.app.ChatStream(ctx, req.ConversationID, req.Message, func(e app.ChatEvent) { send(e) })
+	reply, err := s.app.ChatStream(ctx, req.ConversationID, req.Message, req.Page, func(e app.ChatEvent) { send(e) })
 	if err != nil && !started {
 		return nil, err // nothing sent yet: an ordinary error response
 	}
@@ -887,8 +1291,26 @@ func (s *Server) undoPlan(_ http.ResponseWriter, r *http.Request) (any, error) {
 	return s.app.UndoPlan(r.Context(), id)
 }
 
+func (s *Server) deletePlan(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]bool{"ok": true}, s.app.DeletePlan(id)
+}
+
+func (s *Server) clearPlans(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req struct {
+		Status string `json:"status"`
+	}
+	_ = decode(r, &req)
+	n, err := s.app.ClearPlans(req.Status)
+	return map[string]int{"deleted": n}, err
+}
+
 func (s *Server) execLogs(_ http.ResponseWriter, r *http.Request) (any, error) {
-	return s.app.ExecLogs(r.URL.Query().Get("changes") == "1")
+	server, _ := strconv.ParseInt(r.URL.Query().Get("server"), 10, 64)
+	return s.app.ExecLogs(r.URL.Query().Get("changes") == "1", server)
 }
 
 func (s *Server) execEntry(_ http.ResponseWriter, r *http.Request) (any, error) {
@@ -939,6 +1361,38 @@ func (s *Server) testOnePanel(_ http.ResponseWriter, r *http.Request) (any, erro
 	return map[string]string{"info": info}, err
 }
 
+func (s *Server) getBT(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	return s.app.BT(id)
+}
+
+func (s *Server) putBT(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	var req struct {
+		app.BTSettings
+		APIKey string `json:"apiKey"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.SaveBT(id, req.BTSettings, req.APIKey)
+}
+
+func (s *Server) testBT(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	info, err := s.app.TestBT(r.Context(), id)
+	return map[string]string{"info": info}, err
+}
+
 func (s *Server) audit(_ http.ResponseWriter, _ *http.Request) (any, error) {
 	return s.app.Store.ListAudit(200)
 }
@@ -970,6 +1424,14 @@ func (s *Server) readFileText(_ http.ResponseWriter, r *http.Request) (any, erro
 	return s.app.ReadFileText(r.Context(), id, r.URL.Query().Get("path"))
 }
 
+func (s *Server) tailFile(_ http.ResponseWriter, r *http.Request) (any, error) {
+	id, err := pathID(r)
+	if err != nil {
+		return nil, err
+	}
+	lines, _ := strconv.Atoi(r.URL.Query().Get("lines"))
+	return s.app.TailFile(r.Context(), id, r.URL.Query().Get("path"), lines)
+}
 func (s *Server) writeFileText(_ http.ResponseWriter, r *http.Request) (any, error) {
 	id, err := pathID(r)
 	if err != nil {
@@ -1046,22 +1508,29 @@ func (s *Server) downloadLink(_ http.ResponseWriter, r *http.Request) (any, erro
 	if err := decode(r, &req); err != nil {
 		return nil, err
 	}
+	return s.newDownload(download{server: id, path: req.Path})
+}
+
+// newDownload hands out a one-time link, good for two minutes, and drops
+// the expired ones.
+func (s *Server) newDownload(d download) (any, error) {
 	b := make([]byte, 18)
 	if _, err := rand.Read(b); err != nil {
 		return nil, err
 	}
 	tok := base64.RawURLEncoding.EncodeToString(b)
 	s.dlMu.Lock()
+	defer s.dlMu.Unlock()
 	if s.dl == nil {
 		s.dl = map[string]download{}
 	}
-	for k, d := range s.dl {
-		if time.Now().After(d.expires) {
+	for k, old := range s.dl {
+		if time.Now().After(old.expires) {
 			delete(s.dl, k)
 		}
 	}
-	s.dl[tok] = download{server: id, path: req.Path, expires: time.Now().Add(2 * time.Minute)}
-	s.dlMu.Unlock()
+	d.expires = time.Now().Add(2 * time.Minute)
+	s.dl[tok] = d
 	return map[string]string{"url": "/dl/" + tok}, nil
 }
 
@@ -1077,6 +1546,15 @@ func (s *Server) downloadFile(w http.ResponseWriter, r *http.Request) {
 	s.dlMu.Unlock()
 	if !ok || time.Now().After(d.expires) {
 		http.Error(w, "下载链接已失效，请回到 Miao Panel 重新点下载。", http.StatusForbidden)
+		return
+	}
+	if d.diag {
+		w.Header().Set("Content-Type", "application/zip")
+		w.Header().Set("Content-Disposition", "attachment; filename=miaopanel-diagnostics-"+time.Now().Format("20060102-1504")+".zip")
+		w.Header().Set("Cache-Control", "no-store")
+		if err := s.app.Diagnostics(w); err != nil {
+			log.Println("diagnostics:", err)
+		}
 		return
 	}
 	started := false
@@ -1098,4 +1576,78 @@ func (s *Server) downloadFile(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "下载失败："+err.Error(), http.StatusBadGateway)
 		}
 	}
+}
+
+// ---- page data kept ready (app/pages.go) ----
+
+// pageRead says how a page asks for its data: ?refresh=1 for the live
+// answer, ?wait=1 for the copy being gathered, otherwise what is kept.
+func pageRead(r *http.Request) app.PageRead {
+	q := r.URL.Query()
+	switch {
+	case q.Get("refresh") == "1":
+		return app.PageRefresh
+	case q.Get("wait") == "1":
+		return app.PageWait
+	}
+	return app.PageLatest
+}
+
+// pageAnswer sends a page's data, saying in headers when it was gathered
+// and whether a newer copy is on its way.
+func pageAnswer(w http.ResponseWriter, v any, m app.PageMeta, err error) (any, error) {
+	if err != nil {
+		return nil, err
+	}
+	if !m.At.IsZero() {
+		w.Header().Set("X-Miao-At", m.At.UTC().Format(time.RFC3339))
+	}
+	if m.Refreshing {
+		w.Header().Set("X-Miao-Refreshing", "1")
+	}
+	return v, nil
+}
+
+// readOnlyPosts are requests that change nothing the pages show: asking,
+// testing, planning (a checklist changes things only when it runs, and
+// then says so itself), terminals, notices and settings of this kind.
+var readOnlyPosts = []string{"/plan", "/test", "/chat", "/terminal", "/notices", "/update/", "/diagnostics",
+	"/link", "/judge", "/monitor/", "/conversations", "/discover", "/fetch", "/settings/ai", "/settings/free-command", "/preload"}
+
+// marksChange makes a successful change through the API tell the pages to
+// gather anew, so nobody sees what was there before their own change.
+func (s *Server) marksChange(pattern string, h func(w http.ResponseWriter, r *http.Request) (any, error)) func(w http.ResponseWriter, r *http.Request) (any, error) {
+	if strings.HasPrefix(pattern, "GET ") {
+		return h
+	}
+	for _, p := range readOnlyPosts {
+		if strings.Contains(pattern, p) && !strings.Contains(pattern, "/plans/") {
+			return h
+		}
+	}
+	return func(w http.ResponseWriter, r *http.Request) (any, error) {
+		v, err := h(w, r)
+		if err == nil {
+			s.app.PagesChanged()
+		}
+		return v, err
+	}
+}
+
+func (s *Server) preloadStatus(_ http.ResponseWriter, _ *http.Request) (any, error) {
+	return s.app.PreloadStatus(), nil
+}
+
+func (s *Server) setPreload(_ http.ResponseWriter, r *http.Request) (any, error) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := decode(r, &req); err != nil {
+		return nil, err
+	}
+	return s.app.SetPreload(r.Context(), req.Enabled)
+}
+
+func (s *Server) runPreload(_ http.ResponseWriter, r *http.Request) (any, error) {
+	return s.app.RunPreload(r.Context()), nil
 }

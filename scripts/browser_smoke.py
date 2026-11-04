@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise HTTPS setup, 2FA login, restore, and streaming in Chrome."""
+"""Exercise the HTTPS install wizard, 2FA login, restore, and streaming in Chrome."""
 
 import base64
 import hashlib
@@ -133,7 +133,10 @@ def main():
             code_file = os.environ.get("MIAO_TEST_SETUP_CODE_FILE")
             code = (Path(code_file).read_text().strip() if code_file else
                     subprocess.check_output(["docker", "exec", "miaopanel", "cat", "/data/setup-code"], text=True).strip())
-            fill(".login-card input[placeholder='XXXX-XXXX-XXXX-XXXX']", code)
+            fill(".install-card input[placeholder='XXXX-XXXX-XXXX-XXXX']", code)
+            click(".login-card .login-btn")
+            wait_for(lambda: find(".install-kind button[aria-checked='true']"))
+            click(".login-card .login-btn")
             fill(".login-card input[autocomplete='username']", "admin")
             fields = request("POST", root + "/elements", {"using": "css selector", "value": ".login-card input[autocomplete='new-password']"})
             assert len(fields) == 2, "Expected setup and confirmation password fields"

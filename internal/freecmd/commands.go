@@ -539,8 +539,10 @@ func checkSed(s string) string {
 			}
 			d := s[i]
 			i++
-			if !readDelimited(d) || !readDelimited(d) {
-				return "替换命令没有结束"
+			for range 2 { // the pattern, then the replacement
+				if !readDelimited(d) {
+					return "替换命令没有结束"
+				}
 			}
 			for i < n && strings.IndexByte("gpiIm0123456789", s[i]) >= 0 {
 				i++

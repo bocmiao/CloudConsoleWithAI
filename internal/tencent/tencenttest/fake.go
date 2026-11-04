@@ -33,6 +33,7 @@ type Record = tencent.Record
 type Domain struct {
 	Zone, Name, Status, Cname, Origin, Protocol string
 	CertMode, CertStatus                        string
+	CertIDs                                     []string // mode sslcert: the certificates from SSL
 }
 
 // Fake is the running fake.
@@ -47,16 +48,34 @@ type Fake struct {
 	Zones    []tencent.Zone
 	Domains  []*Domain
 	Calls    []string // "service Action"
+	// CacheTasks are the purge and prefetch requests EdgeOne was sent.
+	CacheTasks []map[string]any
 	// DeniedService makes every call to that service fail with a
 	// permission error.
 	DeniedService string
 	// FailAction makes calls to one "service Action" fail.
 	FailAction string
 
+	// The account: its balance in fen, what it owes, and the domains
+	// registered with it.
+	BalanceFen, OweFen float64
+	Registered         []tencent.RegisteredDomain
+
 	// Servers: a Lighthouse instance and a CVM instance in ap-guangzhou.
 	Instances map[string]*Instance
 	Firewall  map[string][]tencent.FirewallRule // by instance or security group
+	// CDN domains and the tasks asked of them ("purge-url https://…",
+	// "purge-dir …", "push …"); SSL certificates, and how many free ones
+	// may still be applied for (-1: no limit).
+	CDN           []*tencent.CDNDomain
+	CDNTasks      []string
+	SSLCerts      []*tencent.SSLCert
+	SSLApplied    []string
+	FreeCertsLeft int
+	Alarms        []tencent.Alarm // Cloud Monitor's alarm history
+
 	Snaps     map[string]*tencent.Snapshot
+	Rollbacks []string // "instance snapshot" for each rollback asked for
 	Regions   []string // regions the fake saw requests for
 
 	// EdgeOne: site-level security policies by zone, and plans.
@@ -89,6 +108,8 @@ type Fake struct {
 // Instance is a server held by the fake.
 type Instance struct {
 	ID, Name, State, IP, Group, DiskID string
+	RenewFlag                          string // NOTIFY_AND_MANUAL_RENEW when empty
+	ExpiresIn                          time.Duration
 	pending                            string // state reached on the next look
 }
 
@@ -105,8 +126,12 @@ func New() *Fake {
 			"lhins-abc12345": {{Protocol: "TCP", Port: "22", CidrBlock: "0.0.0.0/0", Action: "ACCEPT"}, {Protocol: "TCP", Port: "80", CidrBlock: "0.0.0.0/0", Action: "ACCEPT"}},
 			"sg-abc":         {{Protocol: "TCP", Port: "22", CidrBlock: "0.0.0.0/0", Action: "ACCEPT", Index: 0}},
 		},
-		Snaps:   map[string]*tencent.Snapshot{},
-		SMSSign: "喵面板", SMSParams: 2,
+		Snaps: map[string]*tencent.Snapshot{},
+		SSLCerts: []*tencent.SSLCert{{ID: "ssl-abc", Domain: "api.example.com", SANs: []string{"api.example.com"}, From: "trustasia",
+			Product: "TrustAsia 免费版", Status: 1, StatusName: "已通过", IsDV: true, HostingStatus: intPtr(-1),
+			EndTime: time.Now().Add(10 * 24 * time.Hour).In(time.FixedZone("CST", 8*3600)).Format("2006-01-02 15:04:05")}},
+		FreeCertsLeft: -1,
+		SMSSign:       "喵面板", SMSParams: 2,
 		nextID:  100,
 		Records: map[string][]Record{"example.com": {{RecordID: 1, Name: "blog", Type: "A", Value: "1.2.3.4", Line: tencent.DefaultLine, TTL: 600, Status: "ENABLE"}}},
 		Zones:   []tencent.Zone{{ZoneID: "zone-abc", ZoneName: "example.com", Type: "partial", Status: "active", Area: "mainland", CnameStatus: "finished"}},
@@ -316,11 +341,17 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			var certs []map[string]string
-			if d.CertMode == "eofreecert" {
+			switch d.CertMode {
+			case "eofreecert":
 				certs = []map[string]string{{"CertId": "eofree-1", "Type": "managed", "Status": d.CertStatus,
 					"ExpireTime": time.Now().Add(80 * 24 * time.Hour).UTC().Format(time.RFC3339)}}
 				if d.CertStatus == "applying" {
 					d.CertStatus = "deployed" // issued by the next look
+				}
+			case "sslcert":
+				for _, id := range d.CertIDs {
+					certs = append(certs, map[string]string{"CertId": id, "Type": "upload", "Status": d.CertStatus,
+						"ExpireTime": time.Now().Add(80 * 24 * time.Hour).UTC().Format(time.RFC3339)})
 				}
 			}
 			out = append(out, map[string]any{
@@ -382,9 +413,23 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for _, name := range strs("Hosts") {
 			for _, d := range f.Domains {
 				if d.Name == name {
-					d.CertMode, d.CertStatus = str("Mode"), ""
-					if d.CertMode == "eofreecert" {
+					d.CertMode, d.CertStatus, d.CertIDs = str("Mode"), "", nil
+					switch d.CertMode {
+					case "eofreecert":
 						d.CertStatus = "applying"
+					case "sslcert":
+						if list, _ := in["ServerCertInfo"].([]any); len(list) > 0 {
+							for _, item := range list {
+								if m, _ := item.(map[string]any); m != nil {
+									if id, _ := m["CertId"].(string); id != "" {
+										d.CertIDs = append(d.CertIDs, id)
+									}
+								}
+							}
+						}
+						if len(d.CertIDs) > 0 {
+							d.CertStatus = "deployed"
+						}
 					}
 				}
 			}

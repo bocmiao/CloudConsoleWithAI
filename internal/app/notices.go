@@ -17,7 +17,8 @@ import (
 // Notices are Miao Panel telling the user something without being asked:
 // a daily report of the websites, and alerts when something needs a look
 // (a new high-risk IP, a secret file downloaded, a certificate about to
-// expire, what automatic blocking did). They are kept on the 通知 page and,
+// expire, a cloud server or domain about to expire, what automatic
+// blocking did). They are kept on the 通知 page and,
 // when a webhook is set, pushed to a group robot or a push service.
 
 // NoticeSettings says which notices are made. Webhook is shown masked.
@@ -28,6 +29,8 @@ type NoticeSettings struct {
 	AlertLeak  bool   `json:"alertLeak"`
 	AlertCert  bool   `json:"alertCert"`
 	AlertBlock bool   `json:"alertBlock"`
+	AlertRenew bool   `json:"alertRenew"` // cloud servers and domains about to expire, money owed
+	AlertCloud bool   `json:"alertCloud"` // the clouds' own monitoring alarms
 
 	Webhook     string `json:"webhook"`     // masked; empty when none
 	WebhookKind string `json:"webhookKind"` // in words
@@ -73,7 +76,7 @@ const (
 var noticeMu sync.Mutex
 
 func defaultNoticeSettings() NoticeSettings {
-	return NoticeSettings{Daily: true, DailyAt: "09:00", AlertRisk: true, AlertLeak: true, AlertCert: true, AlertBlock: true}
+	return NoticeSettings{Daily: true, DailyAt: "09:00", AlertRisk: true, AlertLeak: true, AlertCert: true, AlertBlock: true, AlertRenew: true, AlertCloud: true}
 }
 
 func (a *App) loadNotices() noticeState {
@@ -168,7 +171,8 @@ func (a *App) SaveNoticeSettings(s NoticeSettings) (NoticesView, error) {
 	}
 	noticeMu.Lock()
 	st := a.loadNotices()
-	st.Settings = NoticeSettings{Daily: s.Daily, DailyAt: s.DailyAt, AlertRisk: s.AlertRisk, AlertLeak: s.AlertLeak, AlertCert: s.AlertCert, AlertBlock: s.AlertBlock}
+	st.Settings = NoticeSettings{Daily: s.Daily, DailyAt: s.DailyAt, AlertRisk: s.AlertRisk, AlertLeak: s.AlertLeak, AlertCert: s.AlertCert,
+		AlertBlock: s.AlertBlock, AlertRenew: s.AlertRenew, AlertCloud: s.AlertCloud}
 	err := a.saveNotices(st)
 	noticeMu.Unlock()
 	if err != nil {
@@ -362,6 +366,46 @@ func (a *App) alert(ctx context.Context) {
 			}
 		}
 	}
+	if s.AlertRenew && a.hasCloud() {
+		if v, _, err := a.CloudAccountPage(ctx, PageWait); err == nil {
+			all, found := accountAlert(v)
+			var lines []string
+			for i, key := range all {
+				again := realertAfter
+				if strings.HasPrefix(key, "owed:") {
+					again = riskRealert
+				}
+				if fresh(key, again) {
+					keys = append(keys, key)
+					lines = append(lines, found[i])
+				}
+			}
+			if len(lines) > 0 {
+				titles = append(titles, "续费和余额")
+				sections = append(sections, "**续费和余额**（在「云服务器 → 账户和续费」可以一键开启自动续费）\n"+strings.Join(lines, "\n"))
+			}
+		}
+	}
+	if s.AlertCloud && a.hasCloud() {
+		if v, _, err := a.CloudAlarmsPage(ctx, PageWait); err == nil {
+			var lines []string
+			for _, x := range v.Alarms {
+				key := "alarm:" + x.Key
+				if !x.Active || x.Level == "info" || !fresh(key, realertAfter) {
+					continue
+				}
+				keys = append(keys, key)
+				lines = append(lines, fmt.Sprintf("- %s：%s（%s，%s开始）", x.Object, x.What, providerName[x.Provider], whenShort(x.First)))
+			}
+			if len(lines) > 0 {
+				if len(lines) > 10 {
+					lines = append(lines[:10], fmt.Sprintf("- 还有 %d 个", len(lines)-10))
+				}
+				titles = append(titles, "云监控告警")
+				sections = append(sections, "**云监控告警**（腾讯云或阿里云云监控发出的，在「监控」页可以看到全部）\n"+strings.Join(lines, "\n"))
+			}
+		}
+	}
 	lastEvent := st.LastEvent
 	if s.AlertBlock {
 		var lines []string
@@ -451,6 +495,11 @@ func (a *App) reportText(ctx context.Context, day time.Time) string {
 			lines = append(lines, fmt.Sprintf("- %s 30 天内到期，会自动续签", strings.Join(soon, "、")))
 		}
 		parts = append(parts, strings.Join(lines, "\n"))
+	}
+	if a.hasCloud() {
+		if v, _, err := a.CloudAccountPage(ctx, PageWait); err == nil {
+			parts = append(parts, accountReport(v))
+		}
 	}
 	if len(parts) == 0 {
 		return "还没有可以统计的网站：添加服务器或者填写腾讯云密钥后，这里会有每天的访问情况。"

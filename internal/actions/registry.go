@@ -52,6 +52,7 @@ type Impl struct {
 	Args     []string // parameter names passed to the script, in order
 	Panel    string   // panel operation (API implementations)
 	Cloud    string   // Tencent Cloud operation
+	Local    string   // Miao Panel's own settings, changed by the app
 	Downtime string   // what the user will notice while it runs
 	Undo     string   // what rolling it back does, in plain words
 	// Encode passes the script's arguments base64-encoded (free text).
@@ -176,10 +177,21 @@ func init() {
 		Name: "eo.https.set", Title: "设置 EdgeOne HTTPS 证书", Risk: core.R2, Reversible: true,
 		Params: []Param{
 			{Name: "domain", Kind: "host", Required: true, Desc: "EdgeOne 加速域名，例如 blog.example.com"},
-			{Name: "mode", Kind: "enum", Enum: []string{"eofreecert", "disable"}, Default: "eofreecert",
-				Desc: "eofreecert：申请并部署免费证书（自动续签，要求域名已经解析到 EdgeOne）；disable：关闭"},
+			{Name: "mode", Kind: "enum", Enum: []string{"eofreecert", "sslcert", "disable"}, Default: "eofreecert",
+				Desc: "eofreecert：申请并部署 EdgeOne 免费证书（自动续签，要求域名已经解析到 EdgeOne）；sslcert：部署腾讯云 SSL 证书里已有的证书（要填 cert）；disable：关闭"},
+			{Name: "cert", Kind: "name",
+				Desc: "mode=sslcert 时用：腾讯云 SSL 证书的 ID（ssl- 开头，certificates 或 ssl.cert.apply 返回的 ID）；证书要包含这个加速域名"},
 		},
-		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "eo_https", Downtime: "不影响访问，证书签发一般需要几分钟",
+		Check: func(v map[string]string) error {
+			if v["mode"] == "sslcert" && v["cert"] == "" {
+				return fmt.Errorf("mode=sslcert 时要填 cert（腾讯云 SSL 证书 ID）")
+			}
+			if v["mode"] != "sslcert" && v["cert"] != "" {
+				return fmt.Errorf("cert 只在 mode=sslcert 时填")
+			}
+			return nil
+		},
+		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "eo_https", Downtime: "不影响访问，证书签发或部署一般需要几分钟",
 			Undo: "把证书设置恢复成修改前的样子"}},
 	})
 	register(&Capability{
@@ -227,6 +239,7 @@ func init() {
 			{Name: "group", Kind: "name", Required: true},
 			{Name: "admin_cidr", Kind: "cidr", Required: true, Desc: "管理者当前可达的公网 IP/32 或固定网段，不能是全网"},
 			{Name: "ssh_port", Kind: "int", Min: 1, Max: 65535, Required: true},
+			{Name: "panel_port", Kind: "int", Min: 1, Max: 65535, Desc: "面板（1Panel、宝塔）自己的端口，识别环境时读到的"},
 		},
 		Impls: map[string]Impl{"*": {Via: "腾讯云接口", Cloud: "firewall_tighten", Downtime: "只保留 80/443 全网可达，SSH 和管理端口仅管理网段可达；其他服务可能中断",
 			Undo: "恢复原来的全端口放行规则并删除本次新增的规则"}},
@@ -586,6 +599,18 @@ func Names() []string {
 	return out
 }
 
+// Pending lists the capabilities the AI may propose that cannot run yet
+// (free commands run through their own checks).
+func Pending() []string {
+	var out []string
+	for _, n := range core.Capabilities() {
+		if _, ok := registry[n]; !ok && n != "free_command" {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 // Describe documents the executable capabilities for the AI's tool list.
 func Describe() string {
 	names := make([]string, 0, len(registry))
@@ -602,7 +627,11 @@ func Describe() string {
 		}
 		sort.Strings(envs)
 		where := "支持环境：" + strings.ReplaceAll(strings.Join(envs, "/"), "*", "全部")
-		if impl, ok := c.Impls["*"]; ok && impl.Cloud != "" {
+		if impl, ok := c.Impls["*"]; ok && impl.Local != "" {
+			where = "Miao Panel 自己的设置，不需要服务器"
+		} else if ok && strings.HasPrefix(impl.Cloud, "ali_") {
+			where = "阿里云，不需要服务器"
+		} else if ok && impl.Cloud != "" {
 			where = "腾讯云，不需要服务器"
 		}
 		fmt.Fprintf(&b, "- %s（%s；%s）", n, c.Title, where)
@@ -694,6 +723,11 @@ func paramValue(p Param, raw any) (string, error) {
 		if v != math.Trunc(v) {
 			return "", fmt.Errorf("参数 %s 需要是整数", p.Name)
 		}
+		if math.Abs(v) > 1<<53 {
+			// JSON numbers this big have lost their last digits (阿里云's
+			// record IDs are): they must come as strings.
+			return "", fmt.Errorf("参数 %s 的数字太大，会失真，请用字符串传（加引号）", p.Name)
+		}
 		s = strconv.FormatInt(int64(v), 10)
 	case int:
 		s = strconv.Itoa(v)
@@ -740,6 +774,11 @@ func paramValue(p Param, raw any) (string, error) {
 	case "instance":
 		if !instanceRe.MatchString(s) {
 			return "", fmt.Errorf("参数 %s 要是腾讯云实例 ID（lhins- 或 ins- 开头），%q 不是", p.Name, s)
+		}
+		return s, nil
+	case "aliinstance":
+		if !aliInstanceRe.MatchString(s) {
+			return "", fmt.Errorf("参数 %s 要是阿里云实例 ID（i- 开头，或 32 位十六进制），%q 不是", p.Name, s)
 		}
 		return s, nil
 	case "region":
@@ -839,6 +878,13 @@ func paramValue(p Param, raw any) (string, error) {
 	case "json":
 		if len(s) > 20000 || !json.Valid([]byte(s)) {
 			return "", fmt.Errorf("参数 %s 要是 JSON（最多 20000 个字符）", p.Name)
+		}
+		return s, nil
+	case "conf":
+		// A whole config file: lines and tabs, no other control characters.
+		s = strings.ReplaceAll(s, "\r\n", "\n")
+		if len(s) > 128<<10 || strings.ContainsFunc(s, func(r rune) bool { return (r < 0x20 && r != '\n' && r != '\t') || r == 0x7f }) {
+			return "", fmt.Errorf("参数 %s 太长（最多 128KB）或含有控制字符", p.Name)
 		}
 		return s, nil
 	case "text":

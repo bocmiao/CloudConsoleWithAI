@@ -31,15 +31,20 @@ type Step struct {
 	Reversible bool   `json:"reversible"`
 
 	// Execution state.
-	Status     string            `json:"status,omitempty"` // queued, running, done, refused, rolled_back, failed, skipped, undone
-	Log        []string          `json:"log,omitempty"`
-	Undo       map[string]string `json:"undo,omitempty"`
-	FinishedAt string            `json:"finishedAt,omitempty"`
-	LogID      int64             `json:"logId,omitempty"` // execution log entry of the latest run
+	Status       string            `json:"status,omitempty"` // queued, running, done, refused, rolled_back, failed, skipped, undone
+	Log          []string          `json:"log,omitempty"`
+	Undo         map[string]string `json:"undo,omitempty"`
+	FinishedAt   string            `json:"finishedAt,omitempty"`
+	BackupDir    string            `json:"backupDir,omitempty"`
+	RollbackFile string            `json:"rollbackFile,omitempty"`
+	LogID        int64             `json:"logId,omitempty"` // execution log entry of the latest run
 
 	// Free is how Miao Panel vetted an AI-written command; set by the
 	// system when the plan is saved, never taken from the AI.
 	Free *FreeCheck `json:"free,omitempty"`
+	// Diffs shows how a step changes a config file, worked out by Miao
+	// Panel when the plan is saved.
+	Diffs []FileDiff `json:"diffs,omitempty"`
 }
 
 // FileDiff is how one file changes.
@@ -113,6 +118,16 @@ var capabilityRisk = map[string]Risk{
 	"eo.clientip.header":    R1,
 	"nginx.realip":          R2,
 	"site.create":           R2,
+	"site.status":           R2,
+	"site.domain.add":       R1,
+	"site.domain.remove":    R2,
+	"site.https.set":        R2,
+	"site.proxy.set":        R2,
+	"site.proxy.remove":     R2,
+	"site.proxy.status":     R2,
+	"site.conf.set":         R2,
+	"site.rewrite.set":      R2,
+	"site.delete":           R3,
 	"cert.issue":            R2,
 	"cert.renew":            R1,
 	"cert.autorenew.set":    R1,

@@ -29,6 +29,9 @@ type Profile struct {
 	Java      []string `json:"java"`
 	Databases []string `json:"databases"`
 	Docker    Docker   `json:"docker"`
+	// The programs using the most memory, and the systemd services.
+	Programs []Program `json:"programs"`
+	Services Services  `json:"services"`
 
 	Findings []Finding `json:"findings"`
 
@@ -64,8 +67,9 @@ type Panel struct {
 
 // Docker summarizes the container runtime.
 type Docker struct {
-	Status     string   `json:"status"` // "", "no", "unreachable", or the server version
-	Containers []string `json:"containers"`
+	Status     string      `json:"status"` // "", "no", "unreachable", or the server version
+	Containers []string    `json:"containers"`
+	List       []Container `json:"list"` // the containers with their image, state and use
 }
 
 // Finding is a health or security observation shown to the user.
@@ -84,6 +88,9 @@ func Parse(raw string) *Profile {
 	p.parseApps()
 	p.parseDB()
 	p.parseDocker()
+	p.parseContainers()
+	p.parsePrograms()
+	p.parseServices()
 	p.findings()
 	return p
 }
@@ -330,6 +337,12 @@ func (p *Profile) Summary() string {
 		fmt.Fprintf(&b, "磁盘 %s: %s/%s (%d%%)\n", d.Mount, d.Used, d.Size, d.UsePct)
 	}
 	fmt.Fprintf(&b, "面板: %s %s 端口 %s; 适配器 %s\n", p.Panel.Kind, p.Panel.Version, p.Panel.Port, p.Adapter)
+	ssh := strings.TrimSpace(p.value("security", "sshd_port"))
+	if ssh == "" {
+		ssh = "22（默认）"
+	}
+	fmt.Fprintf(&b, "SSH: 端口 %s, 密码登录 %s, root 登录 %s\n", ssh, orDefault(p.value("security", "sshd_password_auth"), "默认"),
+		orDefault(p.value("security", "sshd_root_login"), "默认"))
 	if len(p.Panel.Apps) > 0 {
 		fmt.Fprintf(&b, "面板应用: %s\n", strings.Join(p.Panel.Apps, ", "))
 	}
@@ -351,4 +364,11 @@ func (p *Profile) Summary() string {
 		fmt.Fprintf(&b, "发现[%s]: %s（%s）\n", f.Level, f.Title, f.Detail)
 	}
 	return b.String()
+}
+
+func orDefault(s, d string) string {
+	if s = strings.TrimSpace(s); s == "" {
+		return d
+	}
+	return s
 }

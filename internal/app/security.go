@@ -3,7 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
-	"net"
+	"strconv"
 	"strings"
 
 	"github.com/bocmiao/CloudConsoleWithAI/internal/actions"
@@ -94,9 +94,18 @@ func (a *App) ProposeServerSecurity(ctx context.Context, id int64, req SecurityR
 		if cs == nil || cs.Kind != tencent.CVM || len(cs.Groups) != 1 {
 			return PlanView{}, userErr("这项操作只支持绑定一个安全组的腾讯云 CVM；请先核对实例和安全组")
 		}
-		ip, cidr, err := net.ParseCIDR(strings.TrimSpace(req.AdminCIDR))
-		if err != nil || ip.To4() == nil || cidr.String() == "0.0.0.0/0" {
-			return PlanView{}, userErr("请填写你当前可用的 IPv4 管理网段，例如你的公网 IP/32")
+		cidr, ok := actions.AdminNetwork(req.AdminCIDR)
+		if !ok {
+			return PlanView{}, userErr("请填写你当前可用的 IPv4 管理网段（/16 或更小），例如你的公网 IP/32")
+		}
+		panelPort := 0
+		if v.Profile != nil {
+			panelPort, _ = strconv.Atoi(v.Profile.Panel.Port)
+		}
+		admin := actions.AdminPorts(v.Server.Port, panelPort)
+		var ports []string
+		for _, p := range admin {
+			ports = append(ports, strconv.Itoa(p))
 		}
 		c := a.tencentClient()
 		if c == nil {
@@ -106,12 +115,16 @@ func (a *App) ProposeServerSecurity(ctx context.Context, id int64, req SecurityR
 		if err != nil {
 			return PlanView{}, err
 		}
-		if _, err := actions.FirewallTightenRules(rules, v.Server.Port, cidr.String()); err != nil {
+		if _, err := actions.FirewallTightenRules(rules, admin, cidr.String()); err != nil {
 			return PlanView{}, userErr("安全组 %s：%v", cs.Groups[0], err)
 		}
 		title = "收紧安全组 " + cs.Groups[0]
-		reason = fmt.Sprintf("当前有 ALL ALL 0.0.0.0/0。执行时先添加 TCP 80/443 对外放行、TCP %d/13940/8090/8080 仅 %s 可访问，再删除宽泛规则。3306 不会对外放行。此安全组绑定的其他实例也会受影响；若站点从 8080/8090 回源或使用其他端口，访问可能中断，请先核对依赖。", v.Server.Port, cidr.String())
-		steps = []core.Step{{Capability: "cloud.firewall.tighten", Summary: "替换全端口放行为按端口规则", Params: map[string]any{"instance": cs.ID, "region": cs.Region, "group": cs.Groups[0], "admin_cidr": cidr.String(), "ssh_port": v.Server.Port}}}
+		reason = fmt.Sprintf("当前有 ALL ALL 0.0.0.0/0。执行时先添加 TCP 80/443 对外放行、TCP %s 仅 %s 可访问，再删除宽泛规则。3306 不会对外放行。此安全组绑定的其他实例也会受影响；若站点从 8080/8090 回源或使用其他端口，访问可能中断，请先核对依赖。", strings.Join(ports, "/"), cidr.String())
+		params := map[string]any{"instance": cs.ID, "region": cs.Region, "group": cs.Groups[0], "admin_cidr": cidr.String(), "ssh_port": v.Server.Port}
+		if panelPort > 0 {
+			params["panel_port"] = panelPort
+		}
+		steps = []core.Step{{Capability: "cloud.firewall.tighten", Summary: "替换全端口放行为按端口规则", Params: params}}
 	case "ssh":
 		if v.Server.AuthKind != "key" || v.Server.Username == "root" {
 			return PlanView{}, userErr("请先用非 root 用户的 SSH 密钥添加并测试这台服务器，才能关闭密码和 root 登录")

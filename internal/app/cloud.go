@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bocmiao/CloudConsoleWithAI/internal/geoip"
@@ -18,10 +19,11 @@ import (
 // cloudCache keeps the instance list for a few minutes: listing every
 // region of two products takes a few dozen calls.
 type cloudCache struct {
-	mu   sync.Mutex
-	at   time.Time
-	list []tencent.Server
-	errs []string
+	mu    sync.Mutex
+	at    time.Time
+	list  []tencent.Server
+	errs  []string
+	stale atomic.Bool // a checklist step changed a server: list again
 }
 
 const cloudCacheTTL = 5 * time.Minute
@@ -49,7 +51,7 @@ func (a *App) TencentServers(ctx context.Context, refresh bool) (CloudServers, e
 	}
 	a.cloud.mu.Lock()
 	defer a.cloud.mu.Unlock()
-	if refresh || a.cloud.at.IsZero() || time.Since(a.cloud.at) > cloudCacheTTL {
+	if a.cloud.stale.Swap(false) || refresh || a.cloud.at.IsZero() || time.Since(a.cloud.at) > cloudCacheTTL {
 		ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
 		list, errs := c.Servers(ctx)
@@ -64,15 +66,7 @@ func (a *App) TencentServers(ctx context.Context, refresh bool) (CloudServers, e
 	servers, _ := a.Store.ListServers()
 	out := CloudServers{Errors: a.cloud.errs, FetchedAt: a.cloud.at.UTC().Format(time.RFC3339), Servers: []CloudServer{}}
 	for _, s := range a.cloud.list {
-		cs := CloudServer{Server: s}
-		for _, sv := range servers {
-			for _, ip := range s.PublicIPs {
-				if sv.Host == ip {
-					cs.ServerID = sv.ID
-				}
-			}
-		}
-		out.Servers = append(out.Servers, cs)
+		out.Servers = append(out.Servers, CloudServer{Server: s, ServerID: matchServer(s, servers)})
 	}
 	return out, nil
 }

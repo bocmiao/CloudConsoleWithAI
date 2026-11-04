@@ -57,8 +57,8 @@ func (f *Fake) serveMore(w http.ResponseWriter, service, action, region string, 
 			inst := instance(i.ID)
 			m := map[string]any{"InstanceId": inst.ID, "InstanceName": inst.Name, "InstanceState": inst.State, "CPU": 2, "Memory": 4,
 				"SystemDisk": map[string]any{"DiskId": inst.DiskID, "DiskSize": 60}, "InternetAccessible": map[string]any{"InternetMaxBandwidthOut": 6},
-				"OsName": "Ubuntu Server 24.04 LTS 64bit", "ExpiredTime": time.Now().Add(10 * 24 * time.Hour).UTC().Format(time.RFC3339),
-				"RenewFlag": "NOTIFY_AND_MANUAL_RENEW", "InstanceChargeType": "PREPAID"}
+				"OsName": "Ubuntu Server 24.04 LTS 64bit", "ExpiredTime": time.Now().Add(expiresIn(inst)).UTC().Format(time.RFC3339),
+				"RenewFlag": renewFlag(inst), "InstanceChargeType": "PREPAID"}
 			if service == "lighthouse" {
 				m["PublicAddresses"], m["Zone"] = []string{inst.IP}, "ap-guangzhou-3"
 			} else {
@@ -67,6 +67,33 @@ func (f *Fake) serveMore(w http.ResponseWriter, service, action, region string, 
 			list = append(list, m)
 		}
 		ok(w, map[string]any{"TotalCount": len(list), "InstanceSet": list})
+	case "lighthouse ModifyInstancesRenewFlag", "cvm ModifyInstancesRenewFlag":
+		i := f.Instances[firstID()]
+		flag := str("RenewFlag")
+		if i == nil || !here {
+			fail(w, "InvalidInstanceId.NotFound", "实例不存在。")
+			return true
+		}
+		if flag != tencent.RenewAuto && flag != tencent.RenewManual && flag != "DISABLE_NOTIFY_AND_MANUAL_RENEW" {
+			fail(w, "InvalidParameterValue", "RenewFlag 取值不对。")
+			return true
+		}
+		i.RenewFlag = flag
+		ok(w, nil)
+	case "billing DescribeAccountBalance":
+		ok(w, map[string]any{"Balance": int64(f.BalanceFen), "RealBalance": f.BalanceFen, "CashAccountBalance": f.BalanceFen,
+			"OweAmount": f.OweFen, "FreezeAmount": 0, "Uin": 100000000001})
+	case "domain DescribeDomainNameList":
+		var set []map[string]any
+		for _, d := range f.Registered {
+			auto := 0
+			if d.AutoRenew {
+				auto = 1
+			}
+			set = append(set, map[string]any{"DomainId": "domain-" + d.Name, "DomainName": d.Name, "AutoRenew": auto,
+				"CreationDate": "2020-01-01 10:00:00", "ExpirationDate": d.Expires + " 23:59:59", "Tld": ".com", "BuyStatus": "ok"})
+		}
+		ok(w, map[string]any{"TotalCount": len(set), "DomainSet": set})
 	case "lighthouse DescribeInstancesTrafficPackages":
 		ok(w, map[string]any{"InstanceTrafficPackageSet": []map[string]any{{"InstanceId": "lhins-abc12345",
 			"TrafficPackageSet": []map[string]any{{"TrafficUsed": 900 << 30, "TrafficPackageTotal": 1000 << 30}}}}})
@@ -146,6 +173,42 @@ func (f *Fake) serveMore(w http.ResponseWriter, service, action, region string, 
 		}
 		f.Snaps[id] = &tencent.Snapshot{ID: id, Name: str("SnapshotName") + "|" + owner, State: "CREATING", Percent: 40}
 		ok(w, map[string]any{"SnapshotId": id})
+	case "lighthouse ApplyInstanceSnapshot", "cbs ApplySnapshot":
+		// Lighthouse forces a running instance off; a CVM has to be
+		// stopped first.
+		var i *Instance
+		owner := str("InstanceId")
+		for _, x := range f.Instances {
+			if x.ID == owner || (owner == "" && x.DiskID == str("DiskId")) {
+				i = x
+			}
+		}
+		if i == nil || !here {
+			fail(w, "InvalidInstanceId.NotFound", "实例不存在。")
+			return true
+		}
+		if owner == "" {
+			owner = i.DiskID
+		}
+		sn := f.Snaps[str("SnapshotId")]
+		if sn == nil || !strings.HasSuffix(sn.Name, "|"+owner) {
+			fail(w, "InvalidSnapshotId.NotFound", "快照不存在。")
+			return true
+		}
+		if sn.State != "NORMAL" {
+			fail(w, "UnsupportedOperation.InvalidSnapshotState", "快照状态不支持该操作。")
+			return true
+		}
+		switch {
+		case service == "cbs" && i.State != "STOPPED":
+			fail(w, "InvalidInstance.NotSupported", "实例需要处于关机状态。")
+			return true
+		case service == "lighthouse" && i.State == "RUNNING":
+			i.State = "STOPPED"
+		}
+		sn.State = "ROLLBACKING"
+		f.Rollbacks = append(f.Rollbacks, i.ID+" "+sn.ID)
+		ok(w, nil)
 	case "lighthouse DescribeSnapshots", "cbs DescribeSnapshots":
 		var out []map[string]any
 		want := ""
@@ -276,8 +339,10 @@ func (f *Fake) serveMore(w http.ResponseWriter, service, action, region string, 
 		ok(w, map[string]any{"Data": []map[string]any{{"TypeKey": "zone-abc", "DetailData": []map[string]any{
 			{"Key": "/wp-login.php", "Value": 4200}, {"Key": "/", "Value": 900}, {"Key": "/feed", "Value": 120}}}}})
 	case "teo CreatePurgeTask":
+		f.CacheTasks = append(f.CacheTasks, in)
 		ok(w, map[string]any{"JobId": "purge-1"})
 	case "teo CreatePrefetchTask":
+		f.CacheTasks = append(f.CacheTasks, in)
 		ok(w, map[string]any{"JobId": "prefetch-1"})
 	case "teo ModifyAccelerationDomain":
 		for _, d := range f.Domains {
@@ -291,7 +356,7 @@ func (f *Fake) serveMore(w http.ResponseWriter, service, action, region string, 
 		}
 		ok(w, nil)
 	default:
-		return f.serveEO(w, service, action, in) || f.serveTAT(w, service, action, region, in)
+		return f.serveEO(w, service, action, in) || f.serveTAT(w, service, action, region, in) || f.serveCDN(w, service, action, in)
 	}
 	return true
 }
@@ -324,4 +389,18 @@ type SentSMS struct {
 type COSUsage struct {
 	StorageMB      float64
 	TrafficPerHour []float64
+}
+
+func renewFlag(i *Instance) string {
+	if i.RenewFlag == "" {
+		return tencent.RenewManual
+	}
+	return i.RenewFlag
+}
+
+func expiresIn(i *Instance) time.Duration {
+	if i.ExpiresIn == 0 {
+		return 10 * 24 * time.Hour
+	}
+	return i.ExpiresIn
 }

@@ -117,6 +117,36 @@ func (s *Server) serve() {
 	}
 }
 
+// forward connects a direct-tcpip channel (a port forward the client
+// asked for) to the address on this machine.
+func forward(nch ssh.NewChannel) {
+	var to struct {
+		Host       string
+		Port       uint32
+		OriginHost string
+		OriginPort uint32
+	}
+	if err := ssh.Unmarshal(nch.ExtraData(), &to); err != nil {
+		_ = nch.Reject(ssh.ConnectionFailed, "bad request")
+		return
+	}
+	c, err := net.Dial("tcp", net.JoinHostPort(to.Host, strconv.Itoa(int(to.Port))))
+	if err != nil {
+		_ = nch.Reject(ssh.ConnectionFailed, err.Error())
+		return
+	}
+	ch, reqs, err := nch.Accept()
+	if err != nil {
+		c.Close()
+		return
+	}
+	go ssh.DiscardRequests(reqs)
+	go func() { _, _ = io.Copy(ch, c); _ = ch.CloseWrite() }()
+	_, _ = io.Copy(c, ch)
+	c.Close()
+	ch.Close()
+}
+
 func (s *Server) handle(nc net.Conn) {
 	_, chans, reqs, err := ssh.NewServerConn(nc, s.cfg)
 	if err != nil {
@@ -125,6 +155,10 @@ func (s *Server) handle(nc net.Conn) {
 	}
 	go ssh.DiscardRequests(reqs)
 	for nch := range chans {
+		if nch.ChannelType() == "direct-tcpip" {
+			go forward(nch)
+			continue
+		}
 		if nch.ChannelType() != "session" {
 			_ = nch.Reject(ssh.UnknownChannelType, "only sessions")
 			continue

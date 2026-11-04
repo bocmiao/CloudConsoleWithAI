@@ -192,6 +192,9 @@ func (a *App) toolTencentDNS(ctx context.Context, raw json.RawMessage) (string, 
 			}
 			b.WriteString("\n")
 		}
+		if lines, err := a.DNSLines(ctx, domain, "dnspod"); err == nil && len(lines) > 1 {
+			fmt.Fprintf(&b, "这个域名的套餐可以用的线路（dns.record.add / modify 的 line）：%s\n", strings.Join(lines, "、"))
+		}
 		return b.String(), nil
 	})
 }

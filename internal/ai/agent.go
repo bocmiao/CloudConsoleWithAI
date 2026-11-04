@@ -13,6 +13,9 @@ import (
 type Tool struct {
 	Def ToolDef
 	Run func(ctx context.Context, args json.RawMessage) (string, error)
+	// MaxOutput replaces the agent's MaxToolOutput for this tool: whole
+	// configuration files and file contents need more room.
+	MaxOutput int
 }
 
 // Step records one tool call so the user can see what the AI looked at.
@@ -148,7 +151,11 @@ func (a *Agent) Ask(ctx context.Context, text string, on func(Event)) (Reply, er
 				if err != nil {
 					res.Content, res.IsError = err.Error(), true
 				} else {
-					res.Content = truncate(out, a.MaxToolOutput)
+					limit := a.MaxToolOutput
+					if tool.MaxOutput > 0 {
+						limit = tool.MaxOutput
+					}
+					res.Content = truncate(out, limit)
 				}
 			}
 			if res.IsError {

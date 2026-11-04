@@ -69,9 +69,25 @@ func (a *App) finishExec(e *store.ExecLog, status, output string) {
 	if e.ID > 0 {
 		_ = a.Store.UpdateExec(*e)
 	}
+	a.invalidateExecCaches(e)
+}
+
+// Invalidate even if saving failed: the operation may already have changed resources.
+func (a *App) invalidateExecCaches(e *store.ExecLog) {
+	if e.Kind != store.ExecRead {
+		a.PagesChanged() // the pages show what it changed
+		// A cloud server changed: its list is read again too.
+		if strings.HasPrefix(e.Capability, "cloud.") {
+			a.cloud.stale.Store(true)
+		}
+		if strings.HasPrefix(e.Capability, "aliyun.") {
+			a.aliCloud.stale.Store(true)
+		}
+	}
 }
 
 func (a *App) finishAction(e *store.ExecLog, out actions.Outcome) error {
+	defer a.invalidateExecCaches(e)
 	e.Commands = strings.Join(out.Commands, "\n")
 	e.ScriptName, e.Script = out.ScriptName, out.Script
 	e.Undo, e.BackupDir, e.RollbackFile = out.Undo, out.BackupDir, out.RollbackFile
@@ -144,8 +160,8 @@ func execView(e store.ExecLog) ExecView {
 }
 
 // ExecLogs lists what Miao Panel ran on servers, newest first.
-func (a *App) ExecLogs(changesOnly bool) ([]ExecView, error) {
-	list, err := a.Store.ListExec(changesOnly, 500)
+func (a *App) ExecLogs(changesOnly bool, serverID int64) ([]ExecView, error) {
+	list, err := a.Store.ListServerExec(serverID, changesOnly, 500)
 	if err != nil {
 		return nil, err
 	}
@@ -186,6 +202,9 @@ func (a *App) Rollback(ctx context.Context, id int64) (ExecView, error) {
 		return execView(e), userErr("%s", msg)
 	}
 	if !a.locks.try(e.ServerID) {
+		if a.locks.closed() {
+			return execView(e), errUpdating
+		}
 		return execView(e), userErr("这台服务器上正在执行其他操作，请稍后再试")
 	}
 	defer a.locks.release(e.ServerID)
@@ -215,7 +234,7 @@ func (a *App) rollback(ctx context.Context, e *store.ExecLog) (store.ExecLog, er
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	sv := store.Server{ID: e.ServerID, Name: e.ServerName}
-	env := &actions.Env{Cloud: a.tencentClient(), PollInterval: a.PollInterval}
+	env := a.baseEnv()
 	if r.Impl.NeedsServer() {
 		if sv, env, err = a.env(ctx, e.ServerID); err != nil {
 			return store.ExecLog{}, friendlySSHError(err)

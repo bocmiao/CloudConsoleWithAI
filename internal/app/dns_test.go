@@ -39,7 +39,7 @@ func TestDNSPage(t *testing.T) {
 	if err != nil || len(ds.Domains) != 1 || ds.Domains[0].Name != "example.com" || ds.Domains[0].EdgeOne == nil || ds.Domains[0].EdgeOne.Type != "partial" {
 		t.Fatalf("domains = %+v %v", ds, err)
 	}
-	if lines, _ := a.DNSLines(ctx, "example.com"); len(lines) < 3 || lines[0] != tencent.DefaultLine || !strings.Contains(strings.Join(lines, ","), "电信") {
+	if lines, _ := a.DNSLines(ctx, "example.com", ""); len(lines) < 3 || lines[0] != tencent.DefaultLine || !strings.Contains(strings.Join(lines, ","), "电信") {
 		t.Fatalf("lines = %v", lines)
 	}
 
@@ -84,7 +84,7 @@ func TestDNSPage(t *testing.T) {
 	if r := f.Lookup("example.com", "blog"); len(r) != 1 || r[0].Type != "CNAME" || d == nil || r[0].Value != d.Cname || d.Origin != "81.68.79.253" || d.CertMode != "eofreecert" {
 		t.Fatalf("blog = %+v domain=%+v", r, d)
 	}
-	recs, err := a.DNSRecords(ctx, "example.com")
+	recs, err := a.DNSRecords(ctx, "example.com", "")
 	var blog DNSRecordView
 	for _, r := range recs.Records {
 		if r.Name == "blog" {
@@ -110,7 +110,7 @@ func TestDNSPage(t *testing.T) {
 		t.Fatalf("after eo_off: %+v", r)
 	}
 	// Now EdgeOne has a domain the DNS does not send anyone to.
-	recs, _ = a.DNSRecords(ctx, "example.com")
+	recs, _ = a.DNSRecords(ctx, "example.com", "")
 	if len(recs.Pending) != 1 || recs.Pending[0].Sub != "blog" || recs.Pending[0].Current != "A 81.68.79.253" {
 		t.Fatalf("pending = %+v", recs.Pending)
 	}
@@ -119,7 +119,7 @@ func TestDNSPage(t *testing.T) {
 		t.Fatalf("eo_point = %+v %v", v, err)
 	}
 	run(v)
-	if recs, _ = a.DNSRecords(ctx, "example.com"); len(recs.Pending) != 0 {
+	if recs, _ = a.DNSRecords(ctx, "example.com", ""); len(recs.Pending) != 0 {
 		t.Fatalf("still pending: %+v", recs.Pending)
 	}
 
@@ -187,6 +187,68 @@ func TestDNSPage(t *testing.T) {
 	f.Records["ns.com"] = []tencent.Record{}
 	if _, err := a.ProposeDNS(ctx, DNSRequest{Op: "quick", Domain: "ns.com", Sub: "www", Target: "ip", Value: "8.8.4.4", EdgeOne: true}); err == nil || !strings.Contains(err.Error(), "NS") {
 		t.Fatalf("NS access: %v", err)
+	}
+}
+
+func TestDNSQuickWithOwnCertificate(t *testing.T) {
+	a := newApp(t)
+	f := tencenttest.Start(t)
+	a.TencentEndpoint = f.Endpoint
+	a.PollInterval = 10 * time.Millisecond
+	ctx := context.Background()
+	if _, err := a.SaveTencent(tencenttest.SecretID, tencenttest.SecretKey); err != nil {
+		t.Fatal(err)
+	}
+	f.SSLCerts = append(f.SSLCerts, &tencent.SSLCert{ID: "ssl-own", Domain: "*.example.com", SANs: []string{"*.example.com"},
+		Status: 1, StatusName: "已通过", EndTime: "2030-01-02 15:04:05"})
+
+	opts, err := a.SSLCertOptions(ctx)
+	var own *SSLCertOption
+	for i := range opts {
+		if opts[i].ID == "ssl-own" {
+			own = &opts[i]
+		}
+	}
+	if err != nil || own == nil || !own.Usable || len(own.Names) != 1 || own.Names[0] != "*.example.com" {
+		t.Fatalf("options = %+v %v", opts, err)
+	}
+
+	// A certificate from Tencent Cloud's SSL service instead of a free one.
+	v, err := a.ProposeDNS(ctx, DNSRequest{Op: "quick", Domain: "example.com", Sub: "blog", Target: "ip", Value: "5.6.7.8",
+		EdgeOne: true, HTTPS: true, Cert: "ssl-own"})
+	if err != nil || caps(v) != "eo.domain.add dns.record.set eo.https.set" {
+		t.Fatalf("quick with own certificate = %+v %v", v, err)
+	}
+	https := v.StepList[len(v.StepList)-1]
+	if https.Params["mode"] != "sslcert" || https.Params["cert"] != "ssl-own" || !strings.Contains(https.Summary, "*.example.com") ||
+		!strings.Contains(v.Reason, "不会申请新证书") {
+		t.Fatalf("certificate step = %+v reason=%s", https, v.Reason)
+	}
+	var all []int
+	for i := range v.StepList {
+		all = append(all, i)
+	}
+	if _, err := a.ExecutePlan(v.ID, all); err != nil {
+		t.Fatal(err)
+	}
+	done := waitPlan(t, a, v.ID)
+	for i, s := range done.StepList {
+		if s.Status != actions.StatusDone {
+			t.Fatalf("step %d = %+v", i+1, s)
+		}
+	}
+	if d := f.Domain("blog.example.com"); d == nil || d.CertMode != "sslcert" || len(d.CertIDs) != 1 || d.CertIDs[0] != "ssl-own" {
+		t.Fatalf("domain = %+v", d)
+	}
+
+	// A certificate that does not cover the name is refused by the form.
+	if _, err := a.ProposeDNS(ctx, DNSRequest{Op: "quick", Domain: "example.com", Sub: "shop", Target: "ip", Value: "5.6.7.8",
+		EdgeOne: true, HTTPS: true, Cert: "ssl-abc"}); err == nil || !isUserErr(err) || !strings.Contains(err.Error(), "不包含") {
+		t.Fatalf("certificate for another name: %v", err)
+	}
+	if _, err := a.ProposeDNS(ctx, DNSRequest{Op: "quick", Domain: "example.com", Sub: "shop", Target: "ip", Value: "5.6.7.8",
+		EdgeOne: true, HTTPS: true, Cert: "ssl-nope"}); err == nil || !strings.Contains(err.Error(), "没有证书") {
+		t.Fatalf("missing certificate: %v", err)
 	}
 }
 

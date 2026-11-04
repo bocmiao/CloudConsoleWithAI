@@ -1,14 +1,8 @@
-// Package aliyun sends text messages through Alibaba Cloud SMS (阿里云短信
-// 服务, dysmsapi), signed the way Alibaba Cloud's RPC APIs are: HMAC-SHA1
-// over the sorted, percent-encoded parameters.
 package aliyun
 
 import (
 	"context"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha1"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -16,53 +10,12 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
 	"time"
 )
 
-// Client calls dysmsapi with an AccessKey.
-type Client struct {
-	ID, Secret string
-	// Endpoint is the API's base URL; tests point it at a fake.
-	Endpoint string
-	HTTP     *http.Client
-	now      func() time.Time
-}
-
-// New makes a client for the mainland endpoint.
-func New(id, secret string) *Client {
-	return &Client{ID: id, Secret: secret, Endpoint: "https://dysmsapi.aliyuncs.com", HTTP: &http.Client{Timeout: 20 * time.Second}, now: time.Now}
-}
-
-// PercentEncode is RFC 3986 encoding, as the signature wants it.
-func PercentEncode(s string) string {
-	s = url.QueryEscape(s)
-	return strings.NewReplacer("+", "%20", "*", "%2A", "%7E", "~").Replace(s)
-}
-
-// StringToSign is the method, "/" and the sorted parameters, each encoded.
-func StringToSign(method string, params map[string]string) string {
-	keys := make([]string, 0, len(params))
-	for k := range params {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	pairs := make([]string, len(keys))
-	for i, k := range keys {
-		pairs[i] = PercentEncode(k) + "=" + PercentEncode(params[k])
-	}
-	return method + "&" + PercentEncode("/") + "&" + PercentEncode(strings.Join(pairs, "&"))
-}
-
-// Signature signs the parameters with the AccessKey secret.
-func Signature(method string, params map[string]string, secret string) string {
-	m := hmac.New(sha1.New, []byte(secret+"&"))
-	m.Write([]byte(StringToSign(method, params)))
-	return base64.StdEncoding.EncodeToString(m.Sum(nil))
-}
-
-// Error is a refusal from the API, with its code.
+// Error is a refusal from the SMS API (阿里云短信服务, dysmsapi), with its
+// code.
 type Error struct {
 	Code, Message string
 }

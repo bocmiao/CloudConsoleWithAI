@@ -2,6 +2,7 @@ package tencent
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 	"sync"
@@ -536,6 +537,22 @@ func (c *Client) CreateSnapshot(ctx context.Context, region string, s Server, na
 			map[string]any{"DiskId": s.SystemDiskID, "SnapshotName": name}, &out)
 	}
 	return out.SnapshotID, err
+}
+
+// ApplySnapshot rolls an instance's system disk back to one of its
+// snapshots (Lighthouse ApplyInstanceSnapshot, CBS ApplySnapshot). The
+// instance has to be stopped: CVM refuses otherwise and Lighthouse would
+// force it off. While it runs the snapshot shows ROLLBACKING.
+func (c *Client) ApplySnapshot(ctx context.Context, region string, s Server, snapshotID string) error {
+	if s.Kind == Lighthouse {
+		return c.CallRegion(ctx, Lighthouse, lighthouseVersion, "ApplyInstanceSnapshot", region,
+			map[string]any{"InstanceId": s.ID, "SnapshotId": snapshotID}, nil)
+	}
+	if s.SystemDiskID == "" {
+		return errors.New("找不到这台服务器的系统盘")
+	}
+	return c.CallRegion(ctx, "cbs", cbsVersion, "ApplySnapshot", region,
+		map[string]any{"SnapshotId": snapshotID, "DiskId": s.SystemDiskID}, nil)
 }
 
 // Metric is a Cloud Monitor metric of a product.

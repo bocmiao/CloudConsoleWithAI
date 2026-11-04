@@ -31,6 +31,20 @@ bt_panel: no
 running: cron docker 1panel-core 1panel-agent sshd
 failed: fail2ban
 
+== procs_by_mem ==
+    PID    PPID USER       RSS %CPU ELAPSED COMMAND
+   1201    1150 999     627100  1.2 1036800 mysqld
+   2201       1 root     46080  0.3  864000 php-fpm: pool www
+   2202       1 root     45056  0.2  864000 php-fpm: pool www
+   2203       1 root     44032  0.2  864000 php-fpm: pool www
+   2100       1 root     20480  0.0  864000 php-fpm: master process (/etc/php/8.2/fpm/php-fpm.conf)
+   3001       1 1000    121856  0.8  500000 node /app/uptime-kuma/server/server.js
+    900       1 root     61440  0.4 1036800 /usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock
+   1300    1290 root     24576  0.0 1036800 nginx: master process /usr/local/openresty/nginx/sbin/nginx
+   1301    1300 nobody   25600  0.1 1036800 nginx: worker process
+   4001       1 root     81920  0.5  300000 java -Xmx256m -jar /opt/app/shop.jar
+   4100       1 root     30720  0.1  300000 python3 -m http.server 8000
+
 == web ==
 -- nginx sites (file:directive) --
 /opt/1panel/www/conf.d/blog.example.com.conf: listen 80
@@ -52,6 +66,8 @@ docker: 27.3.1
 1Panel-openresty-EfGh|1panel/openresty:1.27|Up 12 days|
 1Panel-redis-IjKl|redis:7.4|Up 12 days|6379/tcp
 -- stats --
+1Panel-mysql-AbCd|mem=612.4MiB / 1.92GiB|cpu=1.20%
+1Panel-openresty-EfGh|mem=48.1MiB / 1.92GiB|cpu=0.05%
 
 == apps ==
 -- wordpress --

@@ -3,7 +3,11 @@ package sshx_test
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -94,5 +98,82 @@ func TestRunScriptDiscover(t *testing.T) {
 	}
 	if strings.Contains(res.Stdout, "== docker ==") {
 		t.Fatal("sections were not limited")
+	}
+}
+
+// freezer forwards TCP connections to target until frozen, then drops
+// everything silently, like a NAT that forgot the connection.
+type freezer struct {
+	ln     net.Listener
+	frozen atomic.Bool
+}
+
+func startFreezer(t *testing.T, target string) *freezer {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	f := &freezer{ln: ln}
+	pipe := func(dst, src net.Conn) {
+		buf := make([]byte, 32<<10)
+		for {
+			n, err := src.Read(buf)
+			if err != nil {
+				dst.Close()
+				return
+			}
+			if !f.frozen.Load() {
+				_, _ = dst.Write(buf[:n])
+			}
+		}
+	}
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			d, err := net.Dial("tcp", target)
+			if err != nil {
+				c.Close()
+				continue
+			}
+			go pipe(c, d)
+			go pipe(d, c)
+		}
+	}()
+	return f
+}
+
+func TestKeepAliveNoticesADeadConnection(t *testing.T) {
+	srv := sshtest.Start(t, "root", "pw")
+	f := startFreezer(t, net.JoinHostPort(srv.Host, strconv.Itoa(srv.Port)))
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	c, err := sshx.Dial(ctx, sshx.Target{Host: "127.0.0.1", Port: f.ln.Addr().(*net.TCPAddr).Port, User: "root", Password: "pw"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	sh, err := c.Shell(80, 24)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _, _ = io.Copy(io.Discard, sh.Output) }()
+	c.KeepAlive(40 * time.Millisecond)
+	// Answered checks keep it open.
+	select {
+	case <-sh.Done():
+		t.Fatal("a live connection was closed")
+	case <-time.After(400 * time.Millisecond):
+	}
+	// Unanswered ones close it, and the shell with it.
+	f.frozen.Store(true)
+	select {
+	case <-sh.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("a dead connection stayed open")
 	}
 }

@@ -1,5 +1,7 @@
-// Package aliyuntest is a stand-in for Alibaba Cloud SMS that checks each
-// request's signature and keeps what it was asked to send.
+// Package aliyuntest has stand-ins for the Alibaba Cloud APIs Miao Panel
+// uses: Fake for SMS, which keeps what it was asked to send, and Cloud
+// for ECS, Simple Application Server, CloudMonitor, Alidns and CDN. Both
+// check each request's signature.
 package aliyuntest
 
 import (
@@ -12,7 +14,7 @@ import (
 	"github.com/bocmiao/CloudConsoleWithAI/internal/aliyun"
 )
 
-// The AccessKey the fake accepts.
+// The AccessKey the fakes accept.
 const (
 	ID     = "LTAI5tTestKeyId000000"
 	Secret = "TestSecretForTheFake0000000000"

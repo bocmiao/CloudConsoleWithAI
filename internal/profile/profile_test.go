@@ -103,3 +103,58 @@ func TestParseEmptyAndBT(t *testing.T) {
 		t.Errorf("bt: %+v", p.Panel)
 	}
 }
+
+// The programs using the most memory are grouped by program and sorted.
+func TestPrograms(t *testing.T) {
+	p := load(t, "1panel.txt")
+	want := []Program{
+		{Name: "mysqld", Procs: 1, MemMB: 612, CPU: 1.2, User: "999"},
+		{Name: "php-fpm", Procs: 4, MemMB: 152},
+		{Name: "node server.js", Procs: 1, MemMB: 119},
+		{Name: "java shop.jar", Procs: 1, MemMB: 80},
+		{Name: "dockerd", Procs: 1, MemMB: 60},
+		{Name: "nginx", Procs: 2, MemMB: 49},
+		{Name: "python3 http.server", Procs: 1, MemMB: 30},
+	}
+	if len(p.Programs) != len(want) {
+		t.Fatalf("programs = %+v", p.Programs)
+	}
+	for i, w := range want {
+		g := p.Programs[i]
+		if g.Name != w.Name || g.Procs != w.Procs || g.MemMB != w.MemMB {
+			t.Errorf("program %d = %+v, want %+v", i, g, w)
+		}
+	}
+	if p.Programs[0].User != "999" || p.Programs[0].CPU != 1.2 {
+		t.Errorf("mysqld = %+v", p.Programs[0])
+	}
+	if strings.Join(p.Services.Running, " ") != "cron docker 1panel-core 1panel-agent sshd" || strings.Join(p.Services.Failed, " ") != "fail2ban" {
+		t.Errorf("services = %+v", p.Services)
+	}
+	if len(p.Docker.List) != 3 {
+		t.Fatalf("containers = %+v", p.Docker.List)
+	}
+	if c := p.Docker.List[0]; c.Name != "1Panel-mysql-AbCd" || c.Image != "mysql:8.4" || !c.Running || c.Mem != "612.4MiB / 1.92GiB" || c.CPU != "1.20%" || c.Ports != "3306/tcp" {
+		t.Errorf("mysql container = %+v", c)
+	}
+	if c := p.Docker.List[2]; c.Mem != "" || c.Name != "1Panel-redis-IjKl" {
+		t.Errorf("redis container = %+v", c)
+	}
+}
+
+func TestProgName(t *testing.T) {
+	for in, want := range map[string]string{
+		"/usr/sbin/sshd -D":                    "sshd",
+		"sshd: root@pts/0":                     "sshd",
+		"postgres: checkpointer":               "postgres",
+		"/usr/bin/python3.11 /srv/bot/main.py": "python3.11 main.py",
+		"java -cp lib/x.jar com.example.Main":  "java com.example.Main",
+		"node":                                 "node",
+		"/opt/1panel/1panel-core":              "1panel-core",
+		"redis-server *:6379":                  "redis-server",
+	} {
+		if got := progName(in); got != want {
+			t.Errorf("progName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
